@@ -1,0 +1,208 @@
+🧠 1. CORE OBJECTIVE
+
+Build a dashboard that answers 4 critical questions instantly:
+
+What is happening now? → Hourly
+What happened recently? → Daily
+How are we performing this week? → Weekly
+What are the long-term trends? → Monthly
+
+👉 Plus:
+
+Who is performing?
+Which departments are underperforming?
+Are there system/data issues?
+🧩 2. MASTER DASHBOARD STRUCTURE
+🔝 A. Global Controls Layer
+Date selector
+Department filter
+Source toggle (Device / Database / Combined)
+Real-time refresh
+📊 B. EXECUTIVE SNAPSHOT (TOP SECTION)
+Components (KPI Cards + Comparison)
+Total Employees
+Present
+Absent
+Attendance %
+Absenteeism %
+Late Comers
+Break vs Overtime (comparison card)
+Purpose:
+
+👉 Instant status overview in < 3 seconds
+
+🎯 C. KPI STATUS (GAUGE LAYER)
+Charts (Radial Gauges)
+Overall Attendance %
+Average Working Hours
+Present Month Working Hours
+Role:
+
+👉 Visual performance health indicators
+
+⏱️ D. HOURLY INTELLIGENCE (REAL-TIME LAYER)
+Chart: Today Per-Hour Punches
+Type: Column chart (00–23 hours)
+Series:
+Device
+Database
+What it reveals:
+Peak check-in times
+Late arrival behavior
+Shift patterns
+Critical Feature:
+
+👉 Device vs Database comparison
+
+Detect sync issues
+Identify missing punches
+📅 E. DAILY ANALYTICS (SHORT-TERM LAYER)
+1. Last 7 Days Attendance
+Chart: Grouped bar chart
+Compare Device vs Database
+2. Absentees (Last 7 Days)
+Chart: Line or bar
+3. Late Comers (Last 7 Days)
+Chart: Bar chart
+What it reveals:
+Problem days
+Behavioral patterns
+Attendance consistency
+📊 F. WEEKLY PERFORMANCE (OPERATIONAL LAYER)
+Chart: This Week (Mon–Sun)
+Type: Grouped bar chart
+What it reveals:
+Mid-week drop-offs
+Engagement trend across week
+Real-time weekly performance
+📉 G. MONTHLY & TREND ANALYTICS (STRATEGIC LAYER)
+1. Overall Attendance Trend
+Type: Smooth line chart
+2. Absenteeism Trend
+Type: Area chart (highlight spikes)
+3. Absentees by Month
+Type: Column chart
+What it reveals:
+Long-term patterns
+Seasonal issues
+Anomalies (spikes/drops)
+🏢 H. DEPARTMENT ANALYSIS
+Charts:
+Attendance Count by Department → Horizontal bar
+Attendance % by Department → Vertical bar
+What it reveals:
+Strong vs weak departments
+Resource or management issues
+👥 I. EMPLOYEE PERFORMANCE LAYER
+Components:
+Top Employees (attendance ranking)
+Optional: Low performers
+Visualization:
+Ranked list with progress bars
+Purpose:
+
+👉 Accountability + recognition
+
+⚙️ J. SYSTEM & DATA INTEGRITY LAYER (CRITICAL)
+Built from:
+Device vs Database comparisons (hourly/daily/weekly)
+Detect:
+Missing records
+Sync delays
+Data inconsistencies
+
+👉 This transforms your dashboard into a reliable operational system, not just reporting
+
+🚨 K. INSIGHTS & ALERT ENGINE (HIGH VALUE)
+
+Auto-generate:
+
+🔴 High absenteeism alert
+⚠️ Attendance drop warning
+⏰ Late arrival spikes
+📉 Department underperformance
+⚙️ Data mismatch alerts
+
+👉 Converts data → actionable decisions
+
+🎨 3. DESIGN SYSTEM (FOR DESIGNER)
+Chart Types Standard
+Layer	Chart Type
+KPI	Cards
+Status	Gauges
+Hourly	Column chart
+Daily/Weekly	Grouped bars
+Trends	Line + Area
+Departments	Bar charts
+Color Logic
+🟢 Teal → Attendance / positive
+🟣 Purple → Absenteeism
+🟠 Orange → Productivity
+⚪ Gray → Remaining / inactive
+UI Style
+Card-based layout
+Clean spacing
+Soft shadows
+Minimal gridlines
+Clear typography hierarchy
+🧠 4. ANALYTICAL CAPABILITIES
+
+Your system will support:
+
+1. Real-Time Monitoring
+Hourly punches
+Live attendance status
+2. Behavioral Analysis
+Daily & weekly patterns
+Late arrival trends
+3. Comparative Analysis
+Department vs department
+Device vs database
+4. Trend Analysis
+Monthly attendance & absenteeism
+5. Exception Detection
+Spikes, drops, anomalies
+🔄 5. DATA RELATIONSHIP ENGINE
+
+Enable insights like:
+
+Absenteeism ↑ → Attendance ↓
+Late arrivals → Reduced productivity
+Department gaps → Operational issues
+Device ≠ Database → System problem
+⚙️ 6. DEVELOPMENT ARCHITECTURE
+Core Components
+Reusable KPI Card
+Reusable Gauge Component
+Reusable Bar/Line Chart
+Unified Filter System
+Suggested Libraries
+ECharts (best for complex dashboards)
+Chart.js (simple)
+Recharts (React)
+🚀 7. ADVANCED (FUTURE-READY FEATURES)
+Predictive Analytics
+Forecast attendance trends
+Benchmarks
+Compare vs targets
+Smart Alerts
+Automated notifications
+Drill-Down
+Click → department → employee → day
+🧾 FINAL STRUCTURE SUMMARY
+🔹 1. Snapshot
+KPI cards + comparison
+🔹 2. Status
+Gauges
+🔹 3. Real-Time
+Hourly punches
+🔹 4. Short-Term
+Daily charts
+🔹 5. Operational
+Weekly charts
+🔹 6. Strategic
+Monthly trends
+🔹 7. Breakdown
+Departments + employees
+🔹 8. Intelligence
+Alerts + insights

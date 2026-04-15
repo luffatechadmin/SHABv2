@@ -1,0 +1,194 @@
+Attendance System – Table Design & UI Approach (Developer Note)
+Objective
+We need to design an attendance system that:
+•	Tracks employee attendance accurately
+•	Supports payroll and performance analysis
+•	Avoids wide tables and horizontal scrolling
+•	Remains scalable and easy to maintain
+________________________________________
+1. Overall Approach
+We will build 3 levels of data tables:
+1.	Daily (detailed, operational)
+2.	Weekly (pattern & trends)
+3.	Monthly (summary & decision-making)
+⚠️ Important:
+These are logical layers, not necessarily separate UI tables shown at once.
+________________________________________
+2. Key Design Principle (Very Important)
+Do NOT display all data fields at once.
+Instead:
+•	Keep the main table compact
+•	Show additional details via:
+o	Row expansion
+o	Toggle views (tabs/buttons)
+o	Grouped fields
+Goal:
+👉 No horizontal scrolling in main view
+________________________________________
+3. DAILY TABLE DESIGN
+This is the most detailed dataset.
+________________________________________
+3.1 Required Data (Backend Structure)
+Each record should include:
+Core Info
+•	staff_id
+•	name
+•	date
+•	shift_assigned
+Raw Time Points
+•	first_in
+•	first_out
+•	second_in
+•	second_out
+•	ot_in
+•	ot_out
+Calculated Metrics
+•	total_worked_hours
+•	break_duration
+•	scheduled_hours
+•	overtime_hours
+Behavior Metrics
+•	late_minutes
+•	early_leave_minutes
+Data Flags (Boolean or Count)
+•	missing_in
+•	missing_out
+•	duplicate_scans
+•	odd_time_scan
+Status
+•	attendance_status
+________________________________________
+3.2 UI Display (IMPORTANT)
+Default View (Compact – No Scroll)
+Only show:
+•	Name
+•	Date
+•	Shift
+•	First In
+•	Last Out (derived from latest scan)
+•	Total Hours
+•	OT Hours
+•	Status
+•	Flags (combined)
+________________________________________
+3.3 Flags Column (Replace Multiple Columns)
+Instead of showing multiple columns:
+•	missing_in
+•	missing_out
+•	duplicate_scans
+•	odd_time_scan
+Combine into ONE field:
+Example:
+MISSING_OUT | DUPLICATE x2 | ODD
+________________________________________
+3.4 Row Expansion (Click to View Details)
+When a row is clicked, show:
+Time Breakdown
+•	first_in / first_out
+•	second_in / second_out
+•	ot_in / ot_out
+Additional Info
+•	break_duration
+•	late_minutes
+•	early_leave_minutes
+________________________________________
+4. WEEKLY TABLE DESIGN
+4.1 Backend Fields
+•	staff_id
+•	name
+•	week_start
+•	week_end
+Aggregated Data
+•	total_worked_hours
+•	total_scheduled_hours
+•	total_overtime
+Attendance
+•	days_present
+•	days_absent
+•	days_late
+•	early_leave_days
+Issues
+•	missing_scan_count
+•	duplicate_count
+•	odd_scan_count
+KPIs
+•	attendance_rate
+•	punctuality_rate
+________________________________________
+4.2 UI Display
+Default View
+•	Name
+•	Week
+•	Total Hours
+•	OT
+•	Days Present
+•	Days Absent
+•	Attendance %
+Optional Expand / Toggle
+•	Late Days
+•	Early Leave Days
+•	Issue Counts
+________________________________________
+5. MONTHLY TABLE DESIGN
+5.1 Backend Fields
+•	staff_id
+•	name
+•	month
+Time Summary
+•	total_worked_hours
+•	total_overtime
+•	payable_hours
+Attendance Summary
+•	total_working_days
+•	days_present
+•	days_absent
+•	leave_days
+Behavior
+•	late_count
+•	early_leave_count
+KPIs
+•	attendance_score
+•	punctuality_score
+________________________________________
+5.2 UI Display
+Default View (Keep Minimal)
+•	Name
+•	Month
+•	Total Hours
+•	OT
+•	Days Present
+•	Days Absent
+•	Attendance %
+•	Punctuality %
+Optional Details
+•	Late Count
+•	Early Leave
+•	Leave Days
+________________________________________
+6. Important Implementation Notes
+6.1 Avoid Horizontal Scrolling
+•	Max ~8–10 columns in default view
+•	Everything else goes into expandable sections
+________________________________________
+6.2 Derived Fields (Do NOT store redundantly)
+•	last_out = latest scan
+•	flags = generated dynamically
+________________________________________
+6.3 Reusability
+•	Weekly data should be computed from Daily
+•	Monthly data should be computed from Weekly (or Daily aggregate)
+________________________________________
+6.4 UI Suggestions (Recommended)
+•	Use badges/tags for flags:
+o	Red → critical (missing scan)
+o	Yellow → warning (late)
+o	Blue → info (OT)
+________________________________________
+7. Summary
+We are designing:
+•	A clean data structure (3 levels)
+•	A compact UI (no horizontal scroll)
+•	A flexible system (expandable details)
+Key idea:
+👉 Show less by default, reveal more on demand
+

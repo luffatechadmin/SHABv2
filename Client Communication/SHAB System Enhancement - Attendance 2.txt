@@ -1,0 +1,162 @@
+Project Overview
+
+We are building an employee attendance web application (React + Tailwind frontend) that integrates with a fingerprint attendance device.
+
+The goal is to:
+
+Capture attendance when employees scan fingerprints
+Sync that data into our web system
+Display near real-time attendance logs on a dashboard
+⚠️ Key Constraint (Very Important)
+
+The fingerprint device:
+
+❌ Does NOT support API / HTTP push (no ADMS)
+❌ Does NOT send data directly to our webapp
+✅ Uses TCP protocol on port 4370
+✅ Stores attendance logs internally
+
+👉 Therefore, we must actively fetch (poll) data from the device
+
+🧠 System Architecture
+Fingerprint Device (WiFi, TCP:4370)
+        ↓
+Middleware Service (Node.js / Python)
+        ↓
+Backend API (HTTP)
+        ↓
+Database
+        ↓
+Frontend (React + Tailwind)
+🔌 Middleware (Core Component)
+
+We need to build a middleware service that:
+
+Connects to the device via TCP (port 4370)
+Reads attendance logs
+Sends logs to our backend API
+Runs continuously (every few seconds)
+⚙️ Device Connection Details
+Protocol: ZKTeco TCP
+IP Address: (to be configured)
+Port: 4370
+Password: 0
+Device ID: 1
+🛠️ Middleware Requirements
+Responsibilities
+Connect to device
+Fetch attendance logs
+Transform data into JSON
+POST to backend API
+Handle reconnection + errors
+Suggested Implementation (Node.js)
+
+Use a library like:
+
+node-zklib
+
+Example flow:
+
+Connect → Get logs → Send to API → Disconnect → Repeat
+
+Run every 3–5 seconds for near real-time sync.
+
+📡 Backend API
+
+Create endpoint:
+
+POST /api/attendance
+Payload example:
+{
+  "employee_id": "1001",
+  "timestamp": "2026-03-29 08:55:01",
+  "device_id": "device_1"
+}
+🗄️ Database Design (Basic)
+
+Table: attendance_logs
+
+id
+employee_id
+timestamp
+device_id
+created_at
+Important:
+
+👉 Prevent duplicates:
+
+UNIQUE(employee_id, timestamp)
+
+Because:
+
+Device returns ALL logs every time
+No “last sync” tracking
+🔄 Data Flow
+1. Employee scans fingerprint
+2. Device stores record internally
+3. Middleware polls device
+4. Middleware sends new records to API
+5. API stores in DB
+6. Frontend displays updates
+⚡ Real-Time Frontend (React + Tailwind)
+
+To make UI feel real-time:
+
+Option A (simple)
+Poll API every few seconds
+Option B (recommended)
+Use WebSocket (Socket.IO)
+Backend emits event when new attendance arrives
+React updates instantly
+🧩 Frontend Features
+Live attendance table
+Employee check-in/out status
+Time logs
+Filters (date, employee)
+⚠️ Edge Cases to Handle
+1. Duplicate records
+
+Device sends same logs repeatedly
+→ Must deduplicate in backend
+
+2. Network issues
+Device offline
+Middleware disconnected
+
+→ Add retry logic
+
+3. UID vs Employee ID
+
+Device returns:
+
+{
+  "uid": 12,
+  "userId": "1001"
+}
+
+👉 Use:
+
+userId = actual employee ID
+4. Time consistency
+
+Ensure:
+
+Device time is correct
+Server timezone matches
+🚀 Deployment Strategy
+Middleware runs on:
+Office PC (always ON) OR
+Dedicated mini server
+Backend:
+Cloud server (public API)
+Requirement:
+Device and middleware must be on same network
+📌 Summary for Developer
+
+We are NOT integrating via API from the device.
+
+Instead:
+
+Build a middleware service to pull data from the device (TCP)
+Send it to our backend API
+Store and display it in React frontend

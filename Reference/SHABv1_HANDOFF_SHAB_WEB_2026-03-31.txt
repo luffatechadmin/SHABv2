@@ -1,0 +1,146 @@
+SHABv1 / shab-web (React + Tailwind + Vite) – Handoff Notes (Updated 2026-04-06)
+
+Repository root:
+  C:\Users\HP\Documents\GitHub\SHABv1
+
+Web app folder:
+  shab-web\
+
+Tech stack:
+  - Vite (port 8082 in dev)
+  - React 18
+  - TypeScript
+  - TailwindCSS
+  - Radix UI components
+  - Supabase JS client (@supabase/supabase-js)
+  - React Router
+  - TanStack React Query
+
+
+1) Key files and where to start
+
+Entry points:
+  shab-web\index.html
+  shab-web\src\main.tsx
+  shab-web\src\App.tsx
+
+Supabase client:
+  shab-web\src\lib\supabase.ts
+    - Uses VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY (frontend anon key).
+
+Environment validation helper:
+  shab-web\src\lib\env-validation.ts
+    - Validates VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY.
+
+Attendance/WL10 poller (Node script, writes to Supabase using service role key):
+  shab-web\scripts\wl10-poller.mjs
+    - Loads environment via dotenv/config.
+    - Fetches logs from a WL10 HTTP endpoint (CSV or JSON), normalizes, then upserts into attendance_events.
+
+Vite config:
+  shab-web\vite.config.ts
+    - Dev server binds to port 8082.
+    - Path alias: "@" -> shab-web\src
+
+Supabase schema reference:
+  shab-web\supabase_schema.sql
+
+
+2) Install / run commands (shab-web)
+
+Install dependencies:
+  cd "C:\Users\admin\Documents\GitHub\SHABv1\shab-web"
+  npm ci
+
+Run dev server:
+  npm run dev
+  - Dev server port is configured as 8082.
+
+Build:
+  npm run build
+
+Lint:
+  npm run lint
+
+Typecheck:
+  npm run typecheck
+
+Preview production build locally:
+  npm run preview
+
+
+3) Environment variables (frontend)
+
+The frontend reads:
+  VITE_SUPABASE_URL
+  VITE_SUPABASE_ANON_KEY
+
+Template:
+  shab-web\.env.example
+
+Recommended local file:
+  shab-web\.env.local
+    - Do not commit this file.
+
+
+4) WL10 poller script (Node)
+
+Scripts (package.json):
+  npm run wl10:poll:once
+  npm run wl10:poll
+
+Important:
+  - The poller uses SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY (service role key).
+  - This is privileged. Do not ship service role key to the browser.
+  - The poller loads env vars via dotenv/config, so you can place variables in:
+      shab-web\.env
+    or configure them in your shell session before running.
+
+Poller configuration env vars (optional + defaults from scripts\wl10-poller.mjs):
+  WL10_BASE_URL         (default: http://192.168.1.170)
+  WL10_LOG_PATH         (default: /)
+  WL10_LOG_MODE         (default: auto)
+  WL10_USER_ID_FIELD    (default: userId)
+  WL10_OCCURRED_AT_FIELD(default: occurredAt)
+  WL10_DEVICE_ID        (default: WL10-192.168.1.170)
+  WL10_TIMEOUT_MS       (default: 8000)
+  WL10_INTERVAL_SECONDS (default: 30)
+  WL10_USERNAME         (optional; enables HTTP Basic auth)
+  WL10_PASSWORD         (optional; enables HTTP Basic auth)
+
+Poller flags:
+  --once
+  --dry-run
+  --interval <seconds>
+
+
+5) Common pitfalls
+
+Missing VITE_* env vars:
+  - The app will warn if VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY are missing.
+  - Create shab-web\.env.local based on shab-web\.env.example.
+
+Running WL10Middleware.exe from shab-web folder:
+  - If you run PowerShell from shab-web\, you must either cd to the middleware exe folder or use the full path to the exe.
+
+
+6) Relation to WL10Middleware (.NET)
+
+There are two attendance ingestion paths now:
+  A) .NET WL10Middleware (native TCP / COM / file import) -> Supabase
+  B) Node poller (wl10-poller.mjs) -> Supabase
+
+If you are using WL10Middleware, you do not need to run the Node poller.
+If you are using the Node poller, keep the service role key out of the browser and only run it as a script/server-side process.
+
+
+7) Recent related progress (WL10Middleware)
+
+As of 2026-04-06, the WL10Middleware (.NET) side now:
+  - Exports the attendance file to:
+      SHABv1\Reference\1_attlog.dat
+    using a text format like:
+      staff_id<TAB>YYYY-MM-DD HH:MM:SS<TAB>verified<TAB>status<TAB>workcode<TAB>reserved
+  - Updates the WL10Middleware local dashboard Device Records tab to read and display 1_attlog.dat exactly (same columns/order).
+
+If you are only working on shab-web UI, this does not change your build/dev commands, but it affects how attendance data may be produced locally for Supabase during testing.

@@ -1,0 +1,11 @@
+﻿User ID,Full Name,Email,Role,Department,Username,Password,Status,Date Joined,Last Login
+U001,Syed,syed@company.com,Superadmin,Management,faiz,abcd1111,Active,2/10/2022 9:15,3/20/2026 9:15
+U002,Haatim,haatim@company.com,Superadmin,Management,siti,abcd1112,Active,2/12/2022 14:30,3/22/2026 14:30
+U003,NaniRohayu,nanirohayu@company.com,Manager,Procurement,daniel,abcd1113,Active,2/13/2022 10:05,3/23/2026 10:05
+U004,Rohim,rohim@company.com,Manager,Production,aisyah,abcd1114,Active,2/13/2022 11:20,3/23/2026 11:20
+U005,Zizah,zizah@company.com,Manager,Finance,raj,abcd1115,Active,2/12/2022 16:45,3/22/2026 16:45
+U006,Waroh,waroh@company.com,Supervisor,Warehouse,wei,abcd1116,Active,2/14/2022 8:50,3/24/2026 8:50
+U007,ATIF,atif@company.com,Supervisor,Quality Control,farah,abcd1117,Active,2/14/2022 9:10,3/24/2026 9:10
+U008,Borhan,borhan@company.com,Staff,Production,hafiz,abcd1118,Active,2/13/2022 15:30,3/23/2026 15:30
+U009,Chombi ,chombi @company.com,Staff,Procurement,meiling,abcd1119,Active,2/13/2022 13:25,3/23/2026 13:25
+U010,John,john@company.com,Staff,Finance,john,abcd1120,Inactive,1/31/2022 17:00,3/10/2026 17:00

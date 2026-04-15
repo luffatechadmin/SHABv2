@@ -1,0 +1,15 @@
+.vscode/
+
+**/bin/
+**/obj/
+
+**/*.user
+**/*.suo
+**/*.userosscache
+**/*.sln.docstates
+
+**/state.json
+
+Reference/1_attlog.dat
+Reference/Manual - 1_attlog.dat
+ZKTeco Middleware SDK/Reference/1_attlog.dat

@@ -1,0 +1,197 @@
+SHABv1 – New PC Setup Guide (Supabase + GitHub + Node + .NET) (Updated 2026-04-06)
+
+Goal:
+  Get a new Windows PC ready to continue development for:
+    - shab-web (React/Vite/Tailwind)
+    - WL10Middleware (.NET 8 Windows x86)
+
+
+1) Accounts and access (do first)
+
+GitHub:
+  - Confirm you can access the SHABv1 repository.
+  - Preferred: set up SSH keys for GitHub (or use HTTPS + credential manager).
+
+Supabase:
+  - Confirm you can access the Supabase project (Dashboard access).
+  - Confirm you can retrieve keys:
+      SUPABASE_URL
+      SUPABASE_ANON_KEY
+      SUPABASE_SERVICE_ROLE_KEY
+  - Keep service role key private (never put it into frontend code or committed files).
+
+
+2) Software to install on the new PC
+
+Required:
+  - Git (latest)
+  - Node.js (LTS recommended)
+  - .NET SDK 8.x (Windows)
+
+Recommended:
+  - VS Code (or Visual Studio) + C# + TypeScript tooling
+  - Windows Terminal / PowerShell
+
+Optional (only needed if you will use the WL10 COM/zkemkeeper SDK path):
+  - ZKTeco zkemkeeper.dll (32-bit) and its dependencies
+  - Ability to register COM DLLs using regsvr32 (SysWOW64)
+
+
+3) Clone the repo
+
+Choose a working folder (example):
+  C:\Users\<you>\Documents\GitHub\
+
+Clone:
+  git clone <repo-url>
+  cd SHABv1
+
+
+4) shab-web setup (frontend)
+
+Folder:
+  SHABv1\shab-web
+
+Install deps:
+  npm ci
+
+Create local env file:
+  shab-web\.env.local
+  Use shab-web\.env.example as a template:
+    VITE_SUPABASE_URL=...
+    VITE_SUPABASE_ANON_KEY=...
+
+Run:
+  npm run dev
+  (Vite dev server uses port 8082)
+
+Quality checks:
+  npm run lint
+  npm run typecheck
+
+
+5) Supabase setup notes
+
+Frontend (browser):
+  - Uses anon key:
+      VITE_SUPABASE_ANON_KEY
+  - Ensure Supabase Auth / RLS policies match what the app expects.
+
+Server-side / privileged scripts:
+  - Use service role key:
+      SUPABASE_SERVICE_ROLE_KEY
+  - Only use this key in:
+      - WL10Middleware (.NET console)
+      - Node scripts (e.g., shab-web\scripts\wl10-poller.mjs)
+    Never ship it to the browser.
+
+
+6) WL10Middleware setup (.NET)
+
+Folder:
+  SHABv1\ZKTeco Middleware SDK\WL10Middleware
+
+Build:
+  dotnet build "ZKTeco Middleware SDK\WL10Middleware\WL10Middleware.csproj" -c Release
+
+Run local dashboard (optional, for local monitoring/UI):
+  cd "ZKTeco Middleware SDK\WL10Middleware"
+  dotnet build -c Release
+  dotnet run -c Release -- --dashboard --dashboard-port 5099
+
+If port 5099 is already in use:
+  dotnet run -c Release -- --dashboard --dashboard-port 5100
+
+From the same PC:
+  http://127.0.0.1:5099/
+
+From another device on the same Wi‑Fi/LAN:
+  http://<this-pc-ip>:5099/
+  (Find <this-pc-ip> via: ipconfig)
+
+If other devices can’t reach the dashboard:
+  - Ensure you’re not on Guest Wi‑Fi / client isolation
+  - Allow inbound TCP 5099 in Windows Firewall
+
+Run from the build output folder:
+  cd "ZKTeco Middleware SDK\WL10Middleware\bin\Release\net8.0-windows\win-x86"
+
+Supabase environment vars required for WL10Middleware:
+  SUPABASE_URL
+  SUPABASE_SERVICE_ROLE_KEY
+
+Common useful WL10Middleware env vars:
+  WL10_IP
+  WL10_PORT
+  WL10_DEVICE_ID
+  WL10_AUTO_CREATE_STAFF
+  WL10_FILTER_TO_DEVICE_USERS
+  WL10_READER_MODE
+  WL10_DEBUG
+
+New/used for file-based dashboard view:
+  WL10_ATTLOG_FILE_PATH
+    - Optional override for which attlog file the Dashboard reads.
+    - Default is: SHABv1\Reference\1_attlog.dat
+
+If you use file import mode:
+  WL10_IMPORT_ATTLOG_TIME_KIND
+    utc   (default) = treat file timestamps as UTC clock time
+    local           = treat file timestamps as local time and convert to UTC
+
+
+7) COM SDK (only if you need it)
+
+WL10Middleware can read punches via:
+  - Native TCP reader mode (no COM registration required)
+  - COM SDK (zkemkeeper) fallback in auto mode, or COM-only mode
+
+If COM is required on the new PC:
+  - You must have the 32-bit zkemkeeper.dll and its dependencies available.
+  - Register it (32-bit regsvr32):
+      C:\Windows\SysWOW64\regsvr32.exe <path-to-zkemkeeper.dll>
+  - Then run WL10Middleware from a 32-bit build/output (this repo uses win-x86 output).
+
+
+8) Operational notes (avoid common issues)
+
+Working directory matters:
+  - Running .\WL10Middleware.exe only works when your current directory contains the exe.
+  - Otherwise, use the full path to the exe.
+
+Watermark state:
+  - WL10Middleware stores a local state.json next to the executable.
+  - To force full resync:
+      --clear-attendance
+    This clears Supabase device rows and deletes state.json.
+
+Keys safety:
+  - Keep .env.local and any files containing SUPABASE_SERVICE_ROLE_KEY uncommitted.
+  - Prefer setting SUPABASE_SERVICE_ROLE_KEY in the shell environment or a secure secrets manager.
+
+
+9) Quick “known good” smoke tests
+
+Frontend:
+  cd shab-web
+  npm ci
+  npm run typecheck
+  npm run dev
+
+Middleware build:
+  dotnet build "ZKTeco Middleware SDK\WL10Middleware\WL10Middleware.csproj" -c Release
+
+Network reachability (device TCP port):
+  Test-NetConnection <WL10_IP> -Port 4370
+  - If TcpTestSucceeded is False, the PC cannot reach the device network/VLAN.
+
+Middleware import test (adjust file path):
+  cd "ZKTeco Middleware SDK\WL10Middleware\bin\Release\net8.0-windows\win-x86"
+  $env:WL10_AUTO_CREATE_STAFF="1"
+  $env:WL10_DEBUG="1"
+  .\WL10Middleware.exe --import-attlog "C:\path\to\1_attlog.txt" --dry-run
+
+Dashboard smoke test:
+  cd "ZKTeco Middleware SDK\WL10Middleware"
+  dotnet run -c Release -- --dashboard --dashboard-port 5099
+  Open: http://127.0.0.1:5099/

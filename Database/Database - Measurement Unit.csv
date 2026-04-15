@@ -1,0 +1,11 @@
+﻿Unit Code,Unit Name,Type,Conversion Base,Conversion Rate
+U001,Kilogram (kg),Weight,kg,1
+U002,Gram (g),Weight,kg,0.001
+U003,Liter (L),Volume,L,1
+U004,Milliliter (ml),Volume,L,0.001
+U005,Piece (pcs),Count,pcs,1
+U006,Box 1,Packaging,pcs,12
+U007,Box 2,Packaging,pcs,18
+U008,Bottle,Packaging,pcs,1
+U009,Tube,Packaging,pcs,1
+U010,Carton,Packaging,pcs,24

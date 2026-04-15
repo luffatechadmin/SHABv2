@@ -1,0 +1,11 @@
+﻿Supplier ID,Supplier Name,Country,Contact Person,Email,Phone,Lead Time (Days),Status
+S001,ChemSource Asia,Malaysia,Ahmad Rizal,rizal@chemsource.com,6012345678,7,Active
+S002,Global Ingredients,Singapore,Lim Wei,lim@globaling.com,6598765432,10,Active
+S003,BioExtract Ltd,Thailand,Somchai,somchai@bioextract.com,6681234567,14,Active
+S004,Aroma Labs,France,Jean Dupont,jean@aromalabs.fr,3312345678,21,Active
+S005,ColorTech Industries,China,Li Wei,liwei@colortech.cn,8612345678,18,Active
+S006,SafeChem Solutions,Malaysia,Nurul Huda,nurul@safechem.com,6011122233,5,Active
+S007,Organic Farms Co,Indonesia,Budi Santoso,budi@organicfarm.id,6281234567,12,Active
+S008,PreservaTech,Germany,Klaus Schmidt,klaus@preserva.de,4912345678,20,Active
+S009,Surfactant World,USA,John Miller,john@surfactant.com,120255501,25,Active
+S010,Packaging Hub,Malaysia,Siti Aminah,siti@packhub.com,6019988776,6,Active

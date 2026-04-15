@@ -1,0 +1,12 @@
+User ID,Full Name,Role,Department,Status,Date Joined,Shift Pattern
+1,Syed,Superadmin,Management,Active,2/10/2022 9:15,Normal
+2,Haatim,Superadmin,Management,Active,2/12/2022 14:30,Normal
+3,NaniRohayu,Manager,Procurement,Active,2/13/2022 10:05,Normal
+4,Rohim,Manager,Production,Active,2/13/2022 11:20,Shift 1
+5,Zizah,Manager,Finance,Active,2/12/2022 16:45,Shift 2
+6,Waroh,Supervisor,Warehouse,Active,2/14/2022 8:50,Shift 3
+7,ATIF,Superadmin,Quality Control,Active,2/14/2022 9:10,Shift 1
+8,Borhan,Staff,Production,Active,2/13/2022 15:30,Shift 2
+9,Chombi ,Staff,Quality Control,Active,2/13/2022 13:25,Shift 3
+10,John,Staff,Finance,Inactive,1/31/2022 17:00,Shift 1
+

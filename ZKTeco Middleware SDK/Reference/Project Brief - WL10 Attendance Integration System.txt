@@ -1,0 +1,124 @@
+**Project Brief: WL10 Attendance Integration System**
+
+We are building a custom attendance system using a ZKTeco WL10 fingerprint device. The goal is to automatically collect attendance logs from the device and integrate them into our web-based system (for HR, reporting, and payroll).
+
+---
+
+### 1. Device Overview
+
+* Device: ZKTeco WL10
+* Connection Type: WiFi (LAN)
+* Communication: IP-based (not USB)
+* Protocol: ZKTeco proprietary (via SDK)
+* Device IP: 192.168.1.170
+* Port: 4370
+
+---
+
+### 2. Key Constraint
+
+The device does NOT provide a REST API.
+
+We must use:
+
+* ZKTeco Standalone SDK (Windows-based)
+* Communication via TCP/IP
+
+---
+
+### 3. Proposed Architecture
+
+WL10 Device
+↓
+Middleware Service (C# / .NET using SDK)
+↓
+Database (MySQL / PostgreSQL)
+↓
+Web Application (existing system)
+
+---
+
+### 4. Middleware Responsibilities
+
+The middleware will:
+
+1. Connect to the WL10 device via IP and port
+2. Periodically pull attendance logs (every 1–5 minutes)
+3. Parse raw device data into structured format
+4. Store data into database
+5. Prevent duplicate records
+6. Handle connection failures and retries
+
+---
+
+### 5. Data Structure (Attendance Logs)
+
+Each log contains:
+
+* User ID (Employee ID)
+* Timestamp (date & time)
+* Verification type (fingerprint/password)
+* Status (check-in / check-out)
+
+---
+
+### 6. Database Requirements
+
+Table: attendance_logs
+
+Fields:
+
+* id (primary key)
+* user_id
+* timestamp
+* device_id
+* status
+
+Important:
+
+* Must prevent duplicates (user_id + timestamp unique)
+
+---
+
+### 7. Sync Strategy
+
+* Pull-based (device does NOT push data)
+* Middleware runs continuously or on schedule
+* Recommended interval: every 1–2 minutes
+
+---
+
+### 8. Future Extension (Optional)
+
+* REST API layer for frontend
+* Multi-device support
+* Dashboard for attendance monitoring
+* Payroll integration
+
+---
+
+### 9. Important Notes
+
+* Device must have ADMS disabled (local communication only)
+* Device and server must be on same network or VPN
+* Time synchronization is critical (device vs server)
+
+---
+
+### 10. Deliverables
+
+Phase 1:
+
+* Middleware service that pulls and stores logs
+
+Phase 2:
+
+* API endpoints for frontend
+
+Phase 3:
+
+* Full web dashboard integration
+
+---
+
+This approach ensures scalability, reliability, and full control over attendance data without relying on vendor software.

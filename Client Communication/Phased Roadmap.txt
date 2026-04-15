@@ -1,0 +1,53 @@
+Phased Roadmap (per tab)
+
+- Production
+  - Phase 1: Product master, BOM, draft production orders
+  - Phase 2: Issue materials (consumption), WIP tracking, yield/wastage capture, status workflow (RELEASED/IN_PROGRESS/DONE)
+  - Phase 3: Capacity planning, scheduling/Gantt, batch genealogy + traceability reporting
+- Inventory
+  - Phase 1: Item master, activate/deactivate, reorder point, basic stock list
+  - Phase 2: Stock movements (receive/issue/adjust), locations/bins, FEFO/expiry, cycle count
+  - Phase 3: Barcode workflows, valuation (FIFO/AVG), multi-warehouse transfers
+- Sales
+  - Phase 1: Customer master data (foundation for quotations/orders)
+  - Phase 2: Quotations + sales orders + delivery statuses, link demand to Production
+  - Phase 3: Pricing tiers/contracts, AR aging + collections dashboard
+- Procurement
+  - Phase 1: Purchase orders + submit-for-approval + approvals (already present)
+  - Phase 2: GRN/receiving, supplier master, 3‑way match hooks (PO/GRN/Invoice)
+  - Phase 3: Vendor performance, lead-time analytics, reorder automation
+- Accounting
+  - Phase 1: Chart of accounts, basic journal entries, period locking
+  - Phase 2: AP/AR invoices, payments/receipts, tax setup
+  - Phase 3: Costing integration (Inventory/Production), profitability by product/customer
+- Quality
+  - Phase 1: QC checklists + pass/fail logging (linked to receipt/production batches)
+  - Phase 2: Nonconformance + CAPA, quarantine/release flows
+  - Phase 3: Audit-ready reports, full lot trace/recall drill
+- HR
+  - Phase 1: Employee master, attendance capture (manual/import)
+  - Phase 2: Leave approvals, shift scheduling
+  - Phase 3: Payroll rules + exports, labor costing into Production
+- Alerts
+  - Phase 1: Low-stock + inactive master warnings
+  - Phase 2: Approval pending alerts (POs, future MOs), overdue actions
+  - Phase 3: SLA-based escalation, notification channels (email/WhatsApp integration)
+- Access & Workflow
+  - Phase 1: RBAC + audit logs (already present)
+  - Phase 2: Configurable approval templates per process (PO/MO/Payments)
+  - Phase 3: Delegation, maker-checker policies, audit export
+- Integrations
+  - Phase 1: CSV import/export for masters
+  - Phase 2: REST hooks + webhooks, accounting package export
+  - Phase 3: EDI/marketplace, barcode devices, BI pipelines
+
+Implemented in this stage (Phase 1 foundations)
+- Sales: Customer master CRUD (create + activate/deactivate) UI + API
+  - UI: SalesPage.tsx
+  - API: index.ts
+- Production: Product master, BOM maintenance, and draft production orders UI + API
+  - UI: ProductionPage.tsx
+  - API: index.ts
+  - DB models: schema.prisma
+- Inventory: Fixed auth hook import consistency
+  - InventoryPage.tsx

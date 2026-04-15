@@ -1,0 +1,241 @@
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&family=Outfit:wght@300;400;500;600;700&display=swap');
+
+@tailwind base;
+
+/* Float animation for project screenshots */
+@keyframes float {
+  0%, 100% {
+    transform: translateY(0px) rotate(0deg);
+  }
+  25% {
+    transform: translateY(-8px) rotate(0.5deg);
+  }
+  50% {
+    transform: translateY(0px) rotate(0deg);
+  }
+  75% {
+    transform: translateY(-4px) rotate(-0.5deg);
+  }
+}
+
+.animate-float {
+  animation: float 6s ease-in-out infinite;
+}
+@tailwind components;
+@tailwind utilities;
+
+/* FeitaCraft Studio Design System - Dark Premium Theme */
+
+@layer base {
+  :root {
+    /* Deep Blue Navy Background */
+    --background: 215 50% 8%;
+    --foreground: 0 0% 96%;
+
+    --card: 215 45% 12%;
+    --card-foreground: 0 0% 96%;
+
+    --popover: 215 45% 12%;
+    --popover-foreground: 0 0% 96%;
+
+    /* Gold/Amber Accent */
+    --primary: 38 92% 50%;
+    --primary-foreground: 215 50% 8%;
+
+    /* Dark Blue Secondary */
+    --secondary: 215 40% 16%;
+    --secondary-foreground: 0 0% 90%;
+
+    /* Muted */
+    --muted: 215 30% 20%;
+    --muted-foreground: 215 15% 60%;
+
+    /* Accent - Teal */
+    --accent: 185 60% 45%;
+    --accent-foreground: 0 0% 100%;
+
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 215 30% 20%;
+    --input: 215 30% 20%;
+    --ring: 38 92% 50%;
+
+    --radius: 0.75rem;
+
+    /* Custom tokens */
+    --glass: 215 45% 12% / 0.85;
+    --glass-border: 215 30% 30% / 0.3;
+    --shadow-color: 0 0% 0%;
+    --glow-color: 38 92% 50%;
+    
+    --sidebar-background: 215 50% 6%;
+    --sidebar-foreground: 0 0% 96%;
+    --sidebar-primary: 38 92% 50%;
+    --sidebar-primary-foreground: 215 50% 8%;
+    --sidebar-accent: 215 40% 16%;
+    --sidebar-accent-foreground: 0 0% 90%;
+    --sidebar-border: 215 30% 20%;
+    --sidebar-ring: 38 92% 50%;
+  }
+
+  .dark {
+    --background: 215 50% 5%;
+    --foreground: 0 0% 98%;
+
+    --card: 215 45% 8%;
+    --card-foreground: 0 0% 98%;
+
+    --popover: 215 45% 8%;
+    --popover-foreground: 0 0% 98%;
+
+    --primary: 38 92% 55%;
+    --primary-foreground: 215 50% 5%;
+
+    --secondary: 215 40% 12%;
+    --secondary-foreground: 0 0% 92%;
+
+    --muted: 215 30% 15%;
+    --muted-foreground: 215 15% 55%;
+
+    --accent: 185 60% 50%;
+    --accent-foreground: 0 0% 100%;
+
+    --destructive: 0 62% 30%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 215 30% 16%;
+    --input: 215 30% 16%;
+    --ring: 38 92% 55%;
+
+    --glass: 215 50% 8% / 0.9;
+    --glass-border: 215 30% 25% / 0.3;
+
+    --sidebar-background: 215 50% 4%;
+    --sidebar-foreground: 0 0% 98%;
+    --sidebar-primary: 38 92% 55%;
+    --sidebar-primary-foreground: 215 50% 5%;
+    --sidebar-accent: 215 40% 12%;
+    --sidebar-accent-foreground: 0 0% 92%;
+    --sidebar-border: 215 30% 16%;
+    --sidebar-ring: 38 92% 55%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  html {
+    scroll-behavior: smooth;
+  }
+
+  body {
+    @apply bg-background text-foreground font-body antialiased;
+  }
+}
+
+@layer utilities {
+  .glass {
+    @apply bg-[hsl(var(--glass))] backdrop-blur-xl border border-[hsl(var(--glass-border))];
+  }
+
+  .text-gradient {
+    @apply bg-gradient-to-r from-primary via-[hsl(45,90%,60%)] to-primary bg-clip-text text-transparent;
+  }
+
+  .shadow-glow {
+    box-shadow: 0 0 60px hsl(var(--glow-color) / 0.15);
+  }
+
+  .shadow-card {
+    box-shadow: 0 4px 20px hsl(var(--shadow-color) / 0.3), 
+                0 0 0 1px hsl(var(--border));
+  }
+
+  .animate-float {
+    animation: float 6s ease-in-out infinite;
+  }
+
+  .animate-fade-up {
+    animation: fadeUp 0.6s ease-out forwards;
+    opacity: 0;
+  }
+
+  .animate-scale-in {
+    animation: scaleIn 0.4s ease-out forwards;
+    opacity: 0;
+  }
+
+  .animate-slide-up {
+    animation: slideUp 0.8s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+    opacity: 0;
+  }
+
+  .parallax-slow {
+    will-change: transform;
+  }
+}
+
+@keyframes float {
+  0%, 100% {
+    transform: translateY(0px) rotate(0deg);
+  }
+  50% {
+    transform: translateY(-20px) rotate(2deg);
+  }
+}
+
+@keyframes fadeUp {
+  from {
+    opacity: 0;
+    transform: translateY(40px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes slideUp {
+  from {
+    opacity: 0;
+    transform: translateY(60px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes scaleIn {
+  from {
+    opacity: 0;
+    transform: scale(0.9);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+.shimmer {
+  background: linear-gradient(
+    90deg,
+    hsl(var(--primary) / 0) 0%,
+    hsl(var(--primary) / 0.3) 50%,
+    hsl(var(--primary) / 0) 100%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 3s infinite;
+}

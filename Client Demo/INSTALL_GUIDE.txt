@@ -1,0 +1,110 @@
+WL10 Middleware - Client Demo Pack (Windows)
+
+This folder contains everything needed to run the demo on a client PC.
+
+CONTENTS
+1) App\win-x86\
+   - WL10Middleware.exe (and supporting files)
+   - NOTE: The win-x86 build works on BOTH 32-bit and 64-bit Windows.
+2) ZKTecoSDK\x86\
+   - Auto-install_sdk.bat
+   - sdk\ (ZKTeco 32-bit COM SDK files)
+3) Database\
+   - Database - Staff WL10.csv (Employee List / roster source)
+4) Reference\
+   - 1_attlog.dat (Device Records source; created/overwritten by "Refresh From Device")
+5) Data\Database\
+   - (legacy copy) Database - Staff WL10.csv
+
+INSTALL / SETUP (FIRST TIME ON A PC)
+Step 1 - Copy folder
+  Copy the entire "Client Demo" folder to the client PC (any location, e.g. Desktop).
+
+Step 2 - Install ZKTeco SDK (one-time)
+  2.1 Open: ZKTecoSDK\x86\
+  2.2 Right-click "Auto-install_sdk.bat" -> Run as administrator
+  2.3 Wait until it finishes.
+
+Step 3 - Start the middleware dashboard
+  3.1 Recommended: Double-click "Start Dashboard.bat"
+  3.2 Or: Open App\win-x86\ then double-click WL10Middleware.exe
+  3.3 Keep it running (do not close). It hosts the local dashboard.
+
+Step 4 - Open the dashboard
+  4.1 Open any browser (Chrome/Edge)
+  4.2 Go to: http://127.0.0.1:5099/login
+  4.3 Login using the credentials shown in the console window (or provided by the demo team).
+
+CONFIGURE WL10 DEVICE CONNECTION
+Step 5 - Enter the device IP/Port
+  5.1 Go to the Settings tab
+  5.2 Enter the WL10 Device IP and Port
+  5.3 Click "Test TCP" and/or "Connect Now"
+  5.4 If the test is OK, click "Save Device"
+
+Step 6 - Pull records from the device
+  6.1 Go to Device Records tab
+  6.2 Click "Refresh From Device"
+  Result: The middleware pulls data from the WL10 and writes Reference\1_attlog.dat on that PC.
+
+OPTIONAL: STAFF RECORDS
+Step 7 - Staff CSV
+  If you want Staff Records populated:
+  7.1 Ensure this file exists on the client PC: Database\Database - Staff WL10.csv
+  7.2 To update the Employee List, replace this CSV with your latest file (same header columns).
+  7.3 If your CSV is stored elsewhere, set WL10_STAFF_CSV_PATH to the full path and restart the app.
+
+OPTIONAL: SUPABASE DATABASE (ONLINE)
+Step 8 - Configure Supabase
+  8.1 Go to Settings -> Database Settings
+  8.2 Enter Supabase URL / Keys / Attendance table
+  8.3 Click "Test Connection"
+  8.4 For demo (read-only): SUPABASE_ANON_KEY is enough if the table is public.
+  8.5 For syncing/upserting: set SUPABASE_SERVICE_ROLE_KEY, enable Supabase Sync, then go to Database Records tab -> Click "Update Supabase"
+
+TROUBLESHOOTING
+1) "This site can’t be reached / 127.0.0.1 refused to connect"
+  - The middleware is not running.
+  - Start App\win-x86\WL10Middleware.exe again, then open: http://127.0.0.1:5099/login
+
+2) "Cannot create object 'zkemkeeper.CZKEM'" or device functions do not work
+  - The ZKTeco SDK is not installed/registered.
+  - Run: ZKTecoSDK\x86\Auto-install_sdk.bat as Administrator, then restart WL10Middleware.exe
+
+3) Windows SmartScreen / Antivirus blocks the EXE
+  - Choose "More info" -> "Run anyway" (if permitted by the client policy),
+    or add an allow/exception per the client IT policy.
+
+4) No device records after refresh
+  - Verify the WL10 IP/Port is correct and the device is reachable from the PC.
+  - Use "Test TCP" in Settings.
+
+5) "Test Connection" shows: "Failed: supabase not configured"
+  - "Test Connection" requires:
+    a) SUPABASE_URL
+    b) WL10_SUPABASE_ATTENDANCE_TABLE (default: attendance_events)
+    c) A Supabase key:
+       - SUPABASE_ANON_KEY (publishable key) for READ-ONLY checks if your table is public, OR
+       - SUPABASE_SERVICE_ROLE_KEY for full access (required for Update Supabase / sync)
+  - Fix:
+    - Ensure App\win-x86\.env.local has SUPABASE_URL + SUPABASE_ANON_KEY, then restart the dashboard, OR
+    - Go to Settings -> Database Settings and paste the keys there, then click "Test Connection" again.
+
+6) Employee List is empty
+  - The Employee List reads from: Database\Database - Staff WL10.csv
+  - Fix:
+    - Confirm the file exists in the Client Demo folder exactly at Database\Database - Staff WL10.csv
+    - Replace it with your latest CSV (keep the same headers), then refresh the browser page.
+    - If you must keep the CSV in a different folder, set WL10_STAFF_CSV_PATH to the full CSV path and restart WL10Middleware.exe.
+
+7) Device Records shows: "No device records. Could not resolve 1_attlog.dat path"
+  - The Device Records sub-tab reads from: Reference\1_attlog.dat
+  - Fix:
+    - Ensure the folder exists: Reference\
+    - Ensure the file exists: Reference\1_attlog.dat (an empty file is OK)
+    - Then go to Device Records -> "Refresh From Device" to populate/overwrite it.
+    - If needed, set WL10_ATTLOG_EXPORT_PATH (or WL10_ATTLOG_FILE_PATH) to a full path pointing to 1_attlog.dat and restart.
+
+STOP / EXIT
+  Close the console window running WL10Middleware.exe, or press Ctrl+C in that window.
+  Or run: Stop Dashboard.bat

@@ -1,0 +1,11 @@
+﻿BOM ID,Product SKU,Material Code,Material Name,Quantity,Unit,Stage
+B001,P001,RM001,Vitamin C Powder,2,kg,Mixing
+B002,P001,RM002,Hyaluronic Acid,1.5,kg,Mixing
+B003,P001,RM004,Glycerin,5,kg,Mixing
+B004,P003,RM003,Emulsifying Wax,3,kg,Heating
+B005,P003,RM005,Aloe Vera Extract,4,L,Mixing
+B006,P004,RM007,Titanium Dioxide,6,kg,Mixing
+B007,P007,RM008,Surfactant Base,10,L,Mixing
+B008,P007,RM009,Preservative Blend,1,L,Cooling
+B009,P005,RM010,Color Pigment Red,0.5,kg,Blending
+B010,P009,RM005,Aloe Vera Extract,6,L,Mixing
