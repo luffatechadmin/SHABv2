@@ -1,5 +1,13 @@
 @echo off
-setlocal
+setlocal EnableExtensions
+if /I "%~1" NEQ "__interactive" (
+  echo %cmdcmdline% | find /i "/c" >nul 2>&1
+  if not errorlevel 1 (
+    start "" cmd.exe /k "\"%~f0\" __interactive"
+    exit /b
+  )
+)
+
 set "ROOT=%~dp0"
 set "APP_DIR=%ROOT%App\win-x86"
 set "SDK_INSTALL=%ROOT%ZKTecoSDK\x86\Auto-install_sdk.bat"
@@ -8,6 +16,9 @@ set "SHORTCUT_NAME=SHAB Attendance Dashboard.lnk"
 set "SHORTCUT_ICON=%ROOT%Assets\SHAB Attendance Dashboard.ico"
 set "LOG_DIR=%ROOT%Logs"
 set "LOG_FILE=%LOG_DIR%\attendance-middleware.log"
+set "WIN_DIR=%SystemRoot%"
+if not defined WIN_DIR set "WIN_DIR=%windir%"
+set "PS_EXE=%WIN_DIR%\System32\WindowsPowerShell\v1.0\powershell.exe"
 
 echo.
 echo ============================================================
@@ -26,9 +37,8 @@ cd /d "%APP_DIR%"
 
 echo.
 echo Checking if dashboard is already running...
-powershell -NoProfile -Command ^
-  "$c=New-Object Net.Sockets.TcpClient; try{$c.Connect('127.0.0.1',5099); $c.Close(); exit 0}catch{exit 1}" >nul 2>&1
-if not errorlevel 1 (
+call :CHECK_PORT
+if "%errorlevel%"=="0" (
   set "READY=1"
   goto :OPEN_BROWSER
 )
@@ -43,7 +53,7 @@ if errorlevel 1 (
     pause
     exit /b 1
   )
-  powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+  "%PS_EXE%" -NoProfile -ExecutionPolicy Bypass -Command ^
     "Start-Process -FilePath 'cmd.exe' -ArgumentList @('/c','\"%SDK_INSTALL%\"') -Verb RunAs -Wait"
   reg query "HKCR\zkemkeeper.CZKEM" >nul 2>&1
   if errorlevel 1 (
@@ -80,15 +90,8 @@ start "SHAB Attendance Middleware" /min cmd.exe /c ^
 
 echo Waiting for dashboard to be ready...
 set "READY="
-for /L %%i in (1,1,60) do (
-  powershell -NoProfile -Command ^
-    "$c=New-Object Net.Sockets.TcpClient; try{$c.Connect('127.0.0.1',5099); $c.Close(); exit 0}catch{exit 1}" >nul 2>&1
-  if not errorlevel 1 (
-    set "READY=1"
-    goto :OPEN_BROWSER
-  )
-  timeout /t 1 /nobreak >nul
-)
+call :WAIT_FOR_PORT 60
+if "%errorlevel%"=="0" set "READY=1"
 
 :OPEN_BROWSER
 echo.
@@ -96,17 +99,7 @@ if defined READY (
   echo Opening browser: %DASH_URL%
   start "" "%DASH_URL%"
   echo Creating desktop shortcut...
-  powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-    "$desktop=[Environment]::GetFolderPath('Desktop');" ^
-    "$lnk=Join-Path $desktop '%SHORTCUT_NAME%';" ^
-    "$w=New-Object -ComObject WScript.Shell;" ^
-    "$s=$w.CreateShortcut($lnk);" ^
-    "$s.TargetPath=$env:ComSpec;" ^
-    "$s.Arguments='/c \"\"%ROOT%Start Dashboard.bat\"\"';" ^
-    "$s.WorkingDirectory='%ROOT%';" ^
-    "$s.Description='SHAB Attendance Dashboard';" ^
-    "if (Test-Path '%SHORTCUT_ICON%') { $s.IconLocation='%SHORTCUT_ICON%,0' }" ^
-    "$s.Save();" >nul 2>&1
+  call :CREATE_SHORTCUT
 ) else (
   echo Dashboard did not become reachable on port 5099.
   echo If it started successfully, open %DASH_URL% manually.
@@ -124,3 +117,34 @@ if defined READY (
 echo.
 echo Default login: superadmin / abcd1234
 endlocal
+exit /b 0
+
+:CHECK_PORT
+if not exist "%PS_EXE%" exit /b 2
+"%PS_EXE%" -NoProfile -Command "$c=New-Object Net.Sockets.TcpClient; try{$c.Connect('127.0.0.1',5099); $c.Close(); exit 0}catch{exit 1}" >nul 2>&1
+exit /b %errorlevel%
+
+:WAIT_FOR_PORT
+set "MAX=%~1"
+if "%MAX%"=="" set "MAX=60"
+for /L %%i in (1,1,%MAX%) do (
+  call :CHECK_PORT
+  if "%errorlevel%"=="0" exit /b 0
+  timeout /t 1 /nobreak >nul
+)
+exit /b 1
+
+:CREATE_SHORTCUT
+set "DESKTOP_DIR=%USERPROFILE%\Desktop"
+if not exist "%DESKTOP_DIR%" exit /b 0
+
+set "CMD_SHORTCUT=%DESKTOP_DIR%\SHAB Attendance Dashboard.cmd"
+> "%CMD_SHORTCUT%" echo @echo off
+>> "%CMD_SHORTCUT%" echo start "" "%ROOT%Start Dashboard.bat" __interactive
+
+set "URL_SHORTCUT=%DESKTOP_DIR%\SHAB Attendance Dashboard.url"
+> "%URL_SHORTCUT%" echo [InternetShortcut]
+>> "%URL_SHORTCUT%" echo URL=%DASH_URL%
+>> "%URL_SHORTCUT%" echo IconFile=%SHORTCUT_ICON%
+>> "%URL_SHORTCUT%" echo IconIndex=0
+exit /b 0
