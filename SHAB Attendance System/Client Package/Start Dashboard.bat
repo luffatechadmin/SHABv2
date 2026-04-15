@@ -4,6 +4,8 @@ set "ROOT=%~dp0"
 set "APP_DIR=%ROOT%App\win-x86"
 set "SDK_INSTALL=%ROOT%ZKTecoSDK\x86\Auto-install_sdk.bat"
 set "DASH_URL=http://127.0.0.1:5099/login"
+set "SHORTCUT_NAME=SHAB Attendance Dashboard.lnk"
+set "SHORTCUT_ICON=%ROOT%Assets\SHAB Attendance Dashboard.ico"
 
 echo.
 echo ============================================================
@@ -79,6 +81,17 @@ echo.
 if defined READY (
   echo Opening browser: %DASH_URL%
   start "" "%DASH_URL%"
+  echo Creating desktop shortcut...
+  powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+    "$desktop=[Environment]::GetFolderPath('Desktop');" ^
+    "$lnk=Join-Path $desktop '%SHORTCUT_NAME%';" ^
+    "$w=New-Object -ComObject WScript.Shell;" ^
+    "$s=$w.CreateShortcut($lnk);" ^
+    "$s.TargetPath='%ROOT%Start Dashboard.bat';" ^
+    "$s.WorkingDirectory='%ROOT%';" ^
+    "$s.Description='SHAB Attendance Dashboard';" ^
+    "if (Test-Path '%SHORTCUT_ICON%') { $s.IconLocation='%SHORTCUT_ICON%,0' }" ^
+    "$s.Save();" >nul 2>&1
 ) else (
   echo Dashboard did not become reachable on port 5099.
   echo If it started successfully, open %DASH_URL% manually.
