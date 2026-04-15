@@ -1,11 +1,8 @@
 @echo off
 setlocal EnableExtensions
 if /I "%~1" NEQ "__interactive" (
-  echo %cmdcmdline% | find /i "/c" >nul 2>&1
-  if not errorlevel 1 (
-    start "" "%ComSpec%" /k ""%~f0" __interactive"
-    exit /b
-  )
+  start "" "%ComSpec%" /k ""%~f0" __interactive"
+  exit /b
 )
 
 set "ROOT=%~dp0"
@@ -44,7 +41,7 @@ if not errorlevel 1 (
 
 reg query "HKCR\zkemkeeper.CZKEM" >nul 2>&1
 if errorlevel 1 (
-  echo ZKTeco SDK not detected. Installing now (requires Administrator)...
+  echo ZKTeco SDK not detected. Installing now - requires Administrator...
   if not exist "%SDK_INSTALL%" (
     echo ERROR: SDK installer not found:
     echo   %SDK_INSTALL%
@@ -53,7 +50,7 @@ if errorlevel 1 (
     exit /b 1
   )
   "%PS_EXE%" -NoProfile -ExecutionPolicy Bypass -Command ^
-    "Start-Process -FilePath 'cmd.exe' -ArgumentList @('/c','call ""%SDK_INSTALL%""') -Verb RunAs -Wait"
+    "Start-Process -FilePath 'cmd.exe' -ArgumentList '/c','call ""%SDK_INSTALL%""' -Verb RunAs -Wait"
   reg query "HKCR\zkemkeeper.CZKEM" >nul 2>&1
   if errorlevel 1 (
     echo ERROR: ZKTeco SDK install may have failed or was cancelled.
@@ -65,19 +62,6 @@ if errorlevel 1 (
   )
 ) else (
   echo ZKTeco SDK detected.
-)
-
-if not exist "C:\Program Files (x86)\dotnet\shared\Microsoft.NETCore.App\" (
-  echo.
-  echo NOTE: .NET Runtime (x86) not detected. The app may fail to start.
-  echo Opening the download page...
-  start "" "https://dotnet.microsoft.com/en-us/download/dotnet/8.0"
-)
-if not exist "C:\Program Files (x86)\dotnet\shared\Microsoft.AspNetCore.App\" (
-  echo.
-  echo NOTE: ASP.NET Core Runtime (x86) not detected. The dashboard may fail to start.
-  echo Opening the download page...
-  start "" "https://dotnet.microsoft.com/en-us/download/dotnet/8.0"
 )
 
 echo.
