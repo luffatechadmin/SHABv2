@@ -6,6 +6,8 @@ set "SDK_INSTALL=%ROOT%ZKTecoSDK\x86\Auto-install_sdk.bat"
 set "DASH_URL=http://127.0.0.1:5099/login"
 set "SHORTCUT_NAME=SHAB Attendance Dashboard.lnk"
 set "SHORTCUT_ICON=%ROOT%Assets\SHAB Attendance Dashboard.ico"
+set "LOG_DIR=%ROOT%Logs"
+set "LOG_FILE=%LOG_DIR%\attendance-middleware.log"
 
 echo.
 echo ============================================================
@@ -21,6 +23,15 @@ if not exist "%APP_DIR%\WL10Middleware.exe" (
 )
 
 cd /d "%APP_DIR%"
+
+echo.
+echo Checking if dashboard is already running...
+powershell -NoProfile -Command ^
+  "$c=New-Object Net.Sockets.TcpClient; try{$c.Connect('127.0.0.1',5099); $c.Close(); exit 0}catch{exit 1}" >nul 2>&1
+if not errorlevel 1 (
+  set "READY=1"
+  goto :OPEN_BROWSER
+)
 
 reg query "HKCR\zkemkeeper.CZKEM" >nul 2>&1
 if errorlevel 1 (
@@ -62,7 +73,10 @@ if not exist "C:\Program Files (x86)\dotnet\shared\Microsoft.AspNetCore.App\" (
 
 echo.
 echo Launching SHAB Attendance Dashboard...
-start "SHAB Attendance Middleware" "%CD%\WL10Middleware.exe" --dashboard --dashboard-port 5099
+if not exist "%LOG_DIR%" mkdir "%LOG_DIR%" >nul 2>&1
+if exist "%LOG_FILE%" del /f /q "%LOG_FILE%" >nul 2>&1
+start "SHAB Attendance Middleware" /min cmd.exe /c ^
+  "\"%CD%\WL10Middleware.exe\" --dashboard --dashboard-port 5099 1>>\"%LOG_FILE%\" 2>>&1"
 
 echo Waiting for dashboard to be ready...
 set "READY="
@@ -87,7 +101,8 @@ if defined READY (
     "$lnk=Join-Path $desktop '%SHORTCUT_NAME%';" ^
     "$w=New-Object -ComObject WScript.Shell;" ^
     "$s=$w.CreateShortcut($lnk);" ^
-    "$s.TargetPath='%ROOT%Start Dashboard.bat';" ^
+    "$s.TargetPath=$env:ComSpec;" ^
+    "$s.Arguments='/c \"\"%ROOT%Start Dashboard.bat\"\"';" ^
     "$s.WorkingDirectory='%ROOT%';" ^
     "$s.Description='SHAB Attendance Dashboard';" ^
     "if (Test-Path '%SHORTCUT_ICON%') { $s.IconLocation='%SHORTCUT_ICON%,0' }" ^
@@ -95,6 +110,15 @@ if defined READY (
 ) else (
   echo Dashboard did not become reachable on port 5099.
   echo If it started successfully, open %DASH_URL% manually.
+  echo.
+  if exist "%LOG_FILE%" (
+    echo Log file:
+    echo   %LOG_FILE%
+    echo.
+    start "" "%LOG_FILE%"
+  )
+  echo.
+  pause
 )
 
 echo.
