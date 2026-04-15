@@ -12,6 +12,8 @@ set "LOG_FILE=%LOG_DIR%\attendance-middleware.log"
 set "WIN_DIR=%SystemRoot%"
 if not defined WIN_DIR set "WIN_DIR=%windir%"
 set "PS_EXE=%WIN_DIR%\System32\WindowsPowerShell\v1.0\powershell.exe"
+set "ZK_TARGET=%WIN_DIR%\SysWOW64"
+if not exist "%ZK_TARGET%\regsvr32.exe" set "ZK_TARGET=%WIN_DIR%\System32"
 
 echo.
 echo ============================================================
@@ -39,8 +41,11 @@ exit /b
 echo ZKTeco SDK not detected. Installing now - requires Administrator...
 if not exist "%SDK_INSTALL%" echo ERROR: SDK installer not found: & echo   %SDK_INSTALL% & echo. & pause & exit /b 1
 call :RUN_AS_ADMIN "%SDK_INSTALL%"
+if errorlevel 1 echo ERROR: Administrator request was cancelled or blocked. & echo Please run this as Administrator: & echo   %SDK_INSTALL% & echo. & pause & exit /b 1
 reg query "HKCR\zkemkeeper.CZKEM" >nul 2>&1
-if errorlevel 1 echo ERROR: ZKTeco SDK install may have failed or was cancelled. & echo Please run this as Administrator: & echo   %SDK_INSTALL% & echo. & pause & exit /b 1
+if not errorlevel 1 goto :SDK_OK
+if exist "%ZK_TARGET%\zkemkeeper.dll" echo WARNING: ZKTeco SDK dll is present but COM registration was not detected. & echo Device functions may not work until the SDK is registered. & goto :SDK_OK
+echo ERROR: ZKTeco SDK install may have failed or was cancelled. & echo Please run this as Administrator: & echo   %SDK_INSTALL% & echo. & pause & exit /b 1
 
 :SDK_OK
 echo ZKTeco SDK detected.
@@ -106,7 +111,7 @@ pause
 exit /b 1
 
 :RUN_AS_ADMIN
-if exist "%PS_EXE%" "%PS_EXE%" -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -Verb RunAs -WorkingDirectory '%~dp1' -FilePath '%~1' -Wait" >nul 2>&1 & exit /b 0
+if exist "%PS_EXE%" "%PS_EXE%" -NoProfile -ExecutionPolicy Bypass -Command "$p=Start-Process -Verb RunAs -WorkingDirectory '%~dp1' -FilePath '%~1' -Wait -PassThru; exit $p.ExitCode" >nul 2>&1 & exit /b
 mshta "javascript:var sh=new ActiveXObject('Shell.Application'); sh.ShellExecute('%~1','','','runas',1); close();" >nul 2>&1 & exit /b 0
 exit /b 1
 
