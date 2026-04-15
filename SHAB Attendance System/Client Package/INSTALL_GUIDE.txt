@@ -1,6 +1,6 @@
-WL10 Middleware - Client Demo Pack (Windows)
+WL10 Middleware - Client Package (Windows)
 
-This folder contains everything needed to run the demo on a client PC.
+This folder contains everything needed to run the SHAB Attendance System on a client PC.
 
 CONTENTS
 1) App\win-x86\
@@ -18,7 +18,7 @@ CONTENTS
 
 INSTALL / SETUP (FIRST TIME ON A PC)
 Step 1 - Copy folder
-  Copy the entire "Client Demo" folder to the client PC (any location, e.g. Desktop).
+  Copy the entire "Client Package" folder to the client PC (any location, e.g. Desktop).
 
 Step 2 - Install ZKTeco SDK (one-time)
   2.1 Open: ZKTecoSDK\x86\
@@ -33,7 +33,7 @@ Step 3 - Start the middleware dashboard
 Step 4 - Open the dashboard
   4.1 Open any browser (Chrome/Edge)
   4.2 Go to: http://127.0.0.1:5099/login
-  4.3 Login using the credentials shown in the console window (or provided by the demo team).
+  4.3 Login using the credentials shown in the console window (or provided by the project team).
 
 CONFIGURE WL10 DEVICE CONNECTION
 Step 5 - Enter the device IP/Port
@@ -93,7 +93,7 @@ TROUBLESHOOTING
 6) Employee List is empty
   - The Employee List reads from: Database\Database - Staff WL10.csv
   - Fix:
-    - Confirm the file exists in the Client Demo folder exactly at Database\Database - Staff WL10.csv
+    - Confirm the file exists in the Client Package folder exactly at Database\Database - Staff WL10.csv
     - Replace it with your latest CSV (keep the same headers), then refresh the browser page.
     - If you must keep the CSV in a different folder, set WL10_STAFF_CSV_PATH to the full CSV path and restart WL10Middleware.exe.
 

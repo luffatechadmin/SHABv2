@@ -775,7 +775,7 @@ static partial class Program
             var a = Path.GetFullPath(Path.Combine(dir, ".env.local"));
             if (seen.Add(a)) yield return a;
 
-            var b = Path.GetFullPath(Path.Combine(dir, "shab-web", ".env.local"));
+            var b = Path.GetFullPath(Path.Combine(dir, "SHAB Dashboard", ".env.local"));
             if (seen.Add(b)) yield return b;
           }
 

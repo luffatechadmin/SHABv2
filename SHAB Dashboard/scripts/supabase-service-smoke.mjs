@@ -7,8 +7,8 @@ dotenv.config({ path: path.join(projectRoot, ".env.local"), quiet: true });
 const supabaseUrl = String(process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || "").trim();
 const serviceRoleKey = String(process.env.SUPABASE_SERVICE_ROLE_KEY || "").trim();
 
-if (!supabaseUrl) throw new Error("Missing SUPABASE_URL (or VITE_SUPABASE_URL) in shab-web/.env.local");
-if (!serviceRoleKey) throw new Error("Missing SUPABASE_SERVICE_ROLE_KEY in shab-web/.env.local");
+if (!supabaseUrl) throw new Error("Missing SUPABASE_URL (or VITE_SUPABASE_URL) in SHAB Dashboard/.env.local");
+if (!serviceRoleKey) throw new Error("Missing SUPABASE_SERVICE_ROLE_KEY in SHAB Dashboard/.env.local");
 
 const base = supabaseUrl.replace(/\/+$/, "");
 

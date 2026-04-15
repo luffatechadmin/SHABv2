@@ -229,8 +229,8 @@ static partial class Program
         {
           Path.Combine(Directory.GetCurrentDirectory(), ".env.local"),
           Path.Combine(AppContext.BaseDirectory, ".env.local"),
-          Path.Combine(Directory.GetCurrentDirectory(), "shab-web", ".env.local"),
-          Path.Combine(AppContext.BaseDirectory, "shab-web", ".env.local"),
+          Path.Combine(Directory.GetCurrentDirectory(), "SHAB Dashboard", ".env.local"),
+          Path.Combine(AppContext.BaseDirectory, "SHAB Dashboard", ".env.local"),
         };
         foreach (var path in candidates)
         {
@@ -1167,7 +1167,7 @@ static partial class Program
       var url = root.TryGetProperty("supabaseUrl", out var urlEl) ? (urlEl.GetString() ?? string.Empty).Trim() : string.Empty;
       var anon = root.TryGetProperty("supabaseAnonKey", out var anonEl) ? (anonEl.GetString() ?? string.Empty).Trim() : string.Empty;
       var pid = root.TryGetProperty("supabaseProjectId", out var pidEl) ? (pidEl.GetString() ?? string.Empty).Trim() : string.Empty;
-      var outDir = Path.Combine(Directory.GetCurrentDirectory(), "shab-web");
+      var outDir = Path.Combine(Directory.GetCurrentDirectory(), "SHAB Dashboard");
       var outPath = Path.Combine(outDir, ".env.local");
       Directory.CreateDirectory(outDir);
       var text = $"VITE_SUPABASE_URL={url}\nVITE_SUPABASE_ANON_KEY={anon}\nVITE_SUPABASE_PROJECT_ID={pid}\n";
@@ -5725,7 +5725,7 @@ static partial class Program
 
     function getQuickFixCommand() {
       return [
-        'cd \"C:\\\\Users\\\\HP\\\\Documents\\\\GitHub\\\\SHABv1\\\\ZKTeco Middleware SDK\\\\WL10Middleware\"',
+        'cd \".\\\\SHAB Attendance System\\\\SHAB Attendance Middleware\"',
         'dotnet build -c Release',
         'dotnet run -c Release -- --dashboard --dashboard-port 5099',
       ].join('\r\n');

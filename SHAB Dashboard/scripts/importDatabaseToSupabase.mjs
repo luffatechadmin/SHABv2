@@ -10,12 +10,12 @@ dotenv.config({ path: path.join(projectRoot, ".env.local"), quiet: true });
 const supabaseUrl = process.env.VITE_SUPABASE_URL;
 const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-if (!supabaseUrl) throw new Error("Missing VITE_SUPABASE_URL in shab-web/.env.local");
-if (!supabaseServiceRoleKey) throw new Error("Missing SUPABASE_SERVICE_ROLE_KEY in shab-web/.env.local");
+if (!supabaseUrl) throw new Error("Missing VITE_SUPABASE_URL in SHAB Dashboard/.env.local");
+if (!supabaseServiceRoleKey) throw new Error("Missing SUPABASE_SERVICE_ROLE_KEY in SHAB Dashboard/.env.local");
 
 const supabase = createClient(supabaseUrl, supabaseServiceRoleKey, { auth: { persistSession: false } });
 
-const databaseDir = path.resolve(projectRoot, "..", "Database");
+const databaseDir = path.resolve(projectRoot, "Database");
 
 const shouldDeletePlaceholderStaff = (row) => {
   const id = typeof row?.id === "string" ? row.id.trim() : "";
@@ -95,7 +95,7 @@ const ensureTableReachable = async (table) => {
   const { error } = await supabase.from(table).select("id").limit(1);
   if (!error) return;
   throw new Error(
-    `${table} is not reachable via PostgREST: ${error.message}. Run shab-web/supabase_schema.sql in Supabase SQL Editor, then re-run this script.`
+    `${table} is not reachable via PostgREST: ${error.message}. Run SHAB Dashboard/supabase_schema.sql in Supabase SQL Editor, then re-run this script.`
   );
 };
 
@@ -113,7 +113,7 @@ const run = async () => {
   }
   if (missing.length) {
     throw new Error(
-      `Missing tables: ${missing.join(", ")}. Run shab-web/supabase_schema.sql in Supabase SQL Editor, then re-run this script.`
+      `Missing tables: ${missing.join(", ")}. Run SHAB Dashboard/supabase_schema.sql in Supabase SQL Editor, then re-run this script.`
     );
   }
 
