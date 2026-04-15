@@ -1,9 +1,6 @@
 @echo off
 setlocal EnableExtensions
-if /I "%~1" NEQ "__interactive" (
-  start "" "%ComSpec%" /k ""%~f0" __interactive"
-  exit /b
-)
+if /I "%~1" NEQ "__interactive" start "" "%ComSpec%" /k ""%~f0" __interactive" & exit /b
 
 set "ROOT=%~dp0"
 set "APP_DIR=%ROOT%App\win-x86"
@@ -21,60 +18,48 @@ echo ============================================================
 echo SHAB Attendance System - Start Dashboard
 echo ============================================================
 
-if not exist "%APP_DIR%\WL10Middleware.exe" (
-  echo ERROR: WL10Middleware.exe not found in:
-  echo   %APP_DIR%
-  echo.
-  pause
-  exit /b 1
-)
+if not exist "%APP_DIR%\WL10Middleware.exe" echo ERROR: WL10Middleware.exe not found in: & echo   %APP_DIR% & echo. & pause & exit /b 1
 
 cd /d "%APP_DIR%"
 
 echo.
 echo Checking if dashboard is already running...
 call :CHECK_PORT
-if not errorlevel 1 (
-  set "READY=1"
-  goto :OPEN_BROWSER
-)
+if not errorlevel 1 set "READY=1" & goto :OPEN_BROWSER
 
 reg query "HKCR\zkemkeeper.CZKEM" >nul 2>&1
-if errorlevel 1 (
-  echo ZKTeco SDK not detected. Installing now - requires Administrator...
-  if not exist "%SDK_INSTALL%" (
-    echo ERROR: SDK installer not found:
-    echo   %SDK_INSTALL%
-    echo.
-    pause
-    exit /b 1
-  )
-  "%PS_EXE%" -NoProfile -ExecutionPolicy Bypass -Command ^
-    "Start-Process -FilePath 'cmd.exe' -ArgumentList '/c','call ""%SDK_INSTALL%""' -Verb RunAs -Wait"
-  reg query "HKCR\zkemkeeper.CZKEM" >nul 2>&1
-  if errorlevel 1 (
-    echo ERROR: ZKTeco SDK install may have failed or was cancelled.
-    echo Please run this as Administrator:
-    echo   %SDK_INSTALL%
-    echo.
-    pause
-    exit /b 1
-  )
-) else (
-  echo ZKTeco SDK detected.
-)
+if not errorlevel 1 goto :SDK_OK
+call :IS_ADMIN
+if not errorlevel 1 goto :SDK_INSTALL
+echo Requesting Administrator access for SDK install...
+call :ELEVATE_SELF
+exit /b
+
+:SDK_INSTALL
+echo ZKTeco SDK not detected. Installing now - requires Administrator...
+if not exist "%SDK_INSTALL%" echo ERROR: SDK installer not found: & echo   %SDK_INSTALL% & echo. & pause & exit /b 1
+call :RUN_AS_ADMIN "%SDK_INSTALL%"
+reg query "HKCR\zkemkeeper.CZKEM" >nul 2>&1
+if errorlevel 1 echo ERROR: ZKTeco SDK install may have failed or was cancelled. & echo Please run this as Administrator: & echo   %SDK_INSTALL% & echo. & pause & exit /b 1
+
+:SDK_OK
+echo ZKTeco SDK detected.
 
 echo.
 echo Launching SHAB Attendance Dashboard...
 if not exist "%LOG_DIR%" mkdir "%LOG_DIR%" >nul 2>&1
 if exist "%LOG_FILE%" del /f /q "%LOG_FILE%" >nul 2>&1
-start "SHAB Attendance Middleware" /min cmd.exe /c ^
-  "\"%CD%\WL10Middleware.exe\" --dashboard --dashboard-port 5099 1>>\"%LOG_FILE%\" 2>>&1"
+start "SHAB Attendance Middleware" /min "%ComSpec%" /c "\"%CD%\WL10Middleware.exe\" --dashboard --dashboard-port 5099 1>>\"%LOG_FILE%\" 2>>&1"
 
 echo Waiting for dashboard to be ready...
-set "READY="
-call :WAIT_FOR_PORT 60
-if not errorlevel 1 set "READY=1"
+set /a tries=60
+:WAIT_LOOP
+call :CHECK_PORT
+if not errorlevel 1 set "READY=1" & goto :OPEN_BROWSER
+set /a tries-=1
+if %tries% LEQ 0 goto :NOT_READY
+timeout /t 1 /nobreak >nul
+goto :WAIT_LOOP
 
 :OPEN_BROWSER
 echo.
@@ -83,48 +68,51 @@ if defined READY (
   start "" "%DASH_URL%"
   echo Creating desktop shortcut...
   call :CREATE_SHORTCUT
-) else (
-  echo Dashboard did not become reachable on port 5099.
-  echo If it started successfully, open %DASH_URL% manually.
   echo.
-  if exist "%LOG_FILE%" (
-    echo Log file:
-    echo   %LOG_FILE%
-    echo.
-    start "" "%LOG_FILE%"
-  )
-  echo.
-  pause
+  echo Default login: superadmin / abcd1234
+  endlocal
+  exit /b 0
 )
 
+:NOT_READY
+echo Dashboard did not become reachable on port 5099.
+echo If it started successfully, open %DASH_URL% manually.
+echo.
+if exist "%LOG_FILE%" echo Log file: & echo   %LOG_FILE% & echo. & start "" "%LOG_FILE%"
+echo.
+pause
 echo.
 echo Default login: superadmin / abcd1234
 endlocal
-exit /b 0
+exit /b 1
 
 :CHECK_PORT
 netstat -ano | findstr /R /C:":5099 .*LISTENING" >nul 2>&1
 if not errorlevel 1 exit /b 0
-if exist "%PS_EXE%" (
-  "%PS_EXE%" -NoProfile -Command "$c=New-Object Net.Sockets.TcpClient; try{$c.Connect('127.0.0.1',5099); $c.Close(); exit 0}catch{exit 1}" >nul 2>&1
-  exit /b %errorlevel%
-)
 exit /b 1
 
-:WAIT_FOR_PORT
-set "MAX=%~1"
-if "%MAX%"=="" set "MAX=60"
-for /L %%i in (1,1,%MAX%) do (
-  call :CHECK_PORT
-  if not errorlevel 1 exit /b 0
-  timeout /t 1 /nobreak >nul
-)
+:IS_ADMIN
+net session >nul 2>&1
+if not errorlevel 1 exit /b 0
+fltmc >nul 2>&1
+if not errorlevel 1 exit /b 0
+exit /b 1
+
+:ELEVATE_SELF
+if exist "%PS_EXE%" "%PS_EXE%" -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -Verb RunAs -FilePath $env:ComSpec -ArgumentList '/k','""%~f0"" __interactive'" >nul 2>&1 & exit /b 0
+mshta "javascript:var sh=new ActiveXObject('Shell.Application'); sh.ShellExecute('%~f0','__interactive','','runas',1); close();" >nul 2>&1 & exit /b 0
+echo ERROR: Could not request Administrator access automatically.
+pause
+exit /b 1
+
+:RUN_AS_ADMIN
+if exist "%PS_EXE%" "%PS_EXE%" -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -Verb RunAs -FilePath $env:ComSpec -ArgumentList '/c','call ""%~1""' -Wait" >nul 2>&1 & exit /b 0
+mshta "javascript:var sh=new ActiveXObject('Shell.Application'); sh.ShellExecute('%ComSpec%','/c call ""%~1""','','runas',1); close();" >nul 2>&1 & exit /b 0
 exit /b 1
 
 :CREATE_SHORTCUT
 set "DESKTOP_DIR=%USERPROFILE%\Desktop"
 if not exist "%DESKTOP_DIR%" exit /b 0
-
 set "CMD_SHORTCUT=%DESKTOP_DIR%\SHAB Attendance Dashboard.cmd"
 > "%CMD_SHORTCUT%" echo @echo off
 >> "%CMD_SHORTCUT%" echo start "" "%ROOT%Start Dashboard.bat" __interactive
