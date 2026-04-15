@@ -3,7 +3,7 @@ setlocal EnableExtensions
 if /I "%~1" NEQ "__interactive" (
   echo %cmdcmdline% | find /i "/c" >nul 2>&1
   if not errorlevel 1 (
-    start "" cmd.exe /k "\"%~f0\" __interactive"
+    start "" cmd.exe /k ""%~f0" __interactive"
     exit /b
   )
 )
@@ -54,7 +54,7 @@ if errorlevel 1 (
     exit /b 1
   )
   "%PS_EXE%" -NoProfile -ExecutionPolicy Bypass -Command ^
-    "Start-Process -FilePath 'cmd.exe' -ArgumentList @('/c','\"%SDK_INSTALL%\"') -Verb RunAs -Wait"
+    "Start-Process -FilePath 'cmd.exe' -ArgumentList @('/c','call ""%SDK_INSTALL%""') -Verb RunAs -Wait"
   reg query "HKCR\zkemkeeper.CZKEM" >nul 2>&1
   if errorlevel 1 (
     echo ERROR: ZKTeco SDK install may have failed or was cancelled.
