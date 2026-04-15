@@ -10,6 +10,4 @@
 
 **/state.json
 
-Reference/Sample Logs/1_attlog.dat
-Reference/Sample Logs/Manual - 1_attlog.dat
-SHAB Attendance System/Reference/1_attlog.dat
+Reference/Sample Logs/*.dat
