@@ -3,7 +3,7 @@ setlocal EnableExtensions
 if /I "%~1" NEQ "__interactive" (
   echo %cmdcmdline% | find /i "/c" >nul 2>&1
   if not errorlevel 1 (
-    start "" cmd.exe /k ""%~f0" __interactive"
+    start "" "%ComSpec%" /k ""%~f0" __interactive"
     exit /b
   )
 )
@@ -12,7 +12,6 @@ set "ROOT=%~dp0"
 set "APP_DIR=%ROOT%App\win-x86"
 set "SDK_INSTALL=%ROOT%ZKTecoSDK\x86\Auto-install_sdk.bat"
 set "DASH_URL=http://127.0.0.1:5099/login"
-set "SHORTCUT_NAME=SHAB Attendance Dashboard.lnk"
 set "SHORTCUT_ICON=%ROOT%Assets\SHAB Attendance Dashboard.ico"
 set "LOG_DIR=%ROOT%Logs"
 set "LOG_FILE=%LOG_DIR%\attendance-middleware.log"
@@ -38,7 +37,7 @@ cd /d "%APP_DIR%"
 echo.
 echo Checking if dashboard is already running...
 call :CHECK_PORT
-if "%errorlevel%"=="0" (
+if not errorlevel 1 (
   set "READY=1"
   goto :OPEN_BROWSER
 )
@@ -91,7 +90,7 @@ start "SHAB Attendance Middleware" /min cmd.exe /c ^
 echo Waiting for dashboard to be ready...
 set "READY="
 call :WAIT_FOR_PORT 60
-if "%errorlevel%"=="0" set "READY=1"
+if not errorlevel 1 set "READY=1"
 
 :OPEN_BROWSER
 echo.
@@ -120,16 +119,20 @@ endlocal
 exit /b 0
 
 :CHECK_PORT
-if not exist "%PS_EXE%" exit /b 2
-"%PS_EXE%" -NoProfile -Command "$c=New-Object Net.Sockets.TcpClient; try{$c.Connect('127.0.0.1',5099); $c.Close(); exit 0}catch{exit 1}" >nul 2>&1
-exit /b %errorlevel%
+netstat -ano | findstr /R /C:":5099 .*LISTENING" >nul 2>&1
+if not errorlevel 1 exit /b 0
+if exist "%PS_EXE%" (
+  "%PS_EXE%" -NoProfile -Command "$c=New-Object Net.Sockets.TcpClient; try{$c.Connect('127.0.0.1',5099); $c.Close(); exit 0}catch{exit 1}" >nul 2>&1
+  exit /b %errorlevel%
+)
+exit /b 1
 
 :WAIT_FOR_PORT
 set "MAX=%~1"
 if "%MAX%"=="" set "MAX=60"
 for /L %%i in (1,1,%MAX%) do (
   call :CHECK_PORT
-  if "%errorlevel%"=="0" exit /b 0
+  if not errorlevel 1 exit /b 0
   timeout /t 1 /nobreak >nul
 )
 exit /b 1
