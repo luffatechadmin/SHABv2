@@ -14,6 +14,8 @@ if not defined WIN_DIR set "WIN_DIR=%windir%"
 set "PS_EXE=%WIN_DIR%\System32\WindowsPowerShell\v1.0\powershell.exe"
 set "ZK_TARGET=%WIN_DIR%\SysWOW64"
 if not exist "%ZK_TARGET%\regsvr32.exe" set "ZK_TARGET=%WIN_DIR%\System32"
+set "DOTNET_SHARED1=C:\Program Files (x86)\dotnet\shared"
+set "DOTNET_SHARED2=C:\Program Files\dotnet\shared"
 
 echo.
 echo ============================================================
@@ -49,6 +51,23 @@ echo ERROR: ZKTeco SDK install may have failed or was cancelled. & echo Please r
 
 :SDK_OK
 echo ZKTeco SDK detected.
+
+call :CHECK_DOTNET
+if errorlevel 1 (
+  echo.
+  echo ERROR: Required .NET runtimes are missing.
+  echo This app requires:
+  echo - .NET 8 Runtime for Windows x86
+  echo - ASP.NET Core 8 Runtime for Windows x86
+  echo.
+  echo Download .NET 8 here and install the Windows x86 runtimes:
+  echo https://dotnet.microsoft.com/en-us/download/dotnet/8.0
+  call :OPEN_URL "https://dotnet.microsoft.com/en-us/download/dotnet/8.0"
+  echo.
+  pause
+  endlocal
+  exit /b 1
+)
 
 echo.
 echo Launching SHAB Attendance Dashboard...
@@ -93,7 +112,7 @@ echo.
 tasklist /fi "imagename eq WL10Middleware.exe"
 echo.
 if exist "%LOG_FILE%" echo Log file: & echo   %LOG_FILE% & echo. & start "" notepad.exe "%LOG_FILE%"
-if exist "%LOG_FILE%" findstr /i /c:"You must install or update .NET" "%LOG_FILE%" >nul 2>&1 & start "" "https://dotnet.microsoft.com/en-us/download/dotnet/8.0"
+if exist "%LOG_FILE%" findstr /i /c:"You must install or update .NET" "%LOG_FILE%" >nul 2>&1 & call :OPEN_URL "https://dotnet.microsoft.com/en-us/download/dotnet/8.0"
 echo.
 pause
 echo.
@@ -106,7 +125,14 @@ echo Middleware process did not start.
 echo This is usually caused by missing .NET runtime, antivirus blocking the EXE, or missing permissions.
 echo.
 if exist "%LOG_FILE%" echo Log file: & echo   %LOG_FILE% & echo. & start "" notepad.exe "%LOG_FILE%"
-if exist "%LOG_FILE%" findstr /i /c:"You must install or update .NET" "%LOG_FILE%" >nul 2>&1 & start "" "https://dotnet.microsoft.com/en-us/download/dotnet/8.0"
+if exist "%LOG_FILE%" findstr /i /c:"You must install or update .NET" "%LOG_FILE%" >nul 2>&1 & call :OPEN_URL "https://dotnet.microsoft.com/en-us/download/dotnet/8.0"
+echo Required runtimes:
+echo - .NET 8 Runtime for Windows x86
+echo - ASP.NET Core 8 Runtime for Windows x86
+echo.
+echo Download .NET 8 here:
+echo https://dotnet.microsoft.com/en-us/download/dotnet/8.0
+call :OPEN_URL "https://dotnet.microsoft.com/en-us/download/dotnet/8.0"
 echo.
 pause
 echo.
@@ -137,6 +163,20 @@ exit /b 1
 if exist "%PS_EXE%" "%PS_EXE%" -NoProfile -ExecutionPolicy Bypass -Command "$p=Start-Process -Verb RunAs -WorkingDirectory '%~dp1' -FilePath '%~1' -Wait -PassThru; exit $p.ExitCode" >nul 2>&1 & exit /b
 mshta "javascript:var sh=new ActiveXObject('Shell.Application'); sh.ShellExecute('%~1','','','runas',1); close();" >nul 2>&1 & exit /b 0
 exit /b 1
+
+:CHECK_DOTNET
+set "NETCORE_OK="
+set "ASPNET_OK="
+for /f "delims=" %%d in ('dir /b "%DOTNET_SHARED1%\Microsoft.NETCore.App\8.*" 2^>nul') do set "NETCORE_OK=1"
+for /f "delims=" %%d in ('dir /b "%DOTNET_SHARED2%\Microsoft.NETCore.App\8.*" 2^>nul') do set "NETCORE_OK=1"
+for /f "delims=" %%d in ('dir /b "%DOTNET_SHARED1%\Microsoft.AspNetCore.App\8.*" 2^>nul') do set "ASPNET_OK=1"
+for /f "delims=" %%d in ('dir /b "%DOTNET_SHARED2%\Microsoft.AspNetCore.App\8.*" 2^>nul') do set "ASPNET_OK=1"
+if defined NETCORE_OK if defined ASPNET_OK exit /b 0
+exit /b 1
+
+:OPEN_URL
+rundll32 url.dll,FileProtocolHandler "%~1" >nul 2>&1
+exit /b 0
 
 :CREATE_SHORTCUT
 set "DESKTOP_DIR=%USERPROFILE%\Desktop"
