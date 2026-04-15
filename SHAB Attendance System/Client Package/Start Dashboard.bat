@@ -56,6 +56,10 @@ if not exist "%LOG_DIR%" mkdir "%LOG_DIR%" >nul 2>&1
 if exist "%LOG_FILE%" del /f /q "%LOG_FILE%" >nul 2>&1
 start "SHAB Attendance Middleware" /min "%ComSpec%" /c "\"%CD%\WL10Middleware.exe\" --dashboard --dashboard-port 5099 1>>\"%LOG_FILE%\" 2>>&1"
 
+timeout /t 2 /nobreak >nul
+tasklist /fi "imagename eq WL10Middleware.exe" | find /i "WL10Middleware.exe" >nul 2>&1
+if errorlevel 1 goto :START_FAILED
+
 echo Waiting for dashboard to be ready...
 set /a tries=60
 :WAIT_LOOP
@@ -83,7 +87,26 @@ if defined READY (
 echo Dashboard did not become reachable on port 5099.
 echo If it started successfully, open %DASH_URL% manually.
 echo.
-if exist "%LOG_FILE%" echo Log file: & echo   %LOG_FILE% & echo. & start "" "%LOG_FILE%"
+echo Port status:
+netstat -ano | findstr /R /C:":5099 .*LISTENING"
+echo.
+tasklist /fi "imagename eq WL10Middleware.exe"
+echo.
+if exist "%LOG_FILE%" echo Log file: & echo   %LOG_FILE% & echo. & start "" notepad.exe "%LOG_FILE%"
+if exist "%LOG_FILE%" findstr /i /c:"You must install or update .NET" "%LOG_FILE%" >nul 2>&1 & start "" "https://dotnet.microsoft.com/en-us/download/dotnet/8.0"
+echo.
+pause
+echo.
+echo Default login: superadmin / abcd1234
+endlocal
+exit /b 1
+
+:START_FAILED
+echo Middleware process did not start.
+echo This is usually caused by missing .NET runtime, antivirus blocking the EXE, or missing permissions.
+echo.
+if exist "%LOG_FILE%" echo Log file: & echo   %LOG_FILE% & echo. & start "" notepad.exe "%LOG_FILE%"
+if exist "%LOG_FILE%" findstr /i /c:"You must install or update .NET" "%LOG_FILE%" >nul 2>&1 & start "" "https://dotnet.microsoft.com/en-us/download/dotnet/8.0"
 echo.
 pause
 echo.
