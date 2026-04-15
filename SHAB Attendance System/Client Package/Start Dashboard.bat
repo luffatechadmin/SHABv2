@@ -99,15 +99,15 @@ if not errorlevel 1 exit /b 0
 exit /b 1
 
 :ELEVATE_SELF
-if exist "%PS_EXE%" "%PS_EXE%" -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -Verb RunAs -FilePath $env:ComSpec -ArgumentList '/k','""%~f0"" __interactive'" >nul 2>&1 & exit /b 0
+if exist "%PS_EXE%" "%PS_EXE%" -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -Verb RunAs -WorkingDirectory '%ROOT%' -FilePath '%~f0' -ArgumentList '__interactive'" >nul 2>&1 & exit /b 0
 mshta "javascript:var sh=new ActiveXObject('Shell.Application'); sh.ShellExecute('%~f0','__interactive','','runas',1); close();" >nul 2>&1 & exit /b 0
 echo ERROR: Could not request Administrator access automatically.
 pause
 exit /b 1
 
 :RUN_AS_ADMIN
-if exist "%PS_EXE%" "%PS_EXE%" -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -Verb RunAs -FilePath $env:ComSpec -ArgumentList '/c','call ""%~1""' -Wait" >nul 2>&1 & exit /b 0
-mshta "javascript:var sh=new ActiveXObject('Shell.Application'); sh.ShellExecute('%ComSpec%','/c call ""%~1""','','runas',1); close();" >nul 2>&1 & exit /b 0
+if exist "%PS_EXE%" "%PS_EXE%" -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -Verb RunAs -WorkingDirectory '%~dp1' -FilePath '%~1' -Wait" >nul 2>&1 & exit /b 0
+mshta "javascript:var sh=new ActiveXObject('Shell.Application'); sh.ShellExecute('%~1','','','runas',1); close();" >nul 2>&1 & exit /b 0
 exit /b 1
 
 :CREATE_SHORTCUT
