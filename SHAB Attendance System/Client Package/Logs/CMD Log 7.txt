@@ -1,0 +1,22 @@
+
+Checking if dashboard is already running...
+ZKTeco SDK not detected. Installing now - requires Administrator...
+WARNING: ZKTeco SDK dll is present but COM registration was not detected.
+Device functions may not work until the SDK is registered.
+ZKTeco SDK detected.
+Creating desktop shortcuts...
+
+Launching SHAB Attendance Dashboard...
+Waiting for dashboard to be ready...
+Dashboard did not become reachable on port 5099.
+If it started successfully, open http://127.0.0.1:5099/login manually.
+
+Port status:
+
+INFO: No tasks are running which match the specified criteria.
+
+Log file:
+  C:\Users\USER\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\Logs\attendance-middleware.log
+
+
+Press any key to continue . . .
