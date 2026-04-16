@@ -1,0 +1,6 @@
+
+Luffatech Dashboard Supabase Database
+Supabase url: https://supabase.com/dashboard/project/lmssdqnduaahmqmvpuvn
+Project ID: lmssdqnduaahmqmvpuvn
+Publishable key: sb_publishable_RCm7ogQhpvMk9l36ZKc4Mg_U5bLkA3E 
+Supabase Service Role Key: <REDACTED - do not commit secrets to git. Configure locally in the Attendance Dashboard settings or via environment variables.>

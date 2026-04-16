@@ -120,6 +120,95 @@ static partial class Program
     return null;
   }
 
+  private static async Task<(bool ok, List<(string Id, string Name, string Dept, string Status, string ShiftPattern)> rows, string? error)> TryLoadStaffFromSupabase(AppConfig cfg, CancellationToken ct)
+  {
+    if (string.IsNullOrWhiteSpace(cfg.SupabaseUrl) || string.IsNullOrWhiteSpace(cfg.SupabaseServiceRoleKey))
+    {
+      return (false, new List<(string, string, string, string, string)>(), "Supabase not configured");
+    }
+
+    static async Task<(bool ok, List<(string Id, string Name, string Dept, string Status, string ShiftPattern)> rows, string? error)> FetchAsync(AppConfig cfg, bool includeShiftPattern, CancellationToken ct)
+    {
+      var baseUrl = cfg.SupabaseUrl.TrimEnd('/');
+      var cols = includeShiftPattern
+        ? "id,full_name,department,status,shift_pattern"
+        : "id,full_name,department,status";
+      var url = $"{baseUrl}/rest/v1/staff?select={Uri.EscapeDataString(cols)}&order=id.asc&limit=5000";
+      using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
+      using var req = new HttpRequestMessage(HttpMethod.Get, url);
+      req.Headers.TryAddWithoutValidation("apikey", cfg.SupabaseServiceRoleKey);
+      req.Headers.TryAddWithoutValidation("Authorization", $"Bearer {cfg.SupabaseServiceRoleKey}");
+      using var resp = await http.SendAsync(req, ct);
+      var body = await resp.Content.ReadAsStringAsync(ct);
+      if (!resp.IsSuccessStatusCode)
+      {
+        return (false, new List<(string, string, string, string, string)>(), body.Length > 350 ? body[..350] : body);
+      }
+
+      using var doc = JsonDocument.Parse(body);
+      if (doc.RootElement.ValueKind != JsonValueKind.Array)
+      {
+        return (false, new List<(string, string, string, string, string)>(), "Unexpected response shape");
+      }
+
+      var list = new List<(string Id, string Name, string Dept, string Status, string ShiftPattern)>(capacity: 256);
+      foreach (var el in doc.RootElement.EnumerateArray())
+      {
+        var id = el.TryGetProperty("id", out var idEl) && idEl.ValueKind == JsonValueKind.String ? (idEl.GetString() ?? "") : "";
+        if (id.Length == 0) continue;
+        var name = el.TryGetProperty("full_name", out var nEl) && nEl.ValueKind == JsonValueKind.String ? (nEl.GetString() ?? "") : "";
+        var dept = el.TryGetProperty("department", out var dEl) && dEl.ValueKind == JsonValueKind.String ? (dEl.GetString() ?? "") : "";
+        var status = el.TryGetProperty("status", out var sEl) && sEl.ValueKind == JsonValueKind.String ? (sEl.GetString() ?? "") : "";
+        var sp = includeShiftPattern && el.TryGetProperty("shift_pattern", out var spEl) && spEl.ValueKind == JsonValueKind.String ? (spEl.GetString() ?? "") : "";
+        list.Add((id, name, dept, status, sp));
+      }
+      return (true, list, null);
+    }
+
+    var r1 = await FetchAsync(cfg, includeShiftPattern: true, ct);
+    if (!r1.ok && r1.error is not null && r1.error.Contains("shift_pattern", StringComparison.OrdinalIgnoreCase))
+    {
+      var r2 = await FetchAsync(cfg, includeShiftPattern: false, ct);
+      if (!r2.ok) return (false, r2.rows, r2.error);
+      return (true, r2.rows.Select(x => (x.Id, x.Name, x.Dept, x.Status, "")).ToList(), null);
+    }
+    return r1;
+  }
+
+  private static async Task<(bool ok, ShiftPatternRow[] rows, string? error)> TryLoadShiftPatternsFromSupabase(AppConfig cfg, CancellationToken ct)
+  {
+    if (string.IsNullOrWhiteSpace(cfg.SupabaseUrl) || string.IsNullOrWhiteSpace(cfg.SupabaseServiceRoleKey))
+    {
+      return (false, Array.Empty<ShiftPatternRow>(), "Supabase not configured");
+    }
+    var baseUrl = cfg.SupabaseUrl.TrimEnd('/');
+    var url = $"{baseUrl}/rest/v1/shift_patterns?select=pattern,working_days,working_hours,break_time,notes&order=pattern.asc&limit=500";
+    using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
+    using var req = new HttpRequestMessage(HttpMethod.Get, url);
+    req.Headers.TryAddWithoutValidation("apikey", cfg.SupabaseServiceRoleKey);
+    req.Headers.TryAddWithoutValidation("Authorization", $"Bearer {cfg.SupabaseServiceRoleKey}");
+    using var resp = await http.SendAsync(req, ct);
+    var body = await resp.Content.ReadAsStringAsync(ct);
+    if (!resp.IsSuccessStatusCode)
+    {
+      return (false, Array.Empty<ShiftPatternRow>(), body.Length > 350 ? body[..350] : body);
+    }
+    using var doc = JsonDocument.Parse(body);
+    if (doc.RootElement.ValueKind != JsonValueKind.Array) return (false, Array.Empty<ShiftPatternRow>(), "Unexpected response shape");
+    var list = new List<ShiftPatternRow>(capacity: 64);
+    foreach (var el in doc.RootElement.EnumerateArray())
+    {
+      var pattern = el.TryGetProperty("pattern", out var pEl) && pEl.ValueKind == JsonValueKind.String ? (pEl.GetString() ?? "") : "";
+      if (pattern.Length == 0) continue;
+      var wd = el.TryGetProperty("working_days", out var wdEl) && wdEl.ValueKind == JsonValueKind.String ? (wdEl.GetString() ?? "") : "";
+      var wh = el.TryGetProperty("working_hours", out var whEl) && whEl.ValueKind == JsonValueKind.String ? (whEl.GetString() ?? "") : "";
+      var br = el.TryGetProperty("break_time", out var bEl) && bEl.ValueKind == JsonValueKind.String ? (bEl.GetString() ?? "") : "";
+      var notes = el.TryGetProperty("notes", out var nEl) && nEl.ValueKind == JsonValueKind.String ? (nEl.GetString() ?? "") : "";
+      list.Add(new ShiftPatternRow(pattern, wd, wh, br, notes));
+    }
+    return (true, list.ToArray(), null);
+  }
+
   private static async Task RunDashboard(AppConfig initialConfig, string statePath, string[] args)
   {
     var user = (Environment.GetEnvironmentVariable("WL10_DASHBOARD_USER") ?? "superadmin").Trim();
@@ -156,9 +245,9 @@ static partial class Program
     var dashboardSupabaseJwtSecret = string.Empty;
     var syncScheduleLocalTimes = Array.Empty<string>();
     var syncScheduleVersion = 0;
-    const string DefaultSupabaseUrl = "https://bbhfqxhyqwaqcirapvgk.supabase.co";
-    const string DefaultSupabaseProjectId = "bbhfqxhyqwaqcirapvgk";
-    const string DefaultSupabasePublishableKey = "sb_publishable_-wORiqn9-OfB_P9L4a5LJQ_ij2KUYwh";
+    const string DefaultSupabaseUrl = "https://lmssdqnduaahmqmvpuvn.supabase.co";
+    const string DefaultSupabaseProjectId = "lmssdqnduaahmqmvpuvn";
+    const string DefaultSupabasePublishableKey = "sb_publishable_RCm7ogQhpvMk9l36ZKc4Mg_U5bLkA3E";
 
     var startingConfig = initialConfig with { SupabaseSyncEnabled = true };
     var startingPollIntervalSeconds = 0;
@@ -1381,31 +1470,48 @@ static partial class Program
         return res.Select(x => (x ?? string.Empty).Trim()).ToArray();
       }
 
-      var staffPath = ResolveStaffCsvPath();
-      if (string.IsNullOrWhiteSpace(staffPath) || !File.Exists(staffPath))
-      {
-        return Results.Json(new { ok = false, error = "Staff CSV not found. Please configure Database - Staff WL10.csv." }, JsonOptions);
-      }
-
       var staffRows = new List<(string Id, string Name, string Dept, bool Active, string ShiftPattern)>(capacity: 256);
       var departments = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-      var first = true;
-      foreach (var raw in File.ReadLines(staffPath))
+      if (!string.IsNullOrWhiteSpace(cfg.SupabaseUrl) && !string.IsNullOrWhiteSpace(cfg.SupabaseServiceRoleKey))
       {
-        var line = raw ?? string.Empty;
-        if (first) { first = false; continue; }
-        if (string.IsNullOrWhiteSpace(line)) continue;
-        var parts = ParseCsv(line);
-        if (parts.Length < 7) continue;
-        var id = (parts[0] ?? string.Empty).Trim();
-        if (id.Length == 0) continue;
-        var name = (parts[1] ?? string.Empty).Trim();
-        var dept = (parts[3] ?? string.Empty).Trim();
-        var status = (parts[4] ?? string.Empty).Trim();
-        var shiftPattern = (parts[6] ?? string.Empty).Trim();
-        var active = status.Length == 0 || string.Equals(status, "Active", StringComparison.OrdinalIgnoreCase);
-        staffRows.Add((id, name, dept, active, shiftPattern));
-        if (!string.IsNullOrWhiteSpace(dept)) departments.Add(dept);
+        var supa = await TryLoadStaffFromSupabase(cfg, ctx.RequestAborted);
+        if (!supa.ok)
+        {
+          return Results.Json(new { ok = false, error = $"Failed to load staff from Supabase: {supa.error}" }, JsonOptions);
+        }
+        foreach (var r in supa.rows)
+        {
+          var status = (r.Status ?? string.Empty).Trim();
+          var active = status.Length == 0 || string.Equals(status, "Active", StringComparison.OrdinalIgnoreCase);
+          staffRows.Add((r.Id, r.Name, r.Dept, active, r.ShiftPattern));
+          if (!string.IsNullOrWhiteSpace(r.Dept)) departments.Add(r.Dept);
+        }
+      }
+      else
+      {
+        var staffPath = ResolveStaffCsvPath();
+        if (string.IsNullOrWhiteSpace(staffPath) || !File.Exists(staffPath))
+        {
+          return Results.Json(new { ok = false, error = "Staff list not found. Configure Supabase staff table or provide Database - Staff WL10.csv." }, JsonOptions);
+        }
+        var first = true;
+        foreach (var raw in File.ReadLines(staffPath))
+        {
+          var line = raw ?? string.Empty;
+          if (first) { first = false; continue; }
+          if (string.IsNullOrWhiteSpace(line)) continue;
+          var parts = ParseCsv(line);
+          if (parts.Length < 7) continue;
+          var id = (parts[0] ?? string.Empty).Trim();
+          if (id.Length == 0) continue;
+          var name = (parts[1] ?? string.Empty).Trim();
+          var dept = (parts[3] ?? string.Empty).Trim();
+          var status = (parts[4] ?? string.Empty).Trim();
+          var shiftPattern = (parts[6] ?? string.Empty).Trim();
+          var active = status.Length == 0 || string.Equals(status, "Active", StringComparison.OrdinalIgnoreCase);
+          staffRows.Add((id, name, dept, active, shiftPattern));
+          if (!string.IsNullOrWhiteSpace(dept)) departments.Add(dept);
+        }
       }
 
       var anyActive = staffRows.Any(r => r.Active);
@@ -1925,7 +2031,7 @@ static partial class Program
       }, JsonOptions);
     }).RequireAuthorization();
 
-    app.MapGet("/api/spreadsheet/daily", (HttpContext ctx) =>
+    app.MapGet("/api/spreadsheet/daily", async (HttpContext ctx) =>
     {
       var q = ctx.Request.Query;
       var dateRaw = (q.TryGetValue("date", out var v1) ? v1.ToString() : string.Empty).Trim();
@@ -1935,6 +2041,9 @@ static partial class Program
       {
         _ = DateOnly.TryParseExact(dateRaw, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out dateLocal);
       }
+
+      AppConfig cfg;
+      lock (stateGate) cfg = currentConfig;
 
       static string[] ParseCsv(string line)
       {
@@ -2045,40 +2154,54 @@ static partial class Program
         return bm - am;
       }
 
-      var staffPath = ResolveStaffCsvPath();
-      if (string.IsNullOrWhiteSpace(staffPath) || !File.Exists(staffPath))
-      {
-        return Results.Json(new { ok = false, error = "Staff CSV not found. Please configure Database - Staff WL10.csv." }, JsonOptions);
-      }
-
       var anyActive = false;
       var staffAll = new List<(string Id, string Name, string Status, string ShiftPattern)>(capacity: 256);
-      var first = true;
-      foreach (var raw in File.ReadLines(staffPath))
+      if (!string.IsNullOrWhiteSpace(cfg.SupabaseUrl) && !string.IsNullOrWhiteSpace(cfg.SupabaseServiceRoleKey))
       {
-        var line = raw ?? string.Empty;
-        if (first) { first = false; continue; }
-        if (string.IsNullOrWhiteSpace(line)) continue;
-        var parts = ParseCsv(line);
-        if (parts.Length < 7) continue;
-        var id = (parts[0] ?? string.Empty).Trim();
-        if (id.Length == 0) continue;
-        var name = (parts[1] ?? string.Empty).Trim();
-        var status = (parts[4] ?? string.Empty).Trim();
-        var shiftPattern = (parts[6] ?? string.Empty).Trim();
-        if (status.Length == 0 || string.Equals(status, "Active", StringComparison.OrdinalIgnoreCase)) anyActive = true;
-        staffAll.Add((id, name, status, shiftPattern));
+        var supa = await TryLoadStaffFromSupabase(cfg, ctx.RequestAborted);
+        if (!supa.ok)
+        {
+          return Results.Json(new { ok = false, error = $"Failed to load staff from Supabase: {supa.error}" }, JsonOptions);
+        }
+        foreach (var r in supa.rows)
+        {
+          var status = (r.Status ?? string.Empty).Trim();
+          if (status.Length == 0 || string.Equals(status, "Active", StringComparison.OrdinalIgnoreCase)) anyActive = true;
+          staffAll.Add((r.Id, r.Name, status, r.ShiftPattern));
+        }
+      }
+      else
+      {
+        var staffPath = ResolveStaffCsvPath();
+        if (string.IsNullOrWhiteSpace(staffPath) || !File.Exists(staffPath))
+        {
+          return Results.Json(new { ok = false, error = "Staff list not found. Configure Supabase staff table or provide Database - Staff WL10.csv." }, JsonOptions);
+        }
+        var first = true;
+        foreach (var raw in File.ReadLines(staffPath))
+        {
+          var line = raw ?? string.Empty;
+          if (first) { first = false; continue; }
+          if (string.IsNullOrWhiteSpace(line)) continue;
+          var parts = ParseCsv(line);
+          if (parts.Length < 7) continue;
+          var id = (parts[0] ?? string.Empty).Trim();
+          if (id.Length == 0) continue;
+          var name = (parts[1] ?? string.Empty).Trim();
+          var status = (parts[4] ?? string.Empty).Trim();
+          var shiftPattern = (parts[6] ?? string.Empty).Trim();
+          if (status.Length == 0 || string.Equals(status, "Active", StringComparison.OrdinalIgnoreCase)) anyActive = true;
+          staffAll.Add((id, name, status, shiftPattern));
+        }
       }
 
       var roster = anyActive
         ? staffAll.Where(x => x.Status.Length == 0 || string.Equals(x.Status, "Active", StringComparison.OrdinalIgnoreCase)).ToArray()
         : staffAll.ToArray();
 
-      var state = LoadState(statePath);
-      var shiftRows = (state.ShiftPatterns ?? Array.Empty<ShiftPatternRow>()).ToArray();
-      if (shiftRows.Length == 0)
+      static ShiftPatternRow[] DefaultShiftRows()
       {
-        shiftRows = new[]
+        return new[]
         {
           new ShiftPatternRow("Normal", "Mon–Fri", "09:00–18:00", "13:00–14:00", "Default"),
           new ShiftPatternRow("Shift 1", "Mon–Sat", "08:00–16:00", "12:00–13:00", "Default"),
@@ -2086,6 +2209,24 @@ static partial class Program
           new ShiftPatternRow("Shift 3", "Mon–Sat", "00:00–08:00", "04:00–04:30", "Default"),
         };
       }
+
+      ShiftPatternRow[] shiftRows;
+      if (!string.IsNullOrWhiteSpace(cfg.SupabaseUrl) && !string.IsNullOrWhiteSpace(cfg.SupabaseServiceRoleKey))
+      {
+        var supaShifts = await TryLoadShiftPatternsFromSupabase(cfg, ctx.RequestAborted);
+        shiftRows = supaShifts.ok ? supaShifts.rows : Array.Empty<ShiftPatternRow>();
+      }
+      else
+      {
+        shiftRows = Array.Empty<ShiftPatternRow>();
+      }
+
+      if (shiftRows.Length == 0)
+      {
+        var state = LoadState(statePath);
+        shiftRows = (state.ShiftPatterns ?? Array.Empty<ShiftPatternRow>()).ToArray();
+      }
+      if (shiftRows.Length == 0) shiftRows = DefaultShiftRows();
 
       var shiftByPattern = shiftRows
         .Where(r => !string.IsNullOrWhiteSpace(r.Pattern))
@@ -2271,7 +2412,7 @@ static partial class Program
       return Results.Json(new { ok = true, date = dateLocal.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), rows = sorted }, JsonOptions);
     }).RequireAuthorization();
 
-    app.MapGet("/api/spreadsheet/weekly", (HttpContext ctx) =>
+    app.MapGet("/api/spreadsheet/weekly", async (HttpContext ctx) =>
     {
       var q = ctx.Request.Query;
       var dateRaw = (q.TryGetValue("date", out var v1) ? v1.ToString() : string.Empty).Trim();
@@ -2285,6 +2426,9 @@ static partial class Program
       var offset = ((int)dateLocal.DayOfWeek - (int)DayOfWeek.Monday + 7) % 7;
       var weekStart = dateLocal.AddDays(-offset);
       var weekEnd = weekStart.AddDays(6);
+
+      AppConfig cfg;
+      lock (stateGate) cfg = currentConfig;
 
       static string[] ParseCsv(string line)
       {
@@ -2395,40 +2539,54 @@ static partial class Program
         return bm - am;
       }
 
-      var staffPath = ResolveStaffCsvPath();
-      if (string.IsNullOrWhiteSpace(staffPath) || !File.Exists(staffPath))
-      {
-        return Results.Json(new { ok = false, error = "Staff CSV not found. Please configure Database - Staff WL10.csv." }, JsonOptions);
-      }
-
       var anyActive = false;
       var staffAll = new List<(string Id, string Name, string Status, string ShiftPattern)>(capacity: 256);
-      var first = true;
-      foreach (var raw in File.ReadLines(staffPath))
+      if (!string.IsNullOrWhiteSpace(cfg.SupabaseUrl) && !string.IsNullOrWhiteSpace(cfg.SupabaseServiceRoleKey))
       {
-        var line = raw ?? string.Empty;
-        if (first) { first = false; continue; }
-        if (string.IsNullOrWhiteSpace(line)) continue;
-        var parts = ParseCsv(line);
-        if (parts.Length < 7) continue;
-        var id = (parts[0] ?? string.Empty).Trim();
-        if (id.Length == 0) continue;
-        var name = (parts[1] ?? string.Empty).Trim();
-        var status = (parts[4] ?? string.Empty).Trim();
-        var shiftPattern = (parts[6] ?? string.Empty).Trim();
-        if (status.Length == 0 || string.Equals(status, "Active", StringComparison.OrdinalIgnoreCase)) anyActive = true;
-        staffAll.Add((id, name, status, shiftPattern));
+        var supa = await TryLoadStaffFromSupabase(cfg, ctx.RequestAborted);
+        if (!supa.ok)
+        {
+          return Results.Json(new { ok = false, error = $"Failed to load staff from Supabase: {supa.error}" }, JsonOptions);
+        }
+        foreach (var r in supa.rows)
+        {
+          var status = (r.Status ?? string.Empty).Trim();
+          if (status.Length == 0 || string.Equals(status, "Active", StringComparison.OrdinalIgnoreCase)) anyActive = true;
+          staffAll.Add((r.Id, r.Name, status, r.ShiftPattern));
+        }
+      }
+      else
+      {
+        var staffPath = ResolveStaffCsvPath();
+        if (string.IsNullOrWhiteSpace(staffPath) || !File.Exists(staffPath))
+        {
+          return Results.Json(new { ok = false, error = "Staff list not found. Configure Supabase staff table or provide Database - Staff WL10.csv." }, JsonOptions);
+        }
+        var first = true;
+        foreach (var raw in File.ReadLines(staffPath))
+        {
+          var line = raw ?? string.Empty;
+          if (first) { first = false; continue; }
+          if (string.IsNullOrWhiteSpace(line)) continue;
+          var parts = ParseCsv(line);
+          if (parts.Length < 7) continue;
+          var id = (parts[0] ?? string.Empty).Trim();
+          if (id.Length == 0) continue;
+          var name = (parts[1] ?? string.Empty).Trim();
+          var status = (parts[4] ?? string.Empty).Trim();
+          var shiftPattern = (parts[6] ?? string.Empty).Trim();
+          if (status.Length == 0 || string.Equals(status, "Active", StringComparison.OrdinalIgnoreCase)) anyActive = true;
+          staffAll.Add((id, name, status, shiftPattern));
+        }
       }
 
       var roster = anyActive
         ? staffAll.Where(x => x.Status.Length == 0 || string.Equals(x.Status, "Active", StringComparison.OrdinalIgnoreCase)).ToArray()
         : staffAll.ToArray();
 
-      var state = LoadState(statePath);
-      var shiftRows = (state.ShiftPatterns ?? Array.Empty<ShiftPatternRow>()).ToArray();
-      if (shiftRows.Length == 0)
+      static ShiftPatternRow[] DefaultShiftRows()
       {
-        shiftRows = new[]
+        return new[]
         {
           new ShiftPatternRow("Normal", "Mon–Fri", "09:00–18:00", "13:00–14:00", "Default"),
           new ShiftPatternRow("Shift 1", "Mon–Sat", "08:00–16:00", "12:00–13:00", "Default"),
@@ -2436,6 +2594,24 @@ static partial class Program
           new ShiftPatternRow("Shift 3", "Mon–Sat", "00:00–08:00", "04:00–04:30", "Default"),
         };
       }
+
+      ShiftPatternRow[] shiftRows;
+      if (!string.IsNullOrWhiteSpace(cfg.SupabaseUrl) && !string.IsNullOrWhiteSpace(cfg.SupabaseServiceRoleKey))
+      {
+        var supaShifts = await TryLoadShiftPatternsFromSupabase(cfg, ctx.RequestAborted);
+        shiftRows = supaShifts.ok ? supaShifts.rows : Array.Empty<ShiftPatternRow>();
+      }
+      else
+      {
+        shiftRows = Array.Empty<ShiftPatternRow>();
+      }
+
+      if (shiftRows.Length == 0)
+      {
+        var state = LoadState(statePath);
+        shiftRows = (state.ShiftPatterns ?? Array.Empty<ShiftPatternRow>()).ToArray();
+      }
+      if (shiftRows.Length == 0) shiftRows = DefaultShiftRows();
 
       var shiftByPattern = shiftRows
         .Where(r => !string.IsNullOrWhiteSpace(r.Pattern))
@@ -2644,7 +2820,7 @@ static partial class Program
       return Results.Json(new { ok = true }, JsonOptions);
     }).RequireAuthorization();
 
-    app.MapGet("/api/spreadsheet/report", (HttpContext ctx) =>
+    app.MapGet("/api/spreadsheet/report", async (HttpContext ctx) =>
     {
       var isSuperadmin = string.Equals(ctx.User.FindFirstValue("role") ?? string.Empty, "superadmin", StringComparison.Ordinal);
       if (!isSuperadmin) return Results.StatusCode(StatusCodes.Status403Forbidden);
@@ -2664,6 +2840,9 @@ static partial class Program
       }
       var monthStart = new DateOnly(year, month, 1);
       var monthEnd = monthStart.AddMonths(1).AddDays(-1);
+
+      AppConfig cfg;
+      lock (stateGate) cfg = currentConfig;
 
       static string CsvCell(string? v)
       {
@@ -2785,32 +2964,50 @@ static partial class Program
         return bm - am;
       }
 
-      var staffPath = ResolveStaffCsvPath();
-      if (string.IsNullOrWhiteSpace(staffPath) || !File.Exists(staffPath)) return Results.Json(new { ok = false, error = "Staff CSV not found." }, JsonOptions);
       var staffName = staffId;
       var staffPattern = "Normal";
-      var firstRow = true;
-      foreach (var raw in File.ReadLines(staffPath))
+      if (!string.IsNullOrWhiteSpace(cfg.SupabaseUrl) && !string.IsNullOrWhiteSpace(cfg.SupabaseServiceRoleKey))
       {
-        var line = raw ?? string.Empty;
-        if (firstRow) { firstRow = false; continue; }
-        if (line.Trim().Length == 0) continue;
-        var cols = ParseCsv(line);
-        if (cols.Length < 7) continue;
-        var id = (cols[0] ?? string.Empty).Trim();
-        if (!string.Equals(id, staffId, StringComparison.Ordinal)) continue;
-        staffName = (cols[1] ?? string.Empty).Trim();
-        if (staffName.Length == 0) staffName = staffId;
-        staffPattern = (cols[6] ?? string.Empty).Trim();
-        if (staffPattern.Length == 0) staffPattern = "Normal";
-        break;
+        var supa = await TryLoadStaffFromSupabase(cfg, ctx.RequestAborted);
+        if (!supa.ok)
+        {
+          return Results.Json(new { ok = false, error = $"Failed to load staff from Supabase: {supa.error}" }, JsonOptions);
+        }
+        var match = supa.rows.FirstOrDefault(r => string.Equals(r.Id, staffId, StringComparison.Ordinal));
+        if (!string.IsNullOrWhiteSpace(match.Id))
+        {
+          staffName = string.IsNullOrWhiteSpace(match.Name) ? staffId : match.Name;
+          staffPattern = string.IsNullOrWhiteSpace(match.ShiftPattern) ? "Normal" : match.ShiftPattern;
+        }
+      }
+      else
+      {
+        var staffPath = ResolveStaffCsvPath();
+        if (string.IsNullOrWhiteSpace(staffPath) || !File.Exists(staffPath))
+        {
+          return Results.Json(new { ok = false, error = "Staff list not found. Configure Supabase staff table or provide Database - Staff WL10.csv." }, JsonOptions);
+        }
+        var firstRow = true;
+        foreach (var raw in File.ReadLines(staffPath))
+        {
+          var line = raw ?? string.Empty;
+          if (firstRow) { firstRow = false; continue; }
+          if (line.Trim().Length == 0) continue;
+          var cols = ParseCsv(line);
+          if (cols.Length < 7) continue;
+          var id = (cols[0] ?? string.Empty).Trim();
+          if (!string.Equals(id, staffId, StringComparison.Ordinal)) continue;
+          staffName = (cols[1] ?? string.Empty).Trim();
+          if (staffName.Length == 0) staffName = staffId;
+          staffPattern = (cols[6] ?? string.Empty).Trim();
+          if (staffPattern.Length == 0) staffPattern = "Normal";
+          break;
+        }
       }
 
-      var state = LoadState(statePath);
-      var shiftRows = (state.ShiftPatterns ?? Array.Empty<ShiftPatternRow>()).ToArray();
-      if (shiftRows.Length == 0)
+      static ShiftPatternRow[] DefaultShiftRows()
       {
-        shiftRows = new[]
+        return new[]
         {
           new ShiftPatternRow("Normal", "Mon–Fri", "09:00–18:00", "13:00–14:00", "Default"),
           new ShiftPatternRow("Shift 1", "Mon–Sat", "08:00–16:00", "12:00–13:00", "Default"),
@@ -2818,6 +3015,24 @@ static partial class Program
           new ShiftPatternRow("Shift 3", "Mon–Sat", "00:00–08:00", "04:00–04:30", "Default"),
         };
       }
+
+      ShiftPatternRow[] shiftRows;
+      if (!string.IsNullOrWhiteSpace(cfg.SupabaseUrl) && !string.IsNullOrWhiteSpace(cfg.SupabaseServiceRoleKey))
+      {
+        var supaShifts = await TryLoadShiftPatternsFromSupabase(cfg, ctx.RequestAborted);
+        shiftRows = supaShifts.ok ? supaShifts.rows : Array.Empty<ShiftPatternRow>();
+      }
+      else
+      {
+        shiftRows = Array.Empty<ShiftPatternRow>();
+      }
+
+      if (shiftRows.Length == 0)
+      {
+        var state = LoadState(statePath);
+        shiftRows = (state.ShiftPatterns ?? Array.Empty<ShiftPatternRow>()).ToArray();
+      }
+      if (shiftRows.Length == 0) shiftRows = DefaultShiftRows();
       var shiftByPattern = shiftRows
         .Where(r => !string.IsNullOrWhiteSpace(r.Pattern))
         .ToDictionary(r => r.Pattern.Trim(), r => r, StringComparer.OrdinalIgnoreCase);
@@ -3006,7 +3221,7 @@ static partial class Program
       return Results.Text(sb.ToString(), "text/csv; charset=utf-8");
     }).RequireAuthorization();
 
-    app.MapGet("/api/spreadsheet/monthly", (HttpContext ctx) =>
+    app.MapGet("/api/spreadsheet/monthly", async (HttpContext ctx) =>
     {
       var q = ctx.Request.Query;
       var monthRaw = (q.TryGetValue("month", out var v1) ? v1.ToString() : string.Empty).Trim();
@@ -3026,6 +3241,9 @@ static partial class Program
 
       var monthStart = new DateOnly(year, month, 1);
       var monthEnd = monthStart.AddMonths(1).AddDays(-1);
+
+      AppConfig cfg;
+      lock (stateGate) cfg = currentConfig;
 
       static string[] ParseCsv(string line)
       {
@@ -3136,40 +3354,54 @@ static partial class Program
         return bm - am;
       }
 
-      var staffPath = ResolveStaffCsvPath();
-      if (string.IsNullOrWhiteSpace(staffPath) || !File.Exists(staffPath))
-      {
-        return Results.Json(new { ok = false, error = "Staff CSV not found. Please configure Database - Staff WL10.csv." }, JsonOptions);
-      }
-
       var anyActive = false;
       var staffAll = new List<(string Id, string Name, string Status, string ShiftPattern)>(capacity: 256);
-      var first = true;
-      foreach (var raw in File.ReadLines(staffPath))
+      if (!string.IsNullOrWhiteSpace(cfg.SupabaseUrl) && !string.IsNullOrWhiteSpace(cfg.SupabaseServiceRoleKey))
       {
-        var line = raw ?? string.Empty;
-        if (first) { first = false; continue; }
-        if (string.IsNullOrWhiteSpace(line)) continue;
-        var parts = ParseCsv(line);
-        if (parts.Length < 7) continue;
-        var id = (parts[0] ?? string.Empty).Trim();
-        if (id.Length == 0) continue;
-        var name = (parts[1] ?? string.Empty).Trim();
-        var status = (parts[4] ?? string.Empty).Trim();
-        var shiftPattern = (parts[6] ?? string.Empty).Trim();
-        if (status.Length == 0 || string.Equals(status, "Active", StringComparison.OrdinalIgnoreCase)) anyActive = true;
-        staffAll.Add((id, name, status, shiftPattern));
+        var supa = await TryLoadStaffFromSupabase(cfg, ctx.RequestAborted);
+        if (!supa.ok)
+        {
+          return Results.Json(new { ok = false, error = $"Failed to load staff from Supabase: {supa.error}" }, JsonOptions);
+        }
+        foreach (var r in supa.rows)
+        {
+          var status = (r.Status ?? string.Empty).Trim();
+          if (status.Length == 0 || string.Equals(status, "Active", StringComparison.OrdinalIgnoreCase)) anyActive = true;
+          staffAll.Add((r.Id, r.Name, status, r.ShiftPattern));
+        }
+      }
+      else
+      {
+        var staffPath = ResolveStaffCsvPath();
+        if (string.IsNullOrWhiteSpace(staffPath) || !File.Exists(staffPath))
+        {
+          return Results.Json(new { ok = false, error = "Staff list not found. Configure Supabase staff table or provide Database - Staff WL10.csv." }, JsonOptions);
+        }
+        var first = true;
+        foreach (var raw in File.ReadLines(staffPath))
+        {
+          var line = raw ?? string.Empty;
+          if (first) { first = false; continue; }
+          if (string.IsNullOrWhiteSpace(line)) continue;
+          var parts = ParseCsv(line);
+          if (parts.Length < 7) continue;
+          var id = (parts[0] ?? string.Empty).Trim();
+          if (id.Length == 0) continue;
+          var name = (parts[1] ?? string.Empty).Trim();
+          var status = (parts[4] ?? string.Empty).Trim();
+          var shiftPattern = (parts[6] ?? string.Empty).Trim();
+          if (status.Length == 0 || string.Equals(status, "Active", StringComparison.OrdinalIgnoreCase)) anyActive = true;
+          staffAll.Add((id, name, status, shiftPattern));
+        }
       }
 
       var roster = anyActive
         ? staffAll.Where(x => x.Status.Length == 0 || string.Equals(x.Status, "Active", StringComparison.OrdinalIgnoreCase)).ToArray()
         : staffAll.ToArray();
 
-      var state = LoadState(statePath);
-      var shiftRows = (state.ShiftPatterns ?? Array.Empty<ShiftPatternRow>()).ToArray();
-      if (shiftRows.Length == 0)
+      static ShiftPatternRow[] DefaultShiftRows()
       {
-        shiftRows = new[]
+        return new[]
         {
           new ShiftPatternRow("Normal", "Mon–Fri", "09:00–18:00", "13:00–14:00", "Default"),
           new ShiftPatternRow("Shift 1", "Mon–Sat", "08:00–16:00", "12:00–13:00", "Default"),
@@ -3177,6 +3409,24 @@ static partial class Program
           new ShiftPatternRow("Shift 3", "Mon–Sat", "00:00–08:00", "04:00–04:30", "Default"),
         };
       }
+
+      ShiftPatternRow[] shiftRows;
+      if (!string.IsNullOrWhiteSpace(cfg.SupabaseUrl) && !string.IsNullOrWhiteSpace(cfg.SupabaseServiceRoleKey))
+      {
+        var supaShifts = await TryLoadShiftPatternsFromSupabase(cfg, ctx.RequestAborted);
+        shiftRows = supaShifts.ok ? supaShifts.rows : Array.Empty<ShiftPatternRow>();
+      }
+      else
+      {
+        shiftRows = Array.Empty<ShiftPatternRow>();
+      }
+
+      if (shiftRows.Length == 0)
+      {
+        var state = LoadState(statePath);
+        shiftRows = (state.ShiftPatterns ?? Array.Empty<ShiftPatternRow>()).ToArray();
+      }
+      if (shiftRows.Length == 0) shiftRows = DefaultShiftRows();
 
       var shiftByPattern = shiftRows
         .Where(r => !string.IsNullOrWhiteSpace(r.Pattern))
@@ -3530,67 +3780,81 @@ static partial class Program
 
     app.MapGet("/api/staff/file", (HttpContext ctx) =>
     {
-      static string[] ParseCsv(string line)
+      AppConfig cfg;
+      lock (stateGate) cfg = currentConfig;
+      if (string.IsNullOrWhiteSpace(cfg.SupabaseUrl) || string.IsNullOrWhiteSpace(cfg.SupabaseServiceRoleKey))
       {
-        var res = new List<string>();
-        var sb = new StringBuilder();
-        var inQ = false;
-        for (var i = 0; i < line.Length; i++)
-        {
-          var c = line[i];
-          if (inQ)
-          {
-            if (c == '"')
-            {
-              if (i + 1 < line.Length && line[i + 1] == '"') { sb.Append('"'); i++; }
-              else inQ = false;
-            }
-            else sb.Append(c);
-          }
-          else
-          {
-            if (c == '"') inQ = true;
-            else if (c == ',') { res.Add(sb.ToString()); sb.Clear(); }
-            else sb.Append(c);
-          }
-        }
-        res.Add(sb.ToString());
-        return res.Select(x => (x ?? string.Empty).Trim()).ToArray();
+        return Results.Json(new { rows = Array.Empty<object>(), error = "Supabase not configured. Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in Database Sync settings." }, JsonOptions);
       }
 
-      var path = ResolveStaffCsvPath();
-      if (string.IsNullOrWhiteSpace(path)) return Results.Json(new { rows = Array.Empty<object>(), error = "Could not resolve staff CSV path" }, JsonOptions);
-      if (!File.Exists(path)) return Results.Json(new { rows = Array.Empty<object>(), error = "File not found" }, JsonOptions);
-
-      var rows = new List<object>(capacity: 128);
-      var first = true;
-      foreach (var raw in File.ReadLines(path))
+      static string FmtDateOnly(string? raw)
       {
-        var line = raw ?? string.Empty;
-        if (first)
+        var s = (raw ?? string.Empty).Trim();
+        if (s.Length == 0) return string.Empty;
+        if (DateTimeOffset.TryParse(s, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var dto))
         {
-          first = false;
-          continue;
+          return dto.ToLocalTime().ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
         }
-        if (string.IsNullOrWhiteSpace(line)) continue;
-        var parts = ParseCsv(line);
-        if (parts.Length < 7) continue;
-        rows.Add(new
+        if (DateOnly.TryParse(s, CultureInfo.InvariantCulture, DateTimeStyles.None, out var d))
         {
-          user_id = parts[0],
-          full_name = parts[1],
-          role = parts[2],
-          department = parts[3],
-          status = parts[4],
-          date_joined = parts[5],
-          shift_pattern = parts[6],
-        });
+          return d.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+        }
+        return s.Length >= 10 ? s[..10] : s;
       }
 
-      return Results.Json(new { rows = rows.ToArray() }, JsonOptions);
+      static async Task<(bool ok, object[] rows, string? error, bool shiftPatternSupported)> TryFetchAsync(AppConfig cfg, bool includeShiftPattern, CancellationToken ct)
+      {
+        var baseUrl = cfg.SupabaseUrl.TrimEnd('/');
+        var cols = includeShiftPattern
+          ? "id,full_name,role,department,status,date_joined,shift_pattern"
+          : "id,full_name,role,department,status,date_joined";
+        var url = $"{baseUrl}/rest/v1/staff?select={Uri.EscapeDataString(cols)}&order=id.asc&limit=5000";
+        using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
+        using var req = new HttpRequestMessage(HttpMethod.Get, url);
+        req.Headers.TryAddWithoutValidation("apikey", cfg.SupabaseServiceRoleKey);
+        req.Headers.TryAddWithoutValidation("Authorization", $"Bearer {cfg.SupabaseServiceRoleKey}");
+        using var resp = await http.SendAsync(req, ct);
+        var body = await resp.Content.ReadAsStringAsync(ct);
+        if (!resp.IsSuccessStatusCode)
+        {
+          return (false, Array.Empty<object>(), body.Length > 350 ? body[..350] : body, includeShiftPattern);
+        }
+
+        using var doc = JsonDocument.Parse(body);
+        if (doc.RootElement.ValueKind != JsonValueKind.Array) return (false, Array.Empty<object>(), "Unexpected response shape", includeShiftPattern);
+        var list = new List<object>(capacity: 256);
+        foreach (var el in doc.RootElement.EnumerateArray())
+        {
+          var id = el.TryGetProperty("id", out var idEl) && idEl.ValueKind == JsonValueKind.String ? (idEl.GetString() ?? "") : "";
+          if (id.Length == 0) continue;
+          var fullName = el.TryGetProperty("full_name", out var nEl) && nEl.ValueKind == JsonValueKind.String ? (nEl.GetString() ?? "") : "";
+          var role = el.TryGetProperty("role", out var rEl) && rEl.ValueKind == JsonValueKind.String ? (rEl.GetString() ?? "") : "";
+          var dept = el.TryGetProperty("department", out var dEl) && dEl.ValueKind == JsonValueKind.String ? (dEl.GetString() ?? "") : "";
+          var status = el.TryGetProperty("status", out var stEl) && stEl.ValueKind == JsonValueKind.String ? (stEl.GetString() ?? "") : "";
+          var dj = el.TryGetProperty("date_joined", out var djEl) && djEl.ValueKind == JsonValueKind.String ? djEl.GetString() : null;
+          var sp = includeShiftPattern && el.TryGetProperty("shift_pattern", out var spEl) && spEl.ValueKind == JsonValueKind.String ? (spEl.GetString() ?? "") : "";
+          list.Add(new
+          {
+            user_id = id,
+            full_name = fullName,
+            role,
+            department = dept,
+            status,
+            date_joined = FmtDateOnly(dj),
+            shift_pattern = sp,
+          });
+        }
+        return (true, list.ToArray(), null, includeShiftPattern);
+      }
+
+      var t = TryFetchAsync(cfg, includeShiftPattern: true, ctx.RequestAborted).GetAwaiter().GetResult();
+      if (!t.ok && t.error is not null && t.error.Contains("shift_pattern", StringComparison.OrdinalIgnoreCase))
+      {
+        t = TryFetchAsync(cfg, includeShiftPattern: false, ctx.RequestAborted).GetAwaiter().GetResult();
+      }
+      if (!t.ok) return Results.Json(new { rows = Array.Empty<object>(), error = t.error ?? "Failed to load staff" }, JsonOptions);
+      return Results.Json(new { rows = t.rows }, JsonOptions);
     }).RequireAuthorization();
-
-    var staffCsvGate = new object();
 
     app.MapPost("/api/staff/save", async (HttpContext ctx) =>
     {
@@ -3601,10 +3865,18 @@ static partial class Program
         return (v.GetString() ?? string.Empty).Trim();
       }
 
-      static string Csv(string raw)
+      static string? ToIsoDate(string raw)
       {
         var s = (raw ?? string.Empty).Trim();
-        if (s.IndexOfAny(new[] { ',', '"', '\n', '\r' }) >= 0) return "\"" + s.Replace("\"", "\"\"") + "\"";
+        if (s.Length == 0) return null;
+        if (DateOnly.TryParse(s, CultureInfo.InvariantCulture, DateTimeStyles.None, out var d))
+        {
+          return d.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) + "T00:00:00Z";
+        }
+        if (DateTimeOffset.TryParse(s, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var dto))
+        {
+          return dto.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture);
+        }
         return s;
       }
 
@@ -3630,31 +3902,69 @@ static partial class Program
         ));
       }
 
-      var path = ResolveStaffCsvPath();
-      if (string.IsNullOrWhiteSpace(path)) return Results.Json(new { ok = false, error = "Could not resolve staff CSV path" }, JsonOptions);
-      if (!File.Exists(path)) return Results.Json(new { ok = false, error = "File not found" }, JsonOptions);
-
-      lock (staffCsvGate)
+      AppConfig cfg;
+      lock (stateGate) cfg = currentConfig;
+      if (string.IsNullOrWhiteSpace(cfg.SupabaseUrl) || string.IsNullOrWhiteSpace(cfg.SupabaseServiceRoleKey))
       {
-        using var fs = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.Read);
-        using var sw = new StreamWriter(fs, new UTF8Encoding(true));
-        sw.WriteLine("User ID,Full Name,Role,Department,Status,Date Joined,Shift Pattern");
-        foreach (var r in rows)
-        {
-          sw.WriteLine($"{Csv(r.userId)},{Csv(r.fullName)},{Csv(r.role)},{Csv(r.department)},{Csv(r.status)},{Csv(r.dateJoined)},{Csv(r.shiftPattern)}");
-        }
+        return Results.Json(new { ok = false, error = "Supabase not configured. Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in Database Sync settings." }, JsonOptions);
       }
 
+      var payloadWithShift = rows.Select(r => new Dictionary<string, object?>
+      {
+        ["id"] = r.userId,
+        ["full_name"] = r.fullName,
+        ["role"] = r.role,
+        ["department"] = r.department,
+        ["status"] = r.status,
+        ["date_joined"] = ToIsoDate(r.dateJoined),
+        ["shift_pattern"] = r.shiftPattern,
+      }).ToArray();
+
+      var payloadNoShift = rows.Select(r => new Dictionary<string, object?>
+      {
+        ["id"] = r.userId,
+        ["full_name"] = r.fullName,
+        ["role"] = r.role,
+        ["department"] = r.department,
+        ["status"] = r.status,
+        ["date_joined"] = ToIsoDate(r.dateJoined),
+      }).ToArray();
+
+      async Task<(bool ok, string? error)> UpsertAsync(object payload, CancellationToken ct)
+      {
+        var baseUrl = cfg.SupabaseUrl.TrimEnd('/');
+        var url = $"{baseUrl}/rest/v1/staff?on_conflict=id";
+        using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(20) };
+        using var req = new HttpRequestMessage(HttpMethod.Post, url);
+        req.Headers.TryAddWithoutValidation("apikey", cfg.SupabaseServiceRoleKey);
+        req.Headers.TryAddWithoutValidation("Authorization", $"Bearer {cfg.SupabaseServiceRoleKey}");
+        req.Headers.TryAddWithoutValidation("Prefer", "resolution=merge-duplicates,return=minimal");
+        req.Content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
+        using var resp = await http.SendAsync(req, ct);
+        var body = await resp.Content.ReadAsStringAsync(ct);
+        if (!resp.IsSuccessStatusCode) return (false, body.Length > 350 ? body[..350] : body);
+        return (true, null);
+      }
+
+      var r1 = await UpsertAsync(payloadWithShift, ctx.RequestAborted);
+      if (!r1.ok && r1.error is not null && r1.error.Contains("shift_pattern", StringComparison.OrdinalIgnoreCase))
+      {
+        var r2 = await UpsertAsync(payloadNoShift, ctx.RequestAborted);
+        if (!r2.ok) return Results.Json(new { ok = false, error = r2.error ?? "Save failed" }, JsonOptions);
+        return Results.Json(new { ok = true }, JsonOptions);
+      }
+      if (!r1.ok) return Results.Json(new { ok = false, error = r1.error ?? "Save failed" }, JsonOptions);
       return Results.Json(new { ok = true }, JsonOptions);
     }).RequireAuthorization();
 
     app.MapGet("/api/shifts", (HttpContext ctx) =>
     {
-      var state = LoadState(statePath);
-      var rows = (state.ShiftPatterns ?? Array.Empty<ShiftPatternRow>()).ToArray();
-      if (rows.Length == 0)
+      AppConfig cfg;
+      lock (stateGate) cfg = currentConfig;
+
+      static ShiftPatternRow[] DefaultRows()
       {
-        rows = new[]
+        return new[]
         {
           new ShiftPatternRow("Normal", "Mon–Fri", "09:00–18:00", "13:00–14:00", "Default"),
           new ShiftPatternRow("Shift 1", "Mon–Sat", "08:00–16:00", "12:00–13:00", "Default"),
@@ -3662,7 +3972,49 @@ static partial class Program
           new ShiftPatternRow("Shift 3", "Mon–Sat", "00:00–08:00", "04:00–04:30", "Default"),
         };
       }
-      return Results.Json(new { rows }, JsonOptions);
+
+      if (string.IsNullOrWhiteSpace(cfg.SupabaseUrl) || string.IsNullOrWhiteSpace(cfg.SupabaseServiceRoleKey))
+      {
+        var state = LoadState(statePath);
+        var rows = (state.ShiftPatterns ?? Array.Empty<ShiftPatternRow>()).ToArray();
+        if (rows.Length == 0) rows = DefaultRows();
+        return Results.Json(new { rows }, JsonOptions);
+      }
+
+      try
+      {
+        var baseUrl = cfg.SupabaseUrl.TrimEnd('/');
+        var url = $"{baseUrl}/rest/v1/shift_patterns?select=pattern,working_days,working_hours,break_time,notes&order=pattern.asc&limit=500";
+        using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
+        using var req = new HttpRequestMessage(HttpMethod.Get, url);
+        req.Headers.TryAddWithoutValidation("apikey", cfg.SupabaseServiceRoleKey);
+        req.Headers.TryAddWithoutValidation("Authorization", $"Bearer {cfg.SupabaseServiceRoleKey}");
+        using var resp = http.Send(req);
+        var body = resp.Content.ReadAsStringAsync().GetAwaiter().GetResult();
+        if (!resp.IsSuccessStatusCode) throw new InvalidOperationException(body);
+        using var doc = JsonDocument.Parse(body);
+        if (doc.RootElement.ValueKind != JsonValueKind.Array) throw new InvalidOperationException("Unexpected response shape");
+        var list = new List<ShiftPatternRow>(capacity: 64);
+        foreach (var el in doc.RootElement.EnumerateArray())
+        {
+          var pattern = el.TryGetProperty("pattern", out var pEl) && pEl.ValueKind == JsonValueKind.String ? (pEl.GetString() ?? "") : "";
+          if (pattern.Length == 0) continue;
+          var wd = el.TryGetProperty("working_days", out var wdEl) && wdEl.ValueKind == JsonValueKind.String ? (wdEl.GetString() ?? "") : "";
+          var wh = el.TryGetProperty("working_hours", out var whEl) && whEl.ValueKind == JsonValueKind.String ? (whEl.GetString() ?? "") : "";
+          var br = el.TryGetProperty("break_time", out var bEl) && bEl.ValueKind == JsonValueKind.String ? (bEl.GetString() ?? "") : "";
+          var notes = el.TryGetProperty("notes", out var nEl) && nEl.ValueKind == JsonValueKind.String ? (nEl.GetString() ?? "") : "";
+          list.Add(new ShiftPatternRow(pattern, wd, wh, br, notes));
+        }
+        var rows = list.Count > 0 ? list.ToArray() : DefaultRows();
+        return Results.Json(new { rows }, JsonOptions);
+      }
+      catch
+      {
+        var state = LoadState(statePath);
+        var rows = (state.ShiftPatterns ?? Array.Empty<ShiftPatternRow>()).ToArray();
+        if (rows.Length == 0) rows = DefaultRows();
+        return Results.Json(new { rows }, JsonOptions);
+      }
     }).RequireAuthorization();
 
     app.MapPost("/api/shifts/save", async (HttpContext ctx) =>
@@ -3692,6 +4044,42 @@ static partial class Program
           GetProp(el, "break"),
           GetProp(el, "notes")
         ));
+      }
+
+      AppConfig cfg;
+      lock (stateGate) cfg = currentConfig;
+      if (!string.IsNullOrWhiteSpace(cfg.SupabaseUrl) && !string.IsNullOrWhiteSpace(cfg.SupabaseServiceRoleKey))
+      {
+        try
+        {
+          var payload = rows.Select(r => new Dictionary<string, object?>
+          {
+            ["pattern"] = r.Pattern,
+            ["working_days"] = r.WorkingDays,
+            ["working_hours"] = r.WorkingHours,
+            ["break_time"] = r.Break,
+            ["notes"] = r.Notes,
+          }).ToArray();
+          var baseUrl = cfg.SupabaseUrl.TrimEnd('/');
+          var url = $"{baseUrl}/rest/v1/shift_patterns?on_conflict=pattern";
+          using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(20) };
+          using var req = new HttpRequestMessage(HttpMethod.Post, url);
+          req.Headers.TryAddWithoutValidation("apikey", cfg.SupabaseServiceRoleKey);
+          req.Headers.TryAddWithoutValidation("Authorization", $"Bearer {cfg.SupabaseServiceRoleKey}");
+          req.Headers.TryAddWithoutValidation("Prefer", "resolution=merge-duplicates,return=minimal");
+          req.Content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
+          using var resp = await http.SendAsync(req, ctx.RequestAborted);
+          var body = await resp.Content.ReadAsStringAsync(ctx.RequestAborted);
+          if (!resp.IsSuccessStatusCode)
+          {
+            return Results.Json(new { ok = false, error = body.Length > 350 ? body[..350] : body }, JsonOptions);
+          }
+          return Results.Json(new { ok = true }, JsonOptions);
+        }
+        catch (Exception ex)
+        {
+          return Results.Json(new { ok = false, error = ex.Message }, JsonOptions);
+        }
       }
 
       lock (stateGate)
@@ -5204,7 +5592,7 @@ static partial class Program
               </thead>
               <tbody id="staffBody"></tbody>
             </table>
-            <div class="hint">Shows staff list from Database\Database - Staff WL10.csv.</div>
+            <div class="hint"></div>
           </div>
         </div>
       </div>
