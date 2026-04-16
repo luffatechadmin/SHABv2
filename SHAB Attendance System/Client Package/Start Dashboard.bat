@@ -48,7 +48,7 @@ call :LOG Checking if dashboard is already running (port 5099)...
 call :CHECK_PORT
 if not errorlevel 1 set "READY=1" & goto :OPEN_BROWSER
 
-reg query "HKCR\zkemkeeper.CZKEM" >nul 2>&1
+call :CHECK_ZKEMKEEPER
 if not errorlevel 1 goto :SDK_OK
 call :IS_ADMIN
 if not errorlevel 1 goto :SDK_INSTALL
@@ -63,9 +63,9 @@ call :LOG ZKTeco SDK not detected. Installing now - requires Administrator...
 if not exist "%SDK_INSTALL%" echo ERROR: SDK installer not found: & echo   %SDK_INSTALL% & echo. & pause & exit /b 1
 call :RUN_AS_ADMIN "%SDK_INSTALL%"
 if errorlevel 1 echo ERROR: Administrator request was cancelled or blocked. & echo Please run this as Administrator: & echo   %SDK_INSTALL% & echo. & pause & exit /b 1
-reg query "HKCR\zkemkeeper.CZKEM" >nul 2>&1
+call :CHECK_ZKEMKEEPER
 if not errorlevel 1 goto :SDK_OK
-if exist "%ZK_TARGET%\zkemkeeper.dll" echo WARNING: ZKTeco SDK dll is present but COM registration was not detected. & echo Device functions may not work until the SDK is registered. & goto :SDK_OK
+if exist "%ZK_TARGET%\zkemkeeper.dll" echo WARNING: ZKTeco SDK dll is present but COM registration was not detected or COM could not be loaded. & echo Device functions may not work until the SDK is registered. & goto :SDK_OK
 echo ERROR: ZKTeco SDK install may have failed or was cancelled. & echo Please run this as Administrator: & echo   %SDK_INSTALL% & echo. & pause & exit /b 1
 
 :SDK_OK
@@ -228,6 +228,18 @@ if exist "%PS_EXE%" (
 )
 netstat -ano | findstr /R /C:":5099 .*LISTENING" >nul 2>&1
 if not errorlevel 1 exit /b 0
+exit /b 1
+
+:CHECK_ZKEMKEEPER
+reg query "HKCR\zkemkeeper.CZKEM" >nul 2>&1
+if not errorlevel 1 (
+  if exist "%WIN_DIR%\SysWOW64\WindowsPowerShell\v1.0\powershell.exe" (
+    "%WIN_DIR%\SysWOW64\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -Command "try{New-Object -ComObject zkemkeeper.CZKEM | Out-Null; exit 0}catch{exit 1}" >nul 2>&1
+    if not errorlevel 1 exit /b 0
+  ) else (
+    exit /b 0
+  )
+)
 exit /b 1
 
 :IS_ADMIN
