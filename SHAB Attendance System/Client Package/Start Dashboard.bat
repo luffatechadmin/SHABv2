@@ -16,6 +16,8 @@ set "ZK_TARGET=%WIN_DIR%\SysWOW64"
 if not exist "%ZK_TARGET%\regsvr32.exe" set "ZK_TARGET=%WIN_DIR%\System32"
 set "DOTNET_SHARED1=C:\Program Files (x86)\dotnet\shared"
 set "DOTNET_SHARED2=C:\Program Files\dotnet\shared"
+set "DOTNET_X86_EXE=C:\Program Files (x86)\dotnet\dotnet.exe"
+set "DOTNET_X64_EXE=C:\Program Files\dotnet\dotnet.exe"
 
 echo.
 echo ============================================================
@@ -53,21 +55,7 @@ echo ERROR: ZKTeco SDK install may have failed or was cancelled. & echo Please r
 echo ZKTeco SDK detected.
 
 call :CHECK_DOTNET
-if errorlevel 1 (
-  echo.
-  echo ERROR: Required .NET runtimes are missing.
-  echo This app requires:
-  echo - .NET 8 Runtime for Windows x86
-  echo - ASP.NET Core 8 Runtime for Windows x86
-  echo.
-  echo Download .NET 8 here and install the Windows x86 runtimes:
-  echo https://dotnet.microsoft.com/en-us/download/dotnet/8.0
-  call :OPEN_URL "https://dotnet.microsoft.com/en-us/download/dotnet/8.0"
-  echo.
-  pause
-  endlocal
-  exit /b 1
-)
+if errorlevel 1 goto :DOTNET_MISSING
 
 echo.
 echo Launching SHAB Attendance Dashboard...
@@ -124,6 +112,8 @@ exit /b 1
 echo Middleware process did not start.
 echo This is usually caused by missing .NET runtime, antivirus blocking the EXE, or missing permissions.
 echo.
+echo Running middleware once to capture startup error...
+"%CD%\WL10Middleware.exe" --dashboard --dashboard-port 5099 1>>"%LOG_FILE%" 2>>&1
 if exist "%LOG_FILE%" echo Log file: & echo   %LOG_FILE% & echo. & start "" notepad.exe "%LOG_FILE%"
 if exist "%LOG_FILE%" findstr /i /c:"You must install or update .NET" "%LOG_FILE%" >nul 2>&1 & call :OPEN_URL "https://dotnet.microsoft.com/en-us/download/dotnet/8.0"
 echo Required runtimes:
@@ -137,6 +127,21 @@ echo.
 pause
 echo.
 echo Default login: superadmin / abcd1234
+endlocal
+exit /b 1
+
+:DOTNET_MISSING
+echo.
+echo ERROR: Required .NET runtimes are missing for this app.
+echo This app requires Windows x86 runtimes:
+echo - .NET 8 Runtime for Windows x86
+echo - ASP.NET Core 8 Runtime for Windows x86
+echo.
+echo Download .NET 8 here and install the Windows x86 runtimes:
+echo https://dotnet.microsoft.com/en-us/download/dotnet/8.0
+call :OPEN_URL "https://dotnet.microsoft.com/en-us/download/dotnet/8.0"
+echo.
+pause
 endlocal
 exit /b 1
 
@@ -167,10 +172,16 @@ exit /b 1
 :CHECK_DOTNET
 set "NETCORE_OK="
 set "ASPNET_OK="
-for /f "delims=" %%d in ('dir /b "%DOTNET_SHARED1%\Microsoft.NETCore.App\8.*" 2^>nul') do set "NETCORE_OK=1"
-for /f "delims=" %%d in ('dir /b "%DOTNET_SHARED2%\Microsoft.NETCore.App\8.*" 2^>nul') do set "NETCORE_OK=1"
-for /f "delims=" %%d in ('dir /b "%DOTNET_SHARED1%\Microsoft.AspNetCore.App\8.*" 2^>nul') do set "ASPNET_OK=1"
-for /f "delims=" %%d in ('dir /b "%DOTNET_SHARED2%\Microsoft.AspNetCore.App\8.*" 2^>nul') do set "ASPNET_OK=1"
+
+if exist "C:\Program Files (x86)\" (
+  if not exist "%DOTNET_X86_EXE%" exit /b 1
+  for /f "delims=" %%d in ('dir /b "%DOTNET_SHARED1%\Microsoft.NETCore.App\8.*" 2^>nul') do set "NETCORE_OK=1"
+  for /f "delims=" %%d in ('dir /b "%DOTNET_SHARED1%\Microsoft.AspNetCore.App\8.*" 2^>nul') do set "ASPNET_OK=1"
+) else (
+  if exist "%DOTNET_SHARED2%\Microsoft.NETCore.App\8.*" set "NETCORE_OK=1"
+  if exist "%DOTNET_SHARED2%\Microsoft.AspNetCore.App\8.*" set "ASPNET_OK=1"
+)
+
 if defined NETCORE_OK if defined ASPNET_OK exit /b 0
 exit /b 1
 
