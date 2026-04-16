@@ -1,2 +1,67 @@
 Dashboard running at http://0.0.0.0:5099
 Login: superadmin / abcd1234 (override with WL10_DASHBOARD_USER and WL10_DASHBOARD_PASSWORD)
+Polling WL10 192.168.1.170:4370 (deviceId=WL10-192.168.1.170)...
+Corrected punch datetime (local): 2005-01-10 21:39:20 -> 2026-04-16 21:39:20
+Corrected punch datetime (local): 2004-09-12 15:02:24 -> 2026-04-16 15:02:24
+Normalized staff_id: rawCodes=[32 FF] -> '2'
+Corrected punch datetime (local): 2000-07-08 13:42:33 -> 2026-04-16 13:42:33
+Normalized staff_id: rawCodes=[01 64 2E 49 32 FF] -> '2'
+Corrected punch datetime (local): 2027-02-29 11:12:00 -> 2026-04-16 11:12:00
+Normalized staff_id: rawCodes=[08] -> '8'
+Corrected punch datetime (local): 2000-01-01 00:00:01 -> 2026-04-16 00:00:01
+Normalized staff_id: rawCodes=[65 49 32 01] -> '2'
+Corrected punch datetime (local): 2000-07-09 06:20:32 -> 2026-04-16 06:20:32
+Normalized staff_id: rawCodes=[34 A1 09 30 1C] -> '4'
+Corrected punch datetime (local): 2005-01-10 21:39:20 -> 2026-04-16 21:39:20
+Corrected punch datetime (local): 2004-09-12 15:02:24 -> 2026-04-16 15:02:24
+Normalized staff_id: rawCodes=[32 FF] -> '2'
+Corrected punch datetime (local): 2000-01-04 04:23:40 -> 2026-04-16 04:23:40
+Normalized staff_id: rawCodes=[01 D3 56 4C 32 01] -> '2'
+Corrected punch datetime (local): 2027-02-29 11:12:00 -> 2026-04-16 11:12:00
+Normalized staff_id: rawCodes=[09] -> '9'
+Normalized staff_id: rawCodes=[7A 4E 32 FF] -> '2'
+Normalized staff_id: rawCodes=[34 A1 09 30 1C] -> '4'
+Normalized staff_id: rawCodes=[32 FF] -> '2'
+Normalized staff_id: rawCodes=[01 B4 6C 55 32 FF] -> '2'
+Normalized staff_id: rawCodes=[09] -> '9'
+Normalized staff_id: rawCodes=[0D 56 32 FF] -> '2'
+Normalized staff_id: rawCodes=[34 A1 09 30 1C] -> '4'
+Normalized staff_id: rawCodes=[32 FF] -> '2'
+Corrected punch datetime (local): 2084-02-24 13:34:00 -> 2026-04-16 13:34:00
+Corrected punch datetime (local): 2084-02-24 13:34:00 -> 2026-04-16 13:34:00
+Corrected punch datetime (local): 2000-01-01 00:12:00 -> 2026-04-16 00:12:00
+Corrected punch datetime (local): 2000-01-01 00:12:00 -> 2026-04-16 00:12:00
+Corrected punch datetime (local): 2084-02-24 13:34:00 -> 2026-04-16 13:34:00
+Corrected punch datetime (local): 2000-01-01 00:12:00 -> 2026-04-16 00:12:00
+Corrected punch datetime (local): 2084-02-24 13:34:00 -> 2026-04-16 13:34:00
+Corrected punch datetime (local): 2000-01-01 00:12:00 -> 2026-04-16 00:12:00
+Corrected punch datetime (local): 2000-01-01 00:00:00 -> 2026-04-16 00:00:00
+Corrected punch datetime (local): 2005-01-10 21:39:20 -> 2026-04-16 21:39:20
+Corrected punch datetime (local): 2004-09-12 15:02:24 -> 2026-04-16 15:02:24
+Normalized staff_id: rawCodes=[32 FF] -> '2'
+Corrected punch datetime (local): 2000-07-08 13:42:33 -> 2026-04-16 13:42:33
+Normalized staff_id: rawCodes=[01 64 2E 49 32 FF] -> '2'
+Corrected punch datetime (local): 2027-02-29 11:12:00 -> 2026-04-16 11:12:00
+Normalized staff_id: rawCodes=[08] -> '8'
+Corrected punch datetime (local): 2000-01-01 00:00:01 -> 2026-04-16 00:00:01
+Normalized staff_id: rawCodes=[65 49 32 01] -> '2'
+Corrected punch datetime (local): 2000-07-09 06:20:32 -> 2026-04-16 06:20:32
+Normalized staff_id: rawCodes=[34 A1 09 30 1C] -> '4'
+Corrected punch datetime (local): 2005-01-10 21:39:20 -> 2026-04-16 21:39:20
+Corrected punch datetime (local): 2004-09-12 15:02:24 -> 2026-04-16 15:02:24
+Normalized staff_id: rawCodes=[32 FF] -> '2'
+Corrected punch datetime (local): 2000-01-04 04:23:40 -> 2026-04-16 04:23:40
+Normalized staff_id: rawCodes=[01 D3 56 4C 32 01] -> '2'
+Corrected punch datetime (local): 2027-02-29 11:12:00 -> 2026-04-16 11:12:00
+Normalized staff_id: rawCodes=[09] -> '9'
+Normalized staff_id: rawCodes=[7A 4E 32 FF] -> '2'
+Normalized staff_id: rawCodes=[34 A1 09 30 1C] -> '4'
+Normalized staff_id: rawCodes=[32 FF] -> '2'
+Normalized staff_id: rawCodes=[01 B4 6C 55 32 FF] -> '2'
+Normalized staff_id: rawCodes=[09] -> '9'
+Normalized staff_id: rawCodes=[0D 56 32 FF] -> '2'
+Normalized staff_id: rawCodes=[34 A1 09 30 1C] -> '4'
+Normalized staff_id: rawCodes=[32 FF] -> '2'
+Supabase sync disabled: skipping upsert of 64 punches.
+Saved watermark (UTC): 2026-04-15T03:00:14.0000000+00:00
+^C
