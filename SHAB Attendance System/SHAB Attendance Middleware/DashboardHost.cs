@@ -119,6 +119,31 @@ static partial class Program
     return null;
   }
 
+  private static Task<T> RunStaAsync<T>(Func<T> fn, CancellationToken ct)
+  {
+    var tcs = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
+    var thread = new Thread(() =>
+    {
+      try
+      {
+        var res = fn();
+        tcs.TrySetResult(res);
+      }
+      catch (Exception ex)
+      {
+        tcs.TrySetException(ex);
+      }
+    });
+    thread.IsBackground = true;
+    thread.SetApartmentState(ApartmentState.STA);
+    thread.Start();
+    if (ct.CanBeCanceled)
+    {
+      ct.Register(() => tcs.TrySetCanceled(ct));
+    }
+    return tcs.Task;
+  }
+
   private static async Task<(bool ok, List<(string Id, string Name, string Dept, string Status, string ShiftPattern)> rows, string? error)> TryLoadStaffFromSupabase(AppConfig cfg, CancellationToken ct)
   {
     if (string.IsNullOrWhiteSpace(cfg.SupabaseUrl) || string.IsNullOrWhiteSpace(cfg.SupabaseServiceRoleKey))
@@ -3931,89 +3956,51 @@ static partial class Program
 
       try
       {
-        trace.Add("Initializing ZKTeco SDK (zkemkeeper) COM...");
-        var type = Type.GetTypeFromProgID("zkemkeeper.CZKEM", throwOnError: false);
-        if (type is null)
+        var result = await RunStaAsync<object>(() =>
         {
-          try { type = Type.GetTypeFromCLSID(new Guid("00853A19-BD51-419B-9269-2DABE57EB61F"), throwOnError: false); } catch { type = null; }
-        }
-        if (type is null) return Results.Json(new { ok = false, error = "ZKTeco SDK (zkemkeeper) is not installed/registered on this PC.", trace }, JsonOptions);
+          var t = new List<string>(capacity: 64);
+          t.AddRange(trace);
+          t.Add("STA thread started.");
+          t.Add("Initializing ZKTeco SDK (zkemkeeper) COM...");
 
-        dynamic? zk = null;
-        try { zk = Activator.CreateInstance(type); } catch { zk = null; }
-        if (zk is null) return Results.Json(new { ok = false, error = "Failed to initialize zkemkeeper COM object.", trace }, JsonOptions);
-
-        try
-        {
-          trace.Add("Connecting to device...");
-          try { _ = zk.SetCommPassword(cfg.CommPassword); } catch { }
-          var connected = false;
-          try { connected = (bool)zk.Connect_Net(cfg.DeviceIp, cfg.DevicePort); } catch { connected = false; }
-          if (!connected) return Results.Json(new { ok = false, error = $"Failed to connect to WL10 at {cfg.DeviceIp}:{cfg.DevicePort}.", device_ip = cfg.DeviceIp, device_port = cfg.DevicePort, machine_number = cfg.MachineNumber, trace }, JsonOptions);
-          trace.Add("Connected.");
-
-          trace.Add("Checking whether user already exists...");
-          try { _ = (bool)zk.ReadAllUserID(cfg.MachineNumber); } catch { }
-
-          while (true)
+          var type = Type.GetTypeFromProgID("zkemkeeper.CZKEM", throwOnError: false);
+          if (type is null)
           {
-            string enrollNumber;
-            string name;
-            string password;
-            int privilege;
-            bool enabled;
-
-            bool ok;
-            try { ok = (bool)zk.SSR_GetAllUserInfo(cfg.MachineNumber, out enrollNumber, out name, out password, out privilege, out enabled); }
-            catch { break; }
-            if (!ok) break;
-            if (string.Equals((enrollNumber ?? string.Empty).Trim(), userId, StringComparison.Ordinal))
-            {
-              trace.Add("User already exists on device.");
-              return Results.Json(new { ok = true, already_exists = true, device_ip = cfg.DeviceIp, device_port = cfg.DevicePort, machine_number = cfg.MachineNumber, trace }, JsonOptions);
-            }
+            try { type = Type.GetTypeFromCLSID(new Guid("00853A19-BD51-419B-9269-2DABE57EB61F"), throwOnError: false); } catch { type = null; }
+          }
+          if (type is null)
+          {
+            return (object)new { ok = false, error = "ZKTeco SDK (zkemkeeper) is not installed/registered on this PC.", trace = t.ToArray() };
           }
 
-          trace.Add("User not found. Writing user to device...");
-          try { _ = zk.EnableDevice(cfg.MachineNumber, false); } catch { }
-
-          var created = false;
-          try { created = (bool)zk.SSR_SetUserInfo(cfg.MachineNumber, userId, firstName, "", 0, true); } catch { created = false; }
-          if (!created)
+          dynamic? zk = null;
+          try { zk = Activator.CreateInstance(type); }
+          catch (Exception ex)
           {
-            try { created = (bool)zk.SetUserInfo(cfg.MachineNumber, int.Parse(userId, CultureInfo.InvariantCulture), firstName, "", 0, true); } catch { created = false; }
+            t.Add("CreateInstance exception: " + ex.GetType().FullName + " " + ex.Message);
+            if (ex.HResult != 0) t.Add("CreateInstance HRESULT: 0x" + ex.HResult.ToString("X", CultureInfo.InvariantCulture));
+            zk = null;
           }
-          if (!created)
+          if (zk is null)
           {
-            var lastErr = 0;
-            try { _ = (bool)zk.GetLastError(out lastErr); } catch { lastErr = 0; }
-            try { _ = zk.EnableDevice(cfg.MachineNumber, true); } catch { }
-            trace.Add("Create failed. last_error=" + lastErr);
-            return Results.Json(new { ok = false, error = "Device rejected user create request.", last_error = lastErr, device_ip = cfg.DeviceIp, device_port = cfg.DevicePort, machine_number = cfg.MachineNumber, trace }, JsonOptions);
+            return (object)new { ok = false, error = "Failed to initialize zkemkeeper COM object.", trace = t.ToArray() };
           }
 
-          trace.Add("Create succeeded. Refreshing device data...");
-          try { _ = (bool)zk.RefreshData(cfg.MachineNumber); } catch { }
-          try { _ = zk.EnableDevice(cfg.MachineNumber, true); } catch { }
-
-          trace.Add("Verifying user exists after write...");
-          var verified = false;
           try
           {
-            string vName;
-            string vPwd;
-            int vPriv;
-            bool vEnabled;
-            verified = (bool)zk.SSR_GetUserInfo(cfg.MachineNumber, userId, out vName, out vPwd, out vPriv, out vEnabled);
-          }
-          catch
-          {
-            verified = false;
-          }
+            t.Add("Connecting to device...");
+            try { _ = zk.SetCommPassword(cfg.CommPassword); } catch { }
+            var connected = false;
+            try { connected = (bool)zk.Connect_Net(cfg.DeviceIp, cfg.DevicePort); } catch { connected = false; }
+            if (!connected)
+            {
+              return (object)new { ok = false, error = $"Failed to connect to WL10 at {cfg.DeviceIp}:{cfg.DevicePort}.", device_ip = cfg.DeviceIp, device_port = cfg.DevicePort, machine_number = cfg.MachineNumber, trace = t.ToArray() };
+            }
+            t.Add("Connected.");
 
-          if (!verified)
-          {
+            t.Add("Checking whether user already exists...");
             try { _ = (bool)zk.ReadAllUserID(cfg.MachineNumber); } catch { }
+
             while (true)
             {
               string enrollNumber;
@@ -4028,19 +4015,81 @@ static partial class Program
               if (!ok) break;
               if (string.Equals((enrollNumber ?? string.Empty).Trim(), userId, StringComparison.Ordinal))
               {
-                verified = true;
-                break;
+                t.Add("User already exists on device.");
+              return (object)new { ok = true, already_exists = true, device_ip = cfg.DeviceIp, device_port = cfg.DevicePort, machine_number = cfg.MachineNumber, trace = t.ToArray() };
               }
             }
-          }
 
-          trace.Add(verified ? "Verified on device." : "Could not verify on device.");
-          return Results.Json(new { ok = true, created = true, verified, device_ip = cfg.DeviceIp, device_port = cfg.DevicePort, machine_number = cfg.MachineNumber, trace }, JsonOptions);
-        }
-        finally
-        {
-          try { zk.Disconnect(); } catch { }
-        }
+            t.Add("User not found. Writing user to device...");
+            try { _ = zk.EnableDevice(cfg.MachineNumber, false); } catch { }
+
+            var created = false;
+            try { created = (bool)zk.SSR_SetUserInfo(cfg.MachineNumber, userId, firstName, "", 0, true); } catch { created = false; }
+            if (!created)
+            {
+              try { created = (bool)zk.SetUserInfo(cfg.MachineNumber, int.Parse(userId, CultureInfo.InvariantCulture), firstName, "", 0, true); } catch { created = false; }
+            }
+            if (!created)
+            {
+              var lastErr = 0;
+              try { _ = (bool)zk.GetLastError(out lastErr); } catch { lastErr = 0; }
+              try { _ = zk.EnableDevice(cfg.MachineNumber, true); } catch { }
+              t.Add("Create failed. last_error=" + lastErr);
+              return (object)new { ok = false, error = "Device rejected user create request.", last_error = lastErr, device_ip = cfg.DeviceIp, device_port = cfg.DevicePort, machine_number = cfg.MachineNumber, trace = t.ToArray() };
+            }
+
+            t.Add("Create succeeded. Refreshing device data...");
+            try { _ = (bool)zk.RefreshData(cfg.MachineNumber); } catch { }
+            try { _ = zk.EnableDevice(cfg.MachineNumber, true); } catch { }
+
+            t.Add("Verifying user exists after write...");
+            var verified = false;
+            try
+            {
+              string vName;
+              string vPwd;
+              int vPriv;
+              bool vEnabled;
+              verified = (bool)zk.SSR_GetUserInfo(cfg.MachineNumber, userId, out vName, out vPwd, out vPriv, out vEnabled);
+            }
+            catch
+            {
+              verified = false;
+            }
+
+            if (!verified)
+            {
+              try { _ = (bool)zk.ReadAllUserID(cfg.MachineNumber); } catch { }
+              while (true)
+              {
+                string enrollNumber;
+                string name;
+                string password;
+                int privilege;
+                bool enabled;
+
+                bool ok;
+                try { ok = (bool)zk.SSR_GetAllUserInfo(cfg.MachineNumber, out enrollNumber, out name, out password, out privilege, out enabled); }
+                catch { break; }
+                if (!ok) break;
+                if (string.Equals((enrollNumber ?? string.Empty).Trim(), userId, StringComparison.Ordinal))
+                {
+                  verified = true;
+                  break;
+                }
+              }
+            }
+
+            t.Add(verified ? "Verified on device." : "Could not verify on device.");
+            return (object)new { ok = true, created = true, verified, device_ip = cfg.DeviceIp, device_port = cfg.DevicePort, machine_number = cfg.MachineNumber, trace = t.ToArray() };
+          }
+          finally
+          {
+            try { zk.Disconnect(); } catch { }
+          }
+        }, ctx.RequestAborted);
+
+        return Results.Json(result, JsonOptions);
       }
       catch (Exception ex)
       {
