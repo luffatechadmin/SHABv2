@@ -10,6 +10,8 @@ set "DASH_URL=http://127.0.0.1:5099/login"
 set "SHORTCUT_ICON=%ROOT%Assets\SHAB Attendance Dashboard.ico"
 set "LOG_DIR=%ROOT%Logs"
 set "LOG_FILE=%LOG_DIR%\attendance-middleware.log"
+set "MIDDLE_OUT=%LOG_DIR%\middleware-stdout.log"
+set "MIDDLE_ERR=%LOG_DIR%\middleware-stderr.log"
 set "WIN_DIR=%SystemRoot%"
 if not defined WIN_DIR set "WIN_DIR=%windir%"
 set "PS_EXE=%WIN_DIR%\System32\WindowsPowerShell\v1.0\powershell.exe"
@@ -88,25 +90,32 @@ echo Launching SHAB Attendance Dashboard...
 call :LOG Launching SHAB Attendance Dashboard...
 call :LOG Middleware: WL10Middleware.exe --dashboard --dashboard-port 5099
 call :LOG LogFile: %LOG_FILE%
+call :LOG MiddlewareStdout: %MIDDLE_OUT%
+call :LOG MiddlewareStderr: %MIDDLE_ERR%
+
+if exist "%MIDDLE_OUT%" del /f /q "%MIDDLE_OUT%" >nul 2>&1
+if exist "%MIDDLE_ERR%" del /f /q "%MIDDLE_ERR%" >nul 2>&1
 
 if exist "%PS_EXE%" (
   "%PS_EXE%" -NoProfile -ExecutionPolicy Bypass -Command ^
     "$exe=Join-Path (Get-Location) 'WL10Middleware.exe';" ^
-    "$log='%LOG_FILE%';" ^
-    "$p=Start-Process -FilePath $exe -ArgumentList @('--dashboard','--dashboard-port','5099') -RedirectStandardOutput $log -RedirectStandardError $log -PassThru;" ^
+    "$out='%MIDDLE_OUT%';" ^
+    "$err='%MIDDLE_ERR%';" ^
+    "$p=Start-Process -FilePath $exe -ArgumentList @('--dashboard','--dashboard-port','5099') -RedirectStandardOutput $out -RedirectStandardError $err -PassThru;" ^
+    "Write-Output ('PID=' + $p.Id);" ^
     "Start-Sleep -Seconds 2;" ^
-    "if ($p.HasExited) { exit $p.ExitCode } else { exit 0 }" >nul 2>&1
+    "if ($p.HasExited) { Write-Output ('EXITED=' + $p.ExitCode); exit 100 } else { exit 0 }" >>"%LOG_FILE%" 2>>&1
   if not errorlevel 1 goto :STARTED_OK
-  call :LOG Middleware exited immediately after start attempt. See log for details.
+  call :LOG Middleware exited immediately after start attempt. See middleware stderr/stdout.
+) else (
+  start "SHAB Attendance Middleware" /min "%ComSpec%" /c ""%CD%\WL10Middleware.exe" --dashboard --dashboard-port 5099 1>>"%MIDDLE_OUT%" 2>>"%MIDDLE_ERR%""
 )
-
-start "SHAB Attendance Middleware" /min "%ComSpec%" /c ""%CD%\WL10Middleware.exe" --dashboard --dashboard-port 5099 1>>"%LOG_FILE%" 2>>&1"
 
 timeout /t 2 /nobreak >nul
 tasklist /fi "imagename eq WL10Middleware.exe" | find /i "WL10Middleware.exe" >nul 2>&1
 if errorlevel 1 (
   call :LOG Middleware not found in tasklist after initial start attempt. Retrying...
-  start "SHAB Attendance Middleware" "%ComSpec%" /c "\"%CD%\WL10Middleware.exe\" --dashboard --dashboard-port 5099 1>>\"%LOG_FILE%\" 2>>&1"
+  start "SHAB Attendance Middleware" "%ComSpec%" /c "\"%CD%\WL10Middleware.exe\" --dashboard --dashboard-port 5099 1>>\"%MIDDLE_OUT%\" 2>>\"%MIDDLE_ERR%\""
   timeout /t 2 /nobreak >nul
   tasklist /fi "imagename eq WL10Middleware.exe" | find /i "WL10Middleware.exe" >nul 2>&1
   if errorlevel 1 goto :START_FAILED
@@ -155,6 +164,10 @@ netstat -ano | findstr /R /C:":5099 .*LISTENING" >>"%LOG_FILE%" 2>>&1
 call :LOG Tasklist for WL10Middleware.exe:
 tasklist /fi "imagename eq WL10Middleware.exe" >>"%LOG_FILE%" 2>>&1
 call :LOG Desktop path: %DESKTOP_DIR%
+call :LOG HTTP probe:
+call :HTTP_PROBE
+call :LOG Recent crash events (Application log):
+call :LOG_EVENT_ERRORS
 if exist "%LOG_FILE%" echo Log file: & echo   %LOG_FILE% & echo. & start "" notepad.exe "%LOG_FILE%"
 if exist "%LOG_FILE%" findstr /i /c:"You must install or update .NET" "%LOG_FILE%" >nul 2>&1 & call :OPEN_URL "https://dotnet.microsoft.com/en-us/download/dotnet/8.0"
 for %%A in ("%LOG_FILE%") do set "LOG_SIZE=%%~zA"
@@ -175,6 +188,8 @@ echo Desktop path:
 echo   %DESKTOP_DIR%
 echo.
 call :LOG Desktop path: %DESKTOP_DIR%
+call :LOG Recent crash events (Application log):
+call :LOG_EVENT_ERRORS
 if exist "%LOG_FILE%" echo Log file: & echo   %LOG_FILE% & echo. & start "" notepad.exe "%LOG_FILE%"
 if exist "%LOG_FILE%" findstr /i /c:"You must install or update .NET" "%LOG_FILE%" >nul 2>&1 & call :OPEN_URL "https://dotnet.microsoft.com/en-us/download/dotnet/8.0"
 for %%A in ("%LOG_FILE%") do set "LOG_SIZE=%%~zA"
@@ -264,6 +279,16 @@ setlocal EnableExtensions
 set "MSG=%*"
 >>"%LOG_FILE%" echo [%date% %time%] %MSG%
 endlocal & exit /b 0
+
+:HTTP_PROBE
+if not exist "%PS_EXE%" exit /b 0
+"%PS_EXE%" -NoProfile -ExecutionPolicy Bypass -Command ^
+  "try { $r=Invoke-WebRequest -Uri 'http://127.0.0.1:5099/login' -UseBasicParsing -TimeoutSec 2; Write-Output ('HTTP ' + [int]$r.StatusCode) } catch { Write-Output ('HTTP_ERROR ' + $_.Exception.GetType().FullName + ' ' + $_.Exception.Message) }" >>"%LOG_FILE%" 2>>&1
+exit /b 0
+
+:LOG_EVENT_ERRORS
+wevtutil qe Application /c:20 /f:text /rd:true /q:"*[System[(EventID=1000 or EventID=1026) and TimeCreated[timediff(@SystemTime) <= 900000]]]" >>"%LOG_FILE%" 2>>&1
+exit /b 0
 
 :OPEN_URL
 rundll32 url.dll,FileProtocolHandler "%~1" >nul 2>&1
