@@ -1,2 +1,42 @@
 [Thu 04/16/2026  8:59:59.46] Starting middleware...
 [Thu 04/16/2026  9:14:06.66] Starting middleware...
+[Thu 04/16/2026  9:37:37.67] ============================================================
+[Thu 04/16/2026  9:37:37.68] SHAB Attendance System - Start Dashboard
+[Thu 04/16/2026  9:37:37.68] Version: 2026-04-16
+[Thu 04/16/2026  9:37:37.70] Root: C:\Users\USER\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\
+[Thu 04/16/2026  9:37:37.71] AppDir: C:\Users\USER\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\App\win-x86
+[Thu 04/16/2026  9:37:37.73] User: USER
+[Thu 04/16/2026  9:37:37.73] Machine: DESKTOP-KKLQT7L
+[Thu 04/16/2026  9:37:37.74] ============================================================
+[Thu 04/16/2026  9:37:37.76] Checking if dashboard is already running (port 5099)...
+[Thu 04/16/2026  9:37:37.88] Requesting Administrator access for SDK install...
+[Thu 04/16/2026  9:37:40.95] ============================================================
+[Thu 04/16/2026  9:37:40.95] SHAB Attendance System - Start Dashboard
+[Thu 04/16/2026  9:37:40.96] Version: 2026-04-16
+[Thu 04/16/2026  9:37:40.96] Root: C:\Users\USER\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\
+[Thu 04/16/2026  9:37:40.98] AppDir: C:\Users\USER\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\App\win-x86
+[Thu 04/16/2026  9:37:41.00] User: USER
+[Thu 04/16/2026  9:37:41.01] Machine: DESKTOP-KKLQT7L
+[Thu 04/16/2026  9:37:41.01] ============================================================
+[Thu 04/16/2026  9:37:41.03] Checking if dashboard is already running (port 5099)...
+[Thu 04/16/2026  9:37:41.12] ZKTeco SDK not detected. Installing now - requires Administrator...
+[Thu 04/16/2026  9:37:43.20] ZKTeco SDK detected (or dll present).
+[Thu 04/16/2026  9:37:43.20] Preparing app files and security settings...
+Security prep app path: C:\Users\USER\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\App\win-x86
+Unblocked files: 339
+IsAdmin: True
+Defender exclusion attempted.
+[Thu 04/16/2026  9:37:49.82] Checking .NET runtimes...
+[Thu 04/16/2026  9:37:49.86] .NET runtimes detected.
+[Thu 04/16/2026  9:37:49.86] Creating desktop shortcuts...
+[Thu 04/16/2026  9:37:49.91] Shortcut created: C:\Users\USER\Desktop\SHAB Attendance Dashboard.cmd
+[Thu 04/16/2026  9:37:49.92] Shortcut created: C:\Users\USER\Desktop\SHAB Attendance Dashboard.url
+[Thu 04/16/2026  9:37:49.92] Launching SHAB Attendance Dashboard...
+[Thu 04/16/2026  9:37:49.94] Middleware: WL10Middleware.exe --dashboard --dashboard-port 5099
+[Thu 04/16/2026  9:37:49.95] LogFile: C:\Users\USER\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\Logs\attendance-middleware.log
+[Thu 04/16/2026  9:37:53.36] Waiting for dashboard to be ready (port 5099)...
+[Thu 04/16/2026  9:38:52.18] ERROR: Dashboard did not become reachable on port 5099.
+[Thu 04/16/2026  9:38:52.82] Port status:
+[Thu 04/16/2026  9:38:52.84] Tasklist for WL10Middleware.exe:
+INFO: No tasks are running which match the specified criteria.
+[Thu 04/16/2026  9:38:52.91] Desktop path: C:\Users\USER\Desktop
