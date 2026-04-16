@@ -61,7 +61,9 @@ exit /b
 echo ZKTeco SDK not detected. Installing now - requires Administrator...
 call :LOG ZKTeco SDK not detected. Installing now - requires Administrator...
 if not exist "%SDK_INSTALL%" echo ERROR: SDK installer not found: & echo   %SDK_INSTALL% & echo. & pause & exit /b 1
+set "SHAB_SDK_INSTALL_SILENT=1"
 call :RUN_AS_ADMIN "%SDK_INSTALL%"
+set "SHAB_SDK_INSTALL_SILENT="
 if errorlevel 1 echo ERROR: Administrator request was cancelled or blocked. & echo Please run this as Administrator: & echo   %SDK_INSTALL% & echo. & pause & exit /b 1
 call :CHECK_ZKEMKEEPER
 if not errorlevel 1 goto :SDK_OK
