@@ -791,7 +791,7 @@ static partial class Program
     var machineNumber = EnvInt("WL10_MACHINE_NUMBER", 1);
     var commPassword = EnvInt("WL10_COMM_PASSWORD", 0);
     var deviceId = Env("WL10_DEVICE_ID", $"WL10-{deviceIp}");
-    var pollIntervalSeconds = EnvInt("WL10_POLL_INTERVAL_SECONDS", 600);
+    var pollIntervalSeconds = EnvInt("WL10_POLL_INTERVAL_SECONDS", 3600);
     var backfillMinutes = EnvInt("WL10_BACKFILL_MINUTES", 5);
     var staffIdPrefix = Env("WL10_STAFF_ID_PREFIX", "");
     var staffIdPadWidth = EnvInt("WL10_STAFF_ID_PAD_WIDTH", 0);

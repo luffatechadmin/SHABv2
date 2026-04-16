@@ -469,7 +469,7 @@ static partial class Program
     {
       if (ctx.User?.Identity?.IsAuthenticated == true)
       {
-        ctx.Response.Redirect("/");
+        ctx.Response.Redirect("/?tab=settings&subtab=settings:connection");
         return;
       }
       ctx.Response.ContentType = "text/html; charset=utf-8";
@@ -498,7 +498,7 @@ static partial class Program
       var identity = new ClaimsIdentity(claims, CookieAuthenticationDefaults.AuthenticationScheme);
       var principal = new ClaimsPrincipal(identity);
       await ctx.SignInAsync(CookieAuthenticationDefaults.AuthenticationScheme, principal);
-      ctx.Response.Redirect("/");
+      ctx.Response.Redirect("/?tab=settings&subtab=settings:connection");
     }).AllowAnonymous();
 
     app.MapPost("/logout", async (HttpContext ctx) =>
@@ -4504,7 +4504,6 @@ static partial class Program
             <input id="password" name="password" type="password" autocomplete="current-password" />
             <button type="submit">Login</button>
           </form>
-          <div class="hint">Default: superadmin / abcd1234</div>
         </div>
       </div>
     </div>
@@ -4775,7 +4774,6 @@ static partial class Program
         </div>
         <div class="subTabs" role="tablist" aria-label="Summary sub-tabs">
           <button class="subTabBtn active" type="button" data-subtab-group="summary" data-subtab="attendance">Attendance Analysis</button>
-          <button class="subTabBtn" type="button" data-subtab-group="summary" data-subtab="device">Device Status</button>
         </div>
 
         <div class="subTabPanel active" data-subtab-group="summary" id="subtab-summary-attendance">
@@ -4979,126 +4977,6 @@ static partial class Program
           </div>
         </div>
 
-        <div class="subTabPanel" data-subtab-group="summary" id="subtab-summary-device">
-          <div class="grid" style="margin:0">
-          <div class="card" style="grid-column:1/-1">
-            <div class="kpis">
-              <div class="kpi">
-                <div class="summaryRow">
-                  <div class="kTitle">Connection</div>
-                  <div id="reach" class="pill">Checking...</div>
-                </div>
-                <div class="kMeta">IP <strong id="ip"></strong></div>
-                <div class="kMeta">Port <strong id="port"></strong> • Reader <strong id="readerMode"></strong></div>
-              </div>
-              <div class="kpi">
-                <div class="kTitle">Today Device</div>
-                <div class="kVal" id="totalTodayDevice">-</div>
-                <div class="kMeta">Unique staff <strong id="uniqueTodayDevice">-</strong></div>
-              </div>
-              <div class="kpi">
-                <div class="kTitle">Today Database</div>
-                <div class="kVal" id="totalTodayDb">-</div>
-                <div class="kMeta">Unique staff <strong id="uniqueTodayDb">-</strong></div>
-              </div>
-              <div class="kpi">
-                <div class="kTitle">Last Sync</div>
-                <div class="kVal" id="lastSyncKpi">-</div>
-                <div class="kMeta" id="lastSyncDateKpi">Update on -</div>
-                <div class="kMeta">Read <strong id="lastResKpi">-</strong></div>
-              </div>
-            </div>
-          </div>
-
-          <div class="card">
-            <div class="title">Device Sync Summary</div>
-            <div class="subCards">
-              <div class="subCard">
-                <div class="subTitle">Status</div>
-                <div class="subVal" id="deviceSyncStatusWrap"><span id="deviceSyncStatus" class="pill">Unknown</span></div>
-              </div>
-              <div class="subCard">
-                <div class="subTitle">Table</div>
-                <div class="subVal mono" id="deviceSyncTable"></div>
-              </div>
-              <div class="subCard">
-                <div class="subTitle">Auto Sync</div>
-                <div class="subVal" id="auto"></div>
-              </div>
-              <div class="subCard">
-                <div class="subTitle">Next Sync</div>
-                <div class="subVal" id="intervalWithUnit"></div>
-              </div>
-              <div class="subCard">
-                <div class="subTitle">Last Read</div>
-                <div class="subVal" id="lastRes"></div>
-              </div>
-              <div class="subCard">
-                <div class="subTitle">Last Sync</div>
-                <div class="subVal mono" id="lastSyncAt"></div>
-              </div>
-              <div class="subCard">
-                <div class="subTitle">Total Records</div>
-                <div class="subVal" id="runCount"></div>
-              </div>
-              <div class="subCard">
-                <div class="subTitle">Local Database Date</div>
-                <div class="subVal mono" id="localWm"></div>
-              </div>
-            </div>
-            <div style="height:10px"></div>
-            <div class="hint">
-              Last Sync is when the middleware finished its last sync run. Local Database Date is the timestamp of the newest punch saved locally (used for incremental reads), so it is usually the same as or slightly earlier than Last Sync.
-            </div>
-            <div style="height:8px"></div>
-            <div class="muted" id="lastErrBrief"></div>
-            <details id="lastErrBox" style="display:none"><summary>Error details</summary><pre id="lastErr"></pre></details>
-          </div>
-
-          <div class="card">
-            <div class="title">Supabase Sync Summary</div>
-            <div class="subCards">
-              <div class="subCard">
-                <div class="subTitle">Status</div>
-                <div class="subVal" id="supaPillWrap"><span id="supaPill" class="pill">Unknown</span></div>
-              </div>
-              <div class="subCard">
-                <div class="subTitle">Table</div>
-                <div class="subVal mono" id="supaTableState"></div>
-              </div>
-              <div class="subCard">
-                <div class="subTitle">Auto Sync</div>
-                <div class="subVal" id="supaAuto"></div>
-              </div>
-              <div class="subCard">
-                <div class="subTitle">Next Sync</div>
-                <div class="subVal" id="supaInterval"></div>
-              </div>
-              <div class="subCard">
-                <div class="subTitle">Last Upserted</div>
-                <div class="subVal" id="supaLastRes"></div>
-              </div>
-              <div class="subCard">
-                <div class="subTitle">Last Sync</div>
-                <div class="subVal mono" id="supaLastSyncAt"></div>
-              </div>
-              <div class="subCard">
-                <div class="subTitle">Total Records</div>
-                <div class="subVal" id="supaTotalRecords"></div>
-              </div>
-              <div class="subCard">
-                <div class="subTitle">Online Database Date</div>
-                <div class="subVal mono" id="dbWm"></div>
-              </div>
-            </div>
-            <div style="height:10px"></div>
-            <div class="hint">
-              Online Database Date is the newest datetime found in Supabase. When Supabase sync is disabled, this value is shown as disabled.
-            </div>
-            <div class="hint" id="supaUrlState" style="display:none"></div>
-          </div>
-          </div>
-        </div>
       </div>
     </section>
 
@@ -5371,12 +5249,134 @@ static partial class Program
         </div>
       </div>
       <div class="subTabs" role="tablist" aria-label="Settings sub-tabs">
-        <button class="subTabBtn active" type="button" data-subtab-group="settings" data-subtab="system">Device &amp; Sync</button>
-        <button class="subTabBtn" type="button" data-subtab-group="settings" data-subtab="database">Database</button>
+        <button class="subTabBtn active" type="button" data-subtab-group="settings" data-subtab="connection">Connection Summary</button>
+        <button class="subTabBtn" type="button" data-subtab-group="settings" data-subtab="deviceSync">Device Sync</button>
+        <button class="subTabBtn" type="button" data-subtab-group="settings" data-subtab="databaseSync">Database Sync</button>
         <button class="subTabBtn" type="button" data-subtab-group="settings" data-subtab="logs">Logs</button>
       </div>
 
-      <div class="subTabPanel active" data-subtab-group="settings" id="subtab-settings-system">
+      <div class="subTabPanel active" data-subtab-group="settings" id="subtab-settings-connection">
+        <div class="grid" style="margin:0">
+        <div class="card" style="grid-column:1/-1">
+          <div class="kpis">
+            <div class="kpi">
+              <div class="summaryRow">
+                <div class="kTitle">Connection</div>
+                <div id="reach" class="pill">Checking...</div>
+              </div>
+              <div class="kMeta">IP <strong id="ip"></strong></div>
+              <div class="kMeta">Port <strong id="port"></strong> • Reader <strong id="readerMode"></strong></div>
+            </div>
+            <div class="kpi">
+              <div class="kTitle">Today Device</div>
+              <div class="kVal" id="totalTodayDevice">-</div>
+              <div class="kMeta">Unique staff <strong id="uniqueTodayDevice">-</strong></div>
+            </div>
+            <div class="kpi">
+              <div class="kTitle">Today Database</div>
+              <div class="kVal" id="totalTodayDb">-</div>
+              <div class="kMeta">Unique staff <strong id="uniqueTodayDb">-</strong></div>
+            </div>
+            <div class="kpi">
+              <div class="kTitle">Last Sync</div>
+              <div class="kVal" id="lastSyncKpi">-</div>
+              <div class="kMeta" id="lastSyncDateKpi">Update on -</div>
+              <div class="kMeta">Read <strong id="lastResKpi">-</strong></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="title">Device Sync Summary</div>
+          <div class="subCards">
+            <div class="subCard">
+              <div class="subTitle">Status</div>
+              <div class="subVal" id="deviceSyncStatusWrap"><span id="deviceSyncStatus" class="pill">Unknown</span></div>
+            </div>
+            <div class="subCard">
+              <div class="subTitle">Table</div>
+              <div class="subVal mono" id="deviceSyncTable"></div>
+            </div>
+            <div class="subCard">
+              <div class="subTitle">Auto Sync</div>
+              <div class="subVal" id="auto"></div>
+            </div>
+            <div class="subCard">
+              <div class="subTitle">Next Sync</div>
+              <div class="subVal" id="intervalWithUnit"></div>
+            </div>
+            <div class="subCard">
+              <div class="subTitle">Last Read</div>
+              <div class="subVal" id="lastRes"></div>
+            </div>
+            <div class="subCard">
+              <div class="subTitle">Last Sync</div>
+              <div class="subVal mono" id="lastSyncAt"></div>
+            </div>
+            <div class="subCard">
+              <div class="subTitle">Total Records</div>
+              <div class="subVal" id="runCount"></div>
+            </div>
+            <div class="subCard">
+              <div class="subTitle">Local Database Date</div>
+              <div class="subVal mono" id="localWm"></div>
+            </div>
+          </div>
+          <div style="height:10px"></div>
+          <div class="hint">
+            Last Sync is when the middleware finished its last sync run. Local Database Date is the timestamp of the newest punch saved locally (used for incremental reads), so it is usually the same as or slightly earlier than Last Sync.
+          </div>
+          <div style="height:8px"></div>
+          <div class="muted" id="lastErrBrief"></div>
+          <details id="lastErrBox" style="display:none"><summary>Error details</summary><pre id="lastErr"></pre></details>
+        </div>
+
+        <div class="card">
+          <div class="title">Supabase Sync Summary</div>
+          <div class="subCards">
+            <div class="subCard">
+              <div class="subTitle">Status</div>
+              <div class="subVal" id="supaPillWrap"><span id="supaPill" class="pill">Unknown</span></div>
+            </div>
+            <div class="subCard">
+              <div class="subTitle">Table</div>
+              <div class="subVal mono" id="supaTableState"></div>
+            </div>
+            <div class="subCard">
+              <div class="subTitle">Auto Sync</div>
+              <div class="subVal" id="supaAuto"></div>
+            </div>
+            <div class="subCard">
+              <div class="subTitle">Next Sync</div>
+              <div class="subVal" id="supaInterval"></div>
+            </div>
+            <div class="subCard">
+              <div class="subTitle">Last Upserted</div>
+              <div class="subVal" id="supaLastRes"></div>
+            </div>
+            <div class="subCard">
+              <div class="subTitle">Last Sync</div>
+              <div class="subVal mono" id="supaLastSyncAt"></div>
+            </div>
+            <div class="subCard">
+              <div class="subTitle">Total Records</div>
+              <div class="subVal" id="supaTotalRecords"></div>
+            </div>
+            <div class="subCard">
+              <div class="subTitle">Online Database Date</div>
+              <div class="subVal mono" id="dbWm"></div>
+            </div>
+          </div>
+          <div style="height:10px"></div>
+          <div class="hint">
+            Online Database Date is the newest datetime found in Supabase. When Supabase sync is disabled, this value is shown as disabled.
+          </div>
+          <div class="hint" id="supaUrlState" style="display:none"></div>
+        </div>
+        </div>
+      </div>
+
+      <div class="subTabPanel" data-subtab-group="settings" id="subtab-settings-deviceSync">
         <div class="grid">
           <div class="card">
             <div class="title">Device Connection</div>
@@ -5429,7 +5429,7 @@ static partial class Program
         </div>
       </div>
 
-      <div class="subTabPanel" data-subtab-group="settings" id="subtab-settings-database">
+      <div class="subTabPanel" data-subtab-group="settings" id="subtab-settings-databaseSync">
         <div class="grid">
           <div class="card" style="grid-column:1/-1">
             <div class="title">Database Settings</div>
@@ -5569,7 +5569,7 @@ static partial class Program
     let activeSummarySubTab = 'attendance';
     let activeRawSubTab = 'device';
     let activeStaffSubTab = 'staff';
-    let activeSettingsSubTab = 'system';
+    let activeSettingsSubTab = 'connection';
     let activeSheetSubTab = 'daily';
     let sheetDailyByKey = new Map();
     let isSuperadmin = false;
@@ -5698,7 +5698,25 @@ static partial class Program
 
     try { setActiveSubTab('staff', 'staff'); } catch { setActiveSubTab('staff', 'staff'); }
 
-    try { setActiveSubTab('settings', 'system'); } catch { setActiveSubTab('settings', 'system'); }
+    try {
+      const savedSettings = localStorage.getItem('wl10dash.subtab.settings');
+      if (savedSettings) setActiveSubTab('settings', savedSettings);
+      else setActiveSubTab('settings', 'connection');
+    } catch { setActiveSubTab('settings', 'connection'); }
+
+    try {
+      const q = new URLSearchParams(window.location.search || '');
+      const tab = (q.get('tab') || '').trim();
+      const sub = (q.get('subtab') || '').trim();
+      if (tab) setActiveTab(tab);
+      if (sub && sub.includes(':')) {
+        const parts = sub.split(':');
+        const g = (parts[0] || '').trim();
+        const n = (parts[1] || '').trim();
+        if (g && n) setActiveSubTab(g, n);
+      }
+      if (tab || sub) history.replaceState(null, '', window.location.pathname);
+    } catch { }
 
     try {
       const savedSheet = localStorage.getItem('wl10dash.subtab.sheet');
