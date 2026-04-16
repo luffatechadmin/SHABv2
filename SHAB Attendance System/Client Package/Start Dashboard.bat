@@ -2,6 +2,7 @@
 setlocal EnableExtensions
 if /I "%~1" NEQ "__interactive" start "" "%ComSpec%" /k ""%~f0" __interactive" & exit /b
 
+set "SHAB_START_VERSION=2026-04-16"
 set "ROOT=%~dp0"
 set "APP_DIR=%ROOT%App\win-x86"
 set "SDK_INSTALL=%ROOT%ZKTecoSDK\x86\Auto-install_sdk.bat"
@@ -22,6 +23,7 @@ set "DOTNET_X64_EXE=C:\Program Files\dotnet\dotnet.exe"
 echo.
 echo ============================================================
 echo SHAB Attendance System - Start Dashboard
+echo Version: %SHAB_START_VERSION%
 echo ============================================================
 
 if not exist "%APP_DIR%\WL10Middleware.exe" echo ERROR: WL10Middleware.exe not found in: & echo   %APP_DIR% & echo. & pause & exit /b 1
@@ -63,8 +65,20 @@ call :CREATE_SHORTCUT
 echo.
 echo Launching SHAB Attendance Dashboard...
 if not exist "%LOG_DIR%" mkdir "%LOG_DIR%" >nul 2>&1
-if exist "%LOG_FILE%" del /f /q "%LOG_FILE%" >nul 2>&1
-start "SHAB Attendance Middleware" /min "%ComSpec%" /c "\"%CD%\WL10Middleware.exe\" --dashboard --dashboard-port 5099 1>>\"%LOG_FILE%\" 2>>&1"
+echo [%date% %time%] Starting middleware...>>"%LOG_FILE%"
+
+if exist "%PS_EXE%" (
+  "%PS_EXE%" -NoProfile -ExecutionPolicy Bypass -Command ^
+    "$exe=Join-Path (Get-Location) 'WL10Middleware.exe';" ^
+    "$log='%LOG_FILE%';" ^
+    "$p=Start-Process -FilePath $exe -ArgumentList @('--dashboard','--dashboard-port','5099') -RedirectStandardOutput $log -RedirectStandardError $log -PassThru;" ^
+    "Start-Sleep -Seconds 2;" ^
+    "if ($p.HasExited) { exit $p.ExitCode } else { exit 0 }" >nul 2>&1
+  if not errorlevel 1 goto :STARTED_OK
+  echo Middleware exited immediately. See log for details.>>"%LOG_FILE%"
+)
+
+start "SHAB Attendance Middleware" /min "%ComSpec%" /c ""%CD%\WL10Middleware.exe" --dashboard --dashboard-port 5099 1>>"%LOG_FILE%" 2>>&1"
 
 timeout /t 2 /nobreak >nul
 tasklist /fi "imagename eq WL10Middleware.exe" | find /i "WL10Middleware.exe" >nul 2>&1
@@ -75,6 +89,7 @@ if errorlevel 1 (
   if errorlevel 1 goto :START_FAILED
 )
 
+:STARTED_OK
 echo Waiting for dashboard to be ready...
 set /a tries=60
 :WAIT_LOOP
