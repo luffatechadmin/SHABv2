@@ -303,19 +303,27 @@ for /f "tokens=2*" %%A in ('reg query "HKCU\Software\Microsoft\Windows\CurrentVe
 if defined DESKTOP_RAW call set "DESKTOP_DIR=%DESKTOP_RAW%"
 if not defined DESKTOP_DIR set "DESKTOP_DIR=%USERPROFILE%\Desktop"
 if not exist "%DESKTOP_DIR%" exit /b 0
-set "CMD_SHORTCUT=%DESKTOP_DIR%\SHAB Attendance Dashboard.cmd"
-> "%CMD_SHORTCUT%" echo @echo off
->> "%CMD_SHORTCUT%" echo start "" "%ROOT%Start Dashboard.bat"
+del /f /q "%DESKTOP_DIR%\SHAB Attendance Dashboard.cmd" >nul 2>&1
+del /f /q "%DESKTOP_DIR%\SHAB Attendance Dashboard.url" >nul 2>&1
+del /f /q "%DESKTOP_DIR%\SHAB Attendance Dashboard (Browser Only).url" >nul 2>&1
+del /f /q "%DESKTOP_DIR%\SHAB Attendance Dashboard.lnk" >nul 2>&1
 
-set "URL_SHORTCUT=%DESKTOP_DIR%\SHAB Attendance Dashboard (Browser Only).url"
-> "%URL_SHORTCUT%" echo [InternetShortcut]
->> "%URL_SHORTCUT%" echo URL=%DASH_URL%
->> "%URL_SHORTCUT%" echo IconFile=%SHORTCUT_ICON%
->> "%URL_SHORTCUT%" echo IconIndex=0
+set "LNK_SHORTCUT=%DESKTOP_DIR%\SHAB Attendance Dashboard.lnk"
+if exist "%PS_EXE%" (
+  "%PS_EXE%" -NoProfile -ExecutionPolicy Bypass -Command "$desktop='%DESKTOP_DIR%'; $lnk=Join-Path $desktop 'SHAB Attendance Dashboard.lnk'; $root='%ROOT%'; $target=Join-Path $root 'Start Dashboard.bat'; $w=New-Object -ComObject WScript.Shell; $s=$w.CreateShortcut($lnk); $s.TargetPath=$target; $s.WorkingDirectory=$root; $s.Description='SHAB Attendance Dashboard'; if (Test-Path '%SHORTCUT_ICON%') { $s.IconLocation='%SHORTCUT_ICON%,0' }; $s.Save();" >nul 2>&1
+)
+
+if not exist "%LNK_SHORTCUT%" (
+  set "CMD_SHORTCUT=%DESKTOP_DIR%\SHAB Attendance Dashboard.cmd"
+  > "%CMD_SHORTCUT%" echo @echo off
+  >> "%CMD_SHORTCUT%" echo start "" "%ROOT%Start Dashboard.bat"
+  echo Shortcut created:
+  echo   %CMD_SHORTCUT%
+  call :LOG Shortcut created: %CMD_SHORTCUT%
+  exit /b 0
+)
+
 echo Shortcut created:
-echo   %CMD_SHORTCUT%
-echo Shortcut created:
-echo   %URL_SHORTCUT%
-call :LOG Shortcut created: %CMD_SHORTCUT%
-call :LOG Shortcut created: %URL_SHORTCUT%
+echo   %LNK_SHORTCUT%
+call :LOG Shortcut created: %LNK_SHORTCUT%
 exit /b 0
