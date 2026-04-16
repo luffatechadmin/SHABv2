@@ -20,18 +20,30 @@ set "DOTNET_SHARED2=C:\Program Files\dotnet\shared"
 set "DOTNET_X86_EXE=C:\Program Files (x86)\dotnet\dotnet.exe"
 set "DOTNET_X64_EXE=C:\Program Files\dotnet\dotnet.exe"
 
+if not exist "%LOG_DIR%" mkdir "%LOG_DIR%" >nul 2>&1
+
+call :LOG ============================================================
+call :LOG SHAB Attendance System - Start Dashboard
+call :LOG Version: %SHAB_START_VERSION%
+call :LOG Root: %ROOT%
+call :LOG AppDir: %APP_DIR%
+call :LOG User: %USERNAME%
+call :LOG Machine: %COMPUTERNAME%
+call :LOG ============================================================
+
 echo.
 echo ============================================================
 echo SHAB Attendance System - Start Dashboard
 echo Version: %SHAB_START_VERSION%
 echo ============================================================
 
-if not exist "%APP_DIR%\WL10Middleware.exe" echo ERROR: WL10Middleware.exe not found in: & echo   %APP_DIR% & echo. & pause & exit /b 1
+if not exist "%APP_DIR%\WL10Middleware.exe" call :LOG ERROR: WL10Middleware.exe not found in: %APP_DIR% & echo ERROR: WL10Middleware.exe not found in: & echo   %APP_DIR% & echo. & pause & exit /b 1
 
 cd /d "%APP_DIR%"
 
 echo.
 echo Checking if dashboard is already running...
+call :LOG Checking if dashboard is already running (port 5099)...
 call :CHECK_PORT
 if not errorlevel 1 set "READY=1" & goto :OPEN_BROWSER
 
@@ -40,11 +52,13 @@ if not errorlevel 1 goto :SDK_OK
 call :IS_ADMIN
 if not errorlevel 1 goto :SDK_INSTALL
 echo Requesting Administrator access for SDK install...
+call :LOG Requesting Administrator access for SDK install...
 call :ELEVATE_SELF
 exit /b
 
 :SDK_INSTALL
 echo ZKTeco SDK not detected. Installing now - requires Administrator...
+call :LOG ZKTeco SDK not detected. Installing now - requires Administrator...
 if not exist "%SDK_INSTALL%" echo ERROR: SDK installer not found: & echo   %SDK_INSTALL% & echo. & pause & exit /b 1
 call :RUN_AS_ADMIN "%SDK_INSTALL%"
 if errorlevel 1 echo ERROR: Administrator request was cancelled or blocked. & echo Please run this as Administrator: & echo   %SDK_INSTALL% & echo. & pause & exit /b 1
@@ -55,19 +69,25 @@ echo ERROR: ZKTeco SDK install may have failed or was cancelled. & echo Please r
 
 :SDK_OK
 echo ZKTeco SDK detected.
+call :LOG ZKTeco SDK detected (or dll present).
 echo Preparing app files and security settings...
+call :LOG Preparing app files and security settings...
 call :PREPARE_SECURITY
 
+call :LOG Checking .NET runtimes...
 call :CHECK_DOTNET
 if errorlevel 1 goto :DOTNET_MISSING
+call :LOG .NET runtimes detected.
 
 echo Creating desktop shortcuts...
+call :LOG Creating desktop shortcuts...
 call :CREATE_SHORTCUT
 
 echo.
 echo Launching SHAB Attendance Dashboard...
-if not exist "%LOG_DIR%" mkdir "%LOG_DIR%" >nul 2>&1
-echo [%date% %time%] Starting middleware...>>"%LOG_FILE%"
+call :LOG Launching SHAB Attendance Dashboard...
+call :LOG Middleware: WL10Middleware.exe --dashboard --dashboard-port 5099
+call :LOG LogFile: %LOG_FILE%
 
 if exist "%PS_EXE%" (
   "%PS_EXE%" -NoProfile -ExecutionPolicy Bypass -Command ^
@@ -77,7 +97,7 @@ if exist "%PS_EXE%" (
     "Start-Sleep -Seconds 2;" ^
     "if ($p.HasExited) { exit $p.ExitCode } else { exit 0 }" >nul 2>&1
   if not errorlevel 1 goto :STARTED_OK
-  echo Middleware exited immediately. See log for details.>>"%LOG_FILE%"
+  call :LOG Middleware exited immediately after start attempt. See log for details.
 )
 
 start "SHAB Attendance Middleware" /min "%ComSpec%" /c ""%CD%\WL10Middleware.exe" --dashboard --dashboard-port 5099 1>>"%LOG_FILE%" 2>>&1"
@@ -85,6 +105,7 @@ start "SHAB Attendance Middleware" /min "%ComSpec%" /c ""%CD%\WL10Middleware.exe
 timeout /t 2 /nobreak >nul
 tasklist /fi "imagename eq WL10Middleware.exe" | find /i "WL10Middleware.exe" >nul 2>&1
 if errorlevel 1 (
+  call :LOG Middleware not found in tasklist after initial start attempt. Retrying...
   start "SHAB Attendance Middleware" "%ComSpec%" /c "\"%CD%\WL10Middleware.exe\" --dashboard --dashboard-port 5099 1>>\"%LOG_FILE%\" 2>>&1"
   timeout /t 2 /nobreak >nul
   tasklist /fi "imagename eq WL10Middleware.exe" | find /i "WL10Middleware.exe" >nul 2>&1
@@ -93,6 +114,7 @@ if errorlevel 1 (
 
 :STARTED_OK
 echo Waiting for dashboard to be ready...
+call :LOG Waiting for dashboard to be ready (port 5099)...
 set /a tries=60
 :WAIT_LOOP
 call :CHECK_PORT
@@ -106,9 +128,11 @@ goto :WAIT_LOOP
 echo.
 if defined READY (
   echo Opening browser: %DASH_URL%
+  call :LOG Dashboard reachable. Opening browser: %DASH_URL%
   call :OPEN_URL "%DASH_URL%"
   echo.
   echo Default login: superadmin / abcd1234
+  call :LOG Done.
   endlocal
   exit /b 0
 )
@@ -116,6 +140,7 @@ if defined READY (
 :NOT_READY
 echo Dashboard did not become reachable on port 5099.
 echo If it started successfully, open %DASH_URL% manually.
+call :LOG ERROR: Dashboard did not become reachable on port 5099.
 echo.
 echo Port status:
 netstat -ano | findstr /R /C:":5099 .*LISTENING"
@@ -125,6 +150,11 @@ echo.
 echo Desktop path:
 echo   %DESKTOP_DIR%
 echo.
+call :LOG Port status:
+netstat -ano | findstr /R /C:":5099 .*LISTENING" >>"%LOG_FILE%" 2>>&1
+call :LOG Tasklist for WL10Middleware.exe:
+tasklist /fi "imagename eq WL10Middleware.exe" >>"%LOG_FILE%" 2>>&1
+call :LOG Desktop path: %DESKTOP_DIR%
 if exist "%LOG_FILE%" echo Log file: & echo   %LOG_FILE% & echo. & start "" notepad.exe "%LOG_FILE%"
 if exist "%LOG_FILE%" findstr /i /c:"You must install or update .NET" "%LOG_FILE%" >nul 2>&1 & call :OPEN_URL "https://dotnet.microsoft.com/en-us/download/dotnet/8.0"
 for %%A in ("%LOG_FILE%") do set "LOG_SIZE=%%~zA"
@@ -139,10 +169,12 @@ exit /b 1
 :START_FAILED
 echo Middleware process did not start.
 echo This is usually caused by missing .NET runtime, antivirus blocking the EXE, or missing permissions.
+call :LOG ERROR: Middleware process did not start.
 echo.
 echo Desktop path:
 echo   %DESKTOP_DIR%
 echo.
+call :LOG Desktop path: %DESKTOP_DIR%
 if exist "%LOG_FILE%" echo Log file: & echo   %LOG_FILE% & echo. & start "" notepad.exe "%LOG_FILE%"
 if exist "%LOG_FILE%" findstr /i /c:"You must install or update .NET" "%LOG_FILE%" >nul 2>&1 & call :OPEN_URL "https://dotnet.microsoft.com/en-us/download/dotnet/8.0"
 for %%A in ("%LOG_FILE%") do set "LOG_SIZE=%%~zA"
@@ -167,6 +199,7 @@ echo ERROR: Required .NET runtimes are missing for this app.
 echo This app requires Windows x86 runtimes:
 echo - .NET 8 Runtime for Windows x86
 echo - ASP.NET Core 8 Runtime for Windows x86
+call :LOG ERROR: Required .NET runtimes are missing for this app.
 echo.
 echo Download .NET 8 here and install the Windows x86 runtimes:
 echo https://dotnet.microsoft.com/en-us/download/dotnet/8.0
@@ -204,9 +237,10 @@ exit /b 1
 if not exist "%PS_EXE%" exit /b 0
 "%PS_EXE%" -NoProfile -ExecutionPolicy Bypass -Command ^
   "$app='%APP_DIR%';" ^
-  "try { Get-ChildItem -Path $app -Recurse -File -Include *.exe,*.dll,*.bat | ForEach-Object { Unblock-File -Path $_.FullName -ErrorAction SilentlyContinue } } catch {};" ^
-  "try { if (([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { Add-MpPreference -ExclusionPath $app -ErrorAction SilentlyContinue | Out-Null } } catch {};" ^
-  "exit 0" >nul 2>&1
+  "Write-Output ('Security prep app path: ' + $app);" ^
+  "try { $files = Get-ChildItem -Path $app -Recurse -File -Include *.exe,*.dll,*.bat -ErrorAction SilentlyContinue; foreach($f in $files){ Unblock-File -Path $f.FullName -ErrorAction SilentlyContinue }; Write-Output ('Unblocked files: ' + ($files | Measure-Object).Count) } catch { Write-Output ('Unblock failed: ' + $_.Exception.Message) };" ^
+  "try { $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator); Write-Output ('IsAdmin: ' + $isAdmin); if ($isAdmin) { Add-MpPreference -ExclusionPath $app -ErrorAction SilentlyContinue | Out-Null; Write-Output 'Defender exclusion attempted.' } else { Write-Output 'Defender exclusion skipped (not admin).' } } catch { Write-Output ('Defender exclusion failed: ' + $_.Exception.Message) };" ^
+  "exit 0" >>"%LOG_FILE%" 2>>&1
 exit /b 0
 
 :CHECK_DOTNET
@@ -224,6 +258,12 @@ if exist "C:\Program Files (x86)\" (
 
 if defined NETCORE_OK if defined ASPNET_OK exit /b 0
 exit /b 1
+
+:LOG
+setlocal EnableExtensions
+set "MSG=%*"
+>>"%LOG_FILE%" echo [%date% %time%] %MSG%
+endlocal & exit /b 0
 
 :OPEN_URL
 rundll32 url.dll,FileProtocolHandler "%~1" >nul 2>&1
@@ -248,4 +288,6 @@ echo Shortcut created:
 echo   %CMD_SHORTCUT%
 echo Shortcut created:
 echo   %URL_SHORTCUT%
+call :LOG Shortcut created: %CMD_SHORTCUT%
+call :LOG Shortcut created: %URL_SHORTCUT%
 exit /b 0
