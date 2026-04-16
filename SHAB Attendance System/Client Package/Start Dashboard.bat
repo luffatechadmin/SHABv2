@@ -1,6 +1,5 @@
 @echo off
 setlocal EnableExtensions
-if /I "%~1" NEQ "__interactive" start "" "%ComSpec%" /k ""%~f0" __interactive" & exit /b
 
 set "SHAB_START_VERSION=2026-04-16"
 set "ROOT=%~dp0"
@@ -108,23 +107,20 @@ if exist "%PS_EXE%" (
   if not errorlevel 1 goto :STARTED_OK
   call :LOG Middleware exited immediately after start attempt. See middleware stderr/stdout.
 ) else (
-  start "SHAB Attendance Middleware" /min "%ComSpec%" /c ""%CD%\WL10Middleware.exe" --dashboard --dashboard-port 5099 1>>"%MIDDLE_OUT%" 2>>"%MIDDLE_ERR%""
+  start "SHAB Attendance Middleware" /min ""%CD%\WL10Middleware.exe" --dashboard --dashboard-port 5099
 )
 
 timeout /t 2 /nobreak >nul
 tasklist /fi "imagename eq WL10Middleware.exe" | find /i "WL10Middleware.exe" >nul 2>&1
 if errorlevel 1 (
-  call :LOG Middleware not found in tasklist after initial start attempt. Retrying...
-  start "SHAB Attendance Middleware" "%ComSpec%" /c "\"%CD%\WL10Middleware.exe\" --dashboard --dashboard-port 5099 1>>\"%MIDDLE_OUT%\" 2>>\"%MIDDLE_ERR%\""
-  timeout /t 2 /nobreak >nul
-  tasklist /fi "imagename eq WL10Middleware.exe" | find /i "WL10Middleware.exe" >nul 2>&1
-  if errorlevel 1 goto :START_FAILED
+  call :LOG Middleware not found in tasklist after initial start attempt.
+  goto :START_FAILED
 )
 
 :STARTED_OK
 echo Waiting for dashboard to be ready...
 call :LOG Waiting for dashboard to be ready (port 5099)...
-set /a tries=60
+set /a tries=120
 :WAIT_LOOP
 call :CHECK_PORT
 if not errorlevel 1 set "READY=1" & goto :OPEN_BROWSER
@@ -225,6 +221,11 @@ endlocal
 exit /b 1
 
 :CHECK_PORT
+if exist "%PS_EXE%" (
+  "%PS_EXE%" -NoProfile -ExecutionPolicy Bypass -Command ^
+    "$c=New-Object Net.Sockets.TcpClient; try{$c.Connect('127.0.0.1',5099); $c.Close(); exit 0}catch{exit 1}" >nul 2>&1
+  if not errorlevel 1 exit /b 0
+)
 netstat -ano | findstr /R /C:":5099 .*LISTENING" >nul 2>&1
 if not errorlevel 1 exit /b 0
 exit /b 1
@@ -291,6 +292,8 @@ wevtutil qe Application /c:20 /f:text /rd:true /q:"*[System[(EventID=1000 or Eve
 exit /b 0
 
 :OPEN_URL
+if exist "%PS_EXE%" "%PS_EXE%" -NoProfile -ExecutionPolicy Bypass -Command "Start-Process '%~1'" >nul 2>&1
+start "" "%~1" >nul 2>&1
 rundll32 url.dll,FileProtocolHandler "%~1" >nul 2>&1
 exit /b 0
 
