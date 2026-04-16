@@ -13,7 +13,6 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
 static partial class Program
@@ -2094,58 +2093,6 @@ static partial class Program
         return TryParseHm(parts[0], out start) && TryParseHm(parts[1], out end);
       }
 
-      static HashSet<DayOfWeek> ParseWorkingDays(string raw)
-      {
-        raw = (raw ?? string.Empty).Trim();
-        if (raw.Length == 0) return new HashSet<DayOfWeek>(new[] { DayOfWeek.Monday, DayOfWeek.Tuesday, DayOfWeek.Wednesday, DayOfWeek.Thursday, DayOfWeek.Friday });
-        raw = raw.Replace("to", "–", StringComparison.OrdinalIgnoreCase);
-        raw = raw.Replace("-", "–", StringComparison.Ordinal);
-        var parts = raw.Split(new[] { ',', ';', '/', ' ' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-
-        static bool TryMap(string s, out DayOfWeek d)
-        {
-          d = default;
-          s = (s ?? string.Empty).Trim();
-          if (s.Length < 3) return false;
-          var k = s[..3].ToLowerInvariant();
-          if (k == "mon") { d = DayOfWeek.Monday; return true; }
-          if (k == "tue") { d = DayOfWeek.Tuesday; return true; }
-          if (k == "wed") { d = DayOfWeek.Wednesday; return true; }
-          if (k == "thu") { d = DayOfWeek.Thursday; return true; }
-          if (k == "fri") { d = DayOfWeek.Friday; return true; }
-          if (k == "sat") { d = DayOfWeek.Saturday; return true; }
-          if (k == "sun") { d = DayOfWeek.Sunday; return true; }
-          return false;
-        }
-
-        if (raw.Contains('–', StringComparison.Ordinal))
-        {
-          var dashParts = raw.Split('–', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-          if (dashParts.Length == 2 && TryMap(dashParts[0], out var a) && TryMap(dashParts[1], out var b))
-          {
-            var set = new HashSet<DayOfWeek>();
-            var cur = (int)a;
-            var endI = (int)b;
-            for (var i = 0; i < 7; i++)
-            {
-              set.Add((DayOfWeek)cur);
-              if (cur == endI) break;
-              cur = (cur + 1) % 7;
-            }
-            return set;
-          }
-        }
-
-        var res = new HashSet<DayOfWeek>();
-        foreach (var p in parts)
-        {
-          if (!TryMap(p, out var d)) continue;
-          res.Add(d);
-        }
-        if (res.Count == 0) res = new HashSet<DayOfWeek>(new[] { DayOfWeek.Monday, DayOfWeek.Tuesday, DayOfWeek.Wednesday, DayOfWeek.Thursday, DayOfWeek.Friday });
-        return res;
-      }
-
       static int MinutesBetween(TimeOnly a, TimeOnly b)
       {
         var am = a.Hour * 60 + a.Minute;
@@ -3997,7 +3944,7 @@ static partial class Program
           try { _ = zk.SetCommPassword(cfg.CommPassword); } catch { }
           var connected = false;
           try { connected = (bool)zk.Connect_Net(cfg.DeviceIp, cfg.DevicePort); } catch { connected = false; }
-          if (!connected) return Results.Json(new { ok = false, error = $"Failed to connect to WL10 at {cfg.DeviceIp}:{cfg.DevicePort}." }, JsonOptions);
+          if (!connected) return Results.Json(new { ok = false, error = $"Failed to connect to WL10 at {cfg.DeviceIp}:{cfg.DevicePort}.", device_ip = cfg.DeviceIp, device_port = cfg.DevicePort, machine_number = cfg.MachineNumber }, JsonOptions);
 
           try { _ = (bool)zk.ReadAllUserID(cfg.MachineNumber); } catch { }
 
@@ -4019,16 +3966,63 @@ static partial class Program
             }
           }
 
+          try { _ = zk.EnableDevice(cfg.MachineNumber, false); } catch { }
+
           var created = false;
           try { created = (bool)zk.SSR_SetUserInfo(cfg.MachineNumber, userId, firstName, "", 0, true); } catch { created = false; }
           if (!created)
           {
             try { created = (bool)zk.SetUserInfo(cfg.MachineNumber, int.Parse(userId, CultureInfo.InvariantCulture), firstName, "", 0, true); } catch { created = false; }
           }
-          if (!created) return Results.Json(new { ok = false, error = "Device rejected user create request." }, JsonOptions);
+          if (!created)
+          {
+            var lastErr = 0;
+            try { _ = (bool)zk.GetLastError(out lastErr); } catch { lastErr = 0; }
+            try { _ = zk.EnableDevice(cfg.MachineNumber, true); } catch { }
+            return Results.Json(new { ok = false, error = "Device rejected user create request.", last_error = lastErr, device_ip = cfg.DeviceIp, device_port = cfg.DevicePort, machine_number = cfg.MachineNumber }, JsonOptions);
+          }
 
           try { _ = (bool)zk.RefreshData(cfg.MachineNumber); } catch { }
-          return Results.Json(new { ok = true, created = true }, JsonOptions);
+          try { _ = zk.EnableDevice(cfg.MachineNumber, true); } catch { }
+
+          var verified = false;
+          try
+          {
+            string vName;
+            string vPwd;
+            int vPriv;
+            bool vEnabled;
+            verified = (bool)zk.SSR_GetUserInfo(cfg.MachineNumber, userId, out vName, out vPwd, out vPriv, out vEnabled);
+          }
+          catch
+          {
+            verified = false;
+          }
+
+          if (!verified)
+          {
+            try { _ = (bool)zk.ReadAllUserID(cfg.MachineNumber); } catch { }
+            while (true)
+            {
+              string enrollNumber;
+              string name;
+              string password;
+              int privilege;
+              bool enabled;
+
+              bool ok;
+              try { ok = (bool)zk.SSR_GetAllUserInfo(cfg.MachineNumber, out enrollNumber, out name, out password, out privilege, out enabled); }
+              catch { break; }
+              if (!ok) break;
+              if (string.Equals((enrollNumber ?? string.Empty).Trim(), userId, StringComparison.Ordinal))
+              {
+                verified = true;
+                break;
+              }
+            }
+          }
+
+          return Results.Json(new { ok = true, created = true, verified, device_ip = cfg.DeviceIp, device_port = cfg.DevicePort, machine_number = cfg.MachineNumber }, JsonOptions);
         }
         finally
         {
@@ -4210,7 +4204,7 @@ static partial class Program
         {
           if (nextUtc is null || version != lastSeenVersion)
           {
-            nextUtc = ComputeNextScheduledSyncUtc(sched, nowUtc, tz);
+            nextUtc = ComputeNextScheduledSyncUtc(sched ?? Array.Empty<string>(), nowUtc, tz);
             runtime.NextSyncAtUtc = nextUtc;
             lastSeenVersion = version;
           }
@@ -4236,7 +4230,7 @@ static partial class Program
           _ = ExecuteSync(verify: false, today: false, supabaseOverride: null, app.Lifetime.ApplicationStopping);
           if (hasSchedule)
           {
-            nextUtc = ComputeNextScheduledSyncUtc(sched, nowUtc.AddSeconds(1), tz);
+            nextUtc = ComputeNextScheduledSyncUtc(sched ?? Array.Empty<string>(), nowUtc.AddSeconds(1), tz);
           }
           else
           {
@@ -6959,9 +6953,15 @@ static partial class Program
       const firstName = String(row && row.full_name ? row.full_name : '').trim();
       const r = await postJson('/api/device/user/create', { user_id: id, first_name: firstName });
       if (r && r.ok) {
-        out(r.already_exists ? ('Device already has user ' + id + '.') : ('Created user ' + id + ' on device.'));
+        if (r.already_exists) out('Device already has user ' + id + '.');
+        else if (r.created && r.verified === false) out('Created user ' + id + ' on device, but could not verify. Check device screen.');
+        else out('Created user ' + id + ' on device.');
       } else {
-        out('Device provision failed: ' + String((r && r.error) ? r.error : 'unknown error'));
+        const base = String((r && r.error) ? r.error : 'unknown error');
+        const le = (r && (r.last_error ?? null) !== null) ? (' last_error=' + String(r.last_error)) : '';
+        const dev = (r && r.device_ip) ? (' device=' + String(r.device_ip) + ':' + String(r.device_port || '')) : '';
+        const mn = (r && (r.machine_number ?? null) !== null) ? (' machine=' + String(r.machine_number)) : '';
+        out('Device provision failed: ' + base + le + dev + mn);
       }
     }
 
