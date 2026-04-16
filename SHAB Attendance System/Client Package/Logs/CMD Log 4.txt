@@ -1,0 +1,13 @@
+
+Checking if dashboard is already running...
+ZKTeco SDK not detected. Installing now - requires Administrator...
+WARNING: ZKTeco SDK dll is present but COM registration was not detected.
+Device functions may not work until the SDK is registered.
+ZKTeco SDK detected.
+
+Launching SHAB Attendance Dashboard...
+Middleware process did not start.
+This is usually caused by missing .NET runtime, antivirus blocking the EXE, or missing permissions.
+
+Running middleware once to capture startup error...
+
