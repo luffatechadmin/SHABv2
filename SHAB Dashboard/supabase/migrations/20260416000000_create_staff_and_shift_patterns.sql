@@ -1,3 +1,13 @@
+create or replace function public.shab_set_updated_at()
+returns trigger
+language plpgsql
+as $$
+begin
+  new.updated_at = now();
+  return new;
+end;
+$$;
+
 create table if not exists public.staff (
   id text primary key,
   full_name text not null default '',
