@@ -3957,6 +3957,90 @@ static partial class Program
       return Results.Json(new { ok = true }, JsonOptions);
     }).RequireAuthorization();
 
+    app.MapPost("/api/device/user/create", async (HttpContext ctx) =>
+    {
+      var isSuperadmin = string.Equals(ctx.User.FindFirstValue("role") ?? string.Empty, "superadmin", StringComparison.Ordinal);
+      if (!isSuperadmin) return Results.StatusCode(StatusCodes.Status403Forbidden);
+
+      static string GetProp(JsonElement el, string name)
+      {
+        if (el.ValueKind != JsonValueKind.Object) return string.Empty;
+        if (!el.TryGetProperty(name, out var v)) return string.Empty;
+        return (v.GetString() ?? string.Empty).Trim();
+      }
+
+      using var doc = await JsonDocument.ParseAsync(ctx.Request.Body, cancellationToken: ctx.RequestAborted);
+      var userId = GetProp(doc.RootElement, "user_id");
+      var firstName = GetProp(doc.RootElement, "first_name");
+      if (userId.Length == 0) return Results.Json(new { ok = false, error = "user_id is required" }, JsonOptions);
+      if (!userId.All(char.IsDigit)) return Results.Json(new { ok = false, error = "user_id must be numeric for WL10 enrollment number" }, JsonOptions);
+      if (firstName.Length == 0) firstName = userId;
+
+      AppConfig cfg;
+      lock (stateGate) cfg = currentConfig;
+
+      try
+      {
+        var type = Type.GetTypeFromProgID("zkemkeeper.CZKEM", throwOnError: false);
+        if (type is null)
+        {
+          try { type = Type.GetTypeFromCLSID(new Guid("00853A19-BD51-419B-9269-2DABE57EB61F"), throwOnError: false); } catch { type = null; }
+        }
+        if (type is null) return Results.Json(new { ok = false, error = "ZKTeco SDK (zkemkeeper) is not installed/registered on this PC." }, JsonOptions);
+
+        dynamic? zk = null;
+        try { zk = Activator.CreateInstance(type); } catch { zk = null; }
+        if (zk is null) return Results.Json(new { ok = false, error = "Failed to initialize zkemkeeper COM object." }, JsonOptions);
+
+        try
+        {
+          try { _ = zk.SetCommPassword(cfg.CommPassword); } catch { }
+          var connected = false;
+          try { connected = (bool)zk.Connect_Net(cfg.DeviceIp, cfg.DevicePort); } catch { connected = false; }
+          if (!connected) return Results.Json(new { ok = false, error = $"Failed to connect to WL10 at {cfg.DeviceIp}:{cfg.DevicePort}." }, JsonOptions);
+
+          try { _ = (bool)zk.ReadAllUserID(cfg.MachineNumber); } catch { }
+
+          while (true)
+          {
+            string enrollNumber;
+            string name;
+            string password;
+            int privilege;
+            bool enabled;
+
+            bool ok;
+            try { ok = (bool)zk.SSR_GetAllUserInfo(cfg.MachineNumber, out enrollNumber, out name, out password, out privilege, out enabled); }
+            catch { break; }
+            if (!ok) break;
+            if (string.Equals((enrollNumber ?? string.Empty).Trim(), userId, StringComparison.Ordinal))
+            {
+              return Results.Json(new { ok = true, already_exists = true }, JsonOptions);
+            }
+          }
+
+          var created = false;
+          try { created = (bool)zk.SSR_SetUserInfo(cfg.MachineNumber, userId, firstName, "", 0, true); } catch { created = false; }
+          if (!created)
+          {
+            try { created = (bool)zk.SetUserInfo(cfg.MachineNumber, int.Parse(userId, CultureInfo.InvariantCulture), firstName, "", 0, true); } catch { created = false; }
+          }
+          if (!created) return Results.Json(new { ok = false, error = "Device rejected user create request." }, JsonOptions);
+
+          try { _ = (bool)zk.RefreshData(cfg.MachineNumber); } catch { }
+          return Results.Json(new { ok = true, created = true }, JsonOptions);
+        }
+        finally
+        {
+          try { zk.Disconnect(); } catch { }
+        }
+      }
+      catch (Exception ex)
+      {
+        return Results.Json(new { ok = false, error = ex.Message }, JsonOptions);
+      }
+    }).RequireAuthorization();
+
     app.MapGet("/api/shifts", (HttpContext ctx) =>
     {
       AppConfig cfg;
@@ -5581,7 +5665,7 @@ static partial class Program
                 <tr>
                   <th style="width:44px"></th>
                   <th style="width:90px">User ID</th>
-                  <th style="width:180px">Full Name</th>
+                  <th style="width:180px">First Name</th>
                   <th style="width:140px">Role</th>
                   <th style="width:160px">Department</th>
                   <th style="width:110px">Status</th>
@@ -5623,7 +5707,7 @@ static partial class Program
               </thead>
               <tbody id="shiftBody"></tbody>
             </table>
-            <div class="hint">Shift patterns are stored locally in the middleware state.</div>
+            <div class="hint">Shift patterns are stored in Supabase when configured (fallback to local state if Supabase is not configured).</div>
           </div>
         </div>
       </div>
@@ -6445,21 +6529,70 @@ static partial class Program
       for (const f of (fields || [])) {
         const lab = document.createElement('label');
         lab.textContent = f.label || f.key || '';
-        const input = document.createElement('input');
-        input.id = 'modal_' + f.key;
-        input.type = f.type || 'text';
-        input.placeholder = f.placeholder || '';
-        input.value = (initialValues && (initialValues[f.key] ?? null) !== null) ? String(initialValues[f.key]) : '';
-        if (f.disabled) input.disabled = true;
+        let ctrl = null;
+        const kind = String(f.kind || '').trim().toLowerCase();
+        if (kind === 'select') {
+          const sel = document.createElement('select');
+          sel.id = 'modal_' + f.key;
+          const opts = Array.isArray(f.options) ? f.options : [];
+          for (const o of opts) {
+            const opt = document.createElement('option');
+            opt.value = String(o ?? '');
+            opt.textContent = String(o ?? '');
+            sel.appendChild(opt);
+          }
+          const raw = (initialValues && (initialValues[f.key] ?? null) !== null) ? String(initialValues[f.key]) : '';
+          const v = raw || String(f.default || '');
+          if (v) sel.value = v;
+          if (f.disabled) sel.disabled = true;
+          ctrl = sel;
+        } else if (kind === 'datalist') {
+          const inp = document.createElement('input');
+          const listId = 'modal_list_' + f.key;
+          inp.id = 'modal_' + f.key;
+          inp.type = f.type || 'text';
+          inp.placeholder = f.placeholder || '';
+          inp.setAttribute('list', listId);
+          inp.value = (initialValues && (initialValues[f.key] ?? null) !== null) ? String(initialValues[f.key]) : '';
+          if (f.disabled) inp.disabled = true;
+          const dl = document.createElement('datalist');
+          dl.id = listId;
+          const opts = Array.isArray(f.options) ? f.options : [];
+          for (const o of opts) {
+            const opt = document.createElement('option');
+            opt.value = String(o ?? '');
+            dl.appendChild(opt);
+          }
+          body.appendChild(lab);
+          body.appendChild(inp);
+          body.appendChild(dl);
+          continue;
+        } else {
+          const input = document.createElement('input');
+          input.id = 'modal_' + f.key;
+          input.type = f.type || (kind === 'checkbox' ? 'checkbox' : 'text');
+          input.placeholder = f.placeholder || '';
+          if (kind === 'checkbox') {
+            const raw = (initialValues && (initialValues[f.key] ?? null) !== null) ? String(initialValues[f.key]) : '';
+            const def = String(f.default || '').toLowerCase();
+            input.checked = (raw === 'true' || raw === '1' || raw === 'yes') || (raw === '' && (def === 'true' || def === '1' || def === 'yes'));
+          } else {
+            input.value = (initialValues && (initialValues[f.key] ?? null) !== null) ? String(initialValues[f.key]) : (String(f.default || '') || '');
+          }
+          if (f.disabled) input.disabled = true;
+          ctrl = input;
+        }
         body.appendChild(lab);
-        body.appendChild(input);
+        body.appendChild(ctrl);
       }
 
       modalOnSave = async () => {
         const values = {};
         for (const f of (fields || [])) {
           const inp = el('modal_' + f.key);
-          values[f.key] = inp ? String(inp.value ?? '').trim() : '';
+          const kind = String(f.kind || '').trim().toLowerCase();
+          if (kind === 'checkbox') values[f.key] = !!(inp && inp.checked);
+          else values[f.key] = inp ? String(inp.value ?? '').trim() : '';
         }
         const saveBtn = el('modalSave');
         const cancelBtn = el('modalCancel');
@@ -6480,7 +6613,7 @@ static partial class Program
       };
 
       back.style.display = 'flex';
-      const first = body.querySelector('input');
+      const first = body.querySelector('input,select');
       if (first) first.focus();
     }
 
@@ -6802,7 +6935,10 @@ static partial class Program
           '<td>' + escHtml(r.status ?? '') + '</td>' +
           '<td>' + escHtml(r.date_joined ?? '') + '</td>' +
           '<td>' + escHtml(r.shift_pattern ?? '') + '</td>' +
-          '<td><button class="iconBtn staffEditRow" type="button" data-id="' + escHtml(staffId) + '" title="Edit">✎</button></td>';
+          '<td>' +
+            '<button class="iconBtn staffProvisionRow" type="button" data-id="' + escHtml(staffId) + '" title="Create on device">↥</button>' +
+            '<button class="iconBtn staffEditRow" type="button" data-id="' + escHtml(staffId) + '" title="Edit">✎</button>' +
+          '</td>';
         body.appendChild(tr);
       }
       updateStaffDeleteEnabled();
@@ -6815,6 +6951,18 @@ static partial class Program
       const filtered = applyStaffFilters(lastStaffRows, el('staffFilter')?.value || '');
       const msg = err ? ('No staff records. ' + err) : 'No staff records.';
       await renderStaffTable(filtered, msg);
+    }
+
+    async function provisionStaffToDevice(row) {
+      const id = String(row && row.user_id ? row.user_id : '').trim();
+      if (!id) { out('Missing user id.'); return; }
+      const firstName = String(row && row.full_name ? row.full_name : '').trim();
+      const r = await postJson('/api/device/user/create', { user_id: id, first_name: firstName });
+      if (r && r.ok) {
+        out(r.already_exists ? ('Device already has user ' + id + '.') : ('Created user ' + id + ' on device.'));
+      } else {
+        out('Device provision failed: ' + String((r && r.error) ? r.error : 'unknown error'));
+      }
     }
 
     function applyShiftFilters(rows, query) {
@@ -6891,15 +7039,23 @@ static partial class Program
 
     function staffFields(mode) {
       const roId = mode === 'edit';
-      return [
-        { key: 'user_id', label: 'User ID', placeholder: 'e.g. 1001', disabled: roId },
-        { key: 'full_name', label: 'Full Name' },
-        { key: 'role', label: 'Role' },
-        { key: 'department', label: 'Department' },
-        { key: 'status', label: 'Status' },
-        { key: 'date_joined', label: 'Date Joined', placeholder: 'YYYY-MM-DD' },
-        { key: 'shift_pattern', label: 'Shift Pattern' },
+      const depts = Array.from(new Set((lastStaffRows || []).map(r => String(r.department ?? '').trim()).filter(s => !!s))).sort((a, b) => a.localeCompare(b));
+      const shifts = Array.from(new Set((lastShiftRows || []).map(r => String(r.pattern ?? '').trim()).filter(s => !!s)));
+      if (!shifts.includes('Normal')) shifts.unshift('Normal');
+      shifts.sort((a, b) => a.localeCompare(b));
+      const fields = [
+        { key: 'user_id', label: 'User ID', placeholder: 'e.g. 10', disabled: roId },
+        { key: 'full_name', label: 'First Name' },
+        { key: 'role', label: 'Role', kind: 'select', options: ['Staff', 'Supervisor', 'Manager', 'Superadmin'], default: 'Staff' },
+        { key: 'department', label: 'Department', kind: 'datalist', options: depts, placeholder: 'Select or type department' },
+        { key: 'status', label: 'Status', kind: 'select', options: ['Active', 'Inactive'], default: 'Active' },
+        { key: 'date_joined', label: 'Date Joined', type: 'date' },
+        { key: 'shift_pattern', label: 'Shift Pattern', kind: 'select', options: shifts, default: 'Normal' },
       ];
+      if (mode === 'add') {
+        fields.push({ key: 'provision_to_device', label: 'Create user on device', kind: 'checkbox', default: 'true' });
+      }
+      return fields;
     }
 
     function shiftFields(mode) {
@@ -8423,7 +8579,8 @@ static partial class Program
     document.addEventListener('keydown', (e) => { if (e && e.key === 'Escape') closeModal(); });
 
     const staffAddBtn = el('staffAdd');
-    if (staffAddBtn) staffAddBtn.addEventListener('click', () => {
+    if (staffAddBtn) staffAddBtn.addEventListener('click', async () => {
+      await refreshShiftPatterns();
       openModal('Add Staff', staffFields('add'), {}, async (vals) => {
         const userId = String(vals.user_id || '').trim();
         if (!userId) throw new Error('User ID is required');
@@ -8440,6 +8597,7 @@ static partial class Program
         lastStaffRows = lastStaffRows.concat([row]).sort((a, b) => String(a.user_id ?? '').localeCompare(String(b.user_id ?? '')));
         await saveStaffRows(lastStaffRows);
         await refreshStaffRecords();
+        if (vals.provision_to_device) await provisionStaffToDevice(row);
       });
     });
 
@@ -8451,12 +8609,20 @@ static partial class Program
       });
       staffBodyEl.addEventListener('click', (e) => {
         const t = e && e.target;
+        if (t && t.classList && t.classList.contains('staffProvisionRow')) {
+          const id = String(t.getAttribute('data-id') || '').trim();
+          if (!id) return;
+          const existing = lastStaffRows.find(r => String(r.user_id ?? '').trim() === id);
+          if (!existing) return;
+          provisionStaffToDevice(existing);
+          return;
+        }
         if (!t || !t.classList || !t.classList.contains('staffEditRow')) return;
         const id = String(t.getAttribute('data-id') || '').trim();
         if (!id) return;
         const existing = lastStaffRows.find(r => String(r.user_id ?? '').trim() === id);
         if (!existing) return;
-        openModal('Edit Staff', staffFields('edit'), existing, async (vals) => {
+        refreshShiftPatterns().then(() => openModal('Edit Staff', staffFields('edit'), existing, async (vals) => {
           lastStaffRows = lastStaffRows.map(r => {
             if (String(r.user_id ?? '').trim() !== id) return r;
             return {
@@ -8471,7 +8637,7 @@ static partial class Program
           });
           await saveStaffRows(lastStaffRows);
           await refreshStaffRecords();
-        });
+        }));
       });
     }
 
