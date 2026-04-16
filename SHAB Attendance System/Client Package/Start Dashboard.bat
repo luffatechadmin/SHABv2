@@ -305,9 +305,9 @@ if not defined DESKTOP_DIR set "DESKTOP_DIR=%USERPROFILE%\Desktop"
 if not exist "%DESKTOP_DIR%" exit /b 0
 set "CMD_SHORTCUT=%DESKTOP_DIR%\SHAB Attendance Dashboard.cmd"
 > "%CMD_SHORTCUT%" echo @echo off
->> "%CMD_SHORTCUT%" echo start "" "%ROOT%Start Dashboard.bat" __interactive
+>> "%CMD_SHORTCUT%" echo start "" "%ROOT%Start Dashboard.bat"
 
-set "URL_SHORTCUT=%DESKTOP_DIR%\SHAB Attendance Dashboard.url"
+set "URL_SHORTCUT=%DESKTOP_DIR%\SHAB Attendance Dashboard (Browser Only).url"
 > "%URL_SHORTCUT%" echo [InternetShortcut]
 >> "%URL_SHORTCUT%" echo URL=%DASH_URL%
 >> "%URL_SHORTCUT%" echo IconFile=%SHORTCUT_ICON%
