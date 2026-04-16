@@ -120,8 +120,13 @@ netstat -ano | findstr /R /C:":5099 .*LISTENING"
 echo.
 tasklist /fi "imagename eq WL10Middleware.exe"
 echo.
+echo Desktop path:
+echo   %DESKTOP_DIR%
+echo.
 if exist "%LOG_FILE%" echo Log file: & echo   %LOG_FILE% & echo. & start "" notepad.exe "%LOG_FILE%"
 if exist "%LOG_FILE%" findstr /i /c:"You must install or update .NET" "%LOG_FILE%" >nul 2>&1 & call :OPEN_URL "https://dotnet.microsoft.com/en-us/download/dotnet/8.0"
+for %%A in ("%LOG_FILE%") do set "LOG_SIZE=%%~zA"
+if "%LOG_SIZE%"=="0" echo NOTE: Log file is empty. Windows Defender or SmartScreen may be blocking WL10Middleware.exe. & echo Try: Right-click WL10Middleware.exe ^> Properties ^> Unblock, then run again.
 echo.
 pause
 echo.
@@ -133,8 +138,13 @@ exit /b 1
 echo Middleware process did not start.
 echo This is usually caused by missing .NET runtime, antivirus blocking the EXE, or missing permissions.
 echo.
+echo Desktop path:
+echo   %DESKTOP_DIR%
+echo.
 if exist "%LOG_FILE%" echo Log file: & echo   %LOG_FILE% & echo. & start "" notepad.exe "%LOG_FILE%"
 if exist "%LOG_FILE%" findstr /i /c:"You must install or update .NET" "%LOG_FILE%" >nul 2>&1 & call :OPEN_URL "https://dotnet.microsoft.com/en-us/download/dotnet/8.0"
+for %%A in ("%LOG_FILE%") do set "LOG_SIZE=%%~zA"
+if "%LOG_SIZE%"=="0" echo NOTE: Log file is empty. Windows Defender or SmartScreen may be blocking WL10Middleware.exe. & echo Try: Right-click WL10Middleware.exe ^> Properties ^> Unblock, then run again.
 echo Required runtimes:
 echo - .NET 8 Runtime for Windows x86
 echo - ASP.NET Core 8 Runtime for Windows x86
@@ -223,4 +233,8 @@ set "URL_SHORTCUT=%DESKTOP_DIR%\SHAB Attendance Dashboard.url"
 >> "%URL_SHORTCUT%" echo URL=%DASH_URL%
 >> "%URL_SHORTCUT%" echo IconFile=%SHORTCUT_ICON%
 >> "%URL_SHORTCUT%" echo IconIndex=0
+echo Shortcut created:
+echo   %CMD_SHORTCUT%
+echo Shortcut created:
+echo   %URL_SHORTCUT%
 exit /b 0
