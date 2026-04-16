@@ -57,6 +57,9 @@ echo ZKTeco SDK detected.
 call :CHECK_DOTNET
 if errorlevel 1 goto :DOTNET_MISSING
 
+echo Creating desktop shortcuts...
+call :CREATE_SHORTCUT
+
 echo.
 echo Launching SHAB Attendance Dashboard...
 if not exist "%LOG_DIR%" mkdir "%LOG_DIR%" >nul 2>&1
@@ -65,7 +68,12 @@ start "SHAB Attendance Middleware" /min "%ComSpec%" /c "\"%CD%\WL10Middleware.ex
 
 timeout /t 2 /nobreak >nul
 tasklist /fi "imagename eq WL10Middleware.exe" | find /i "WL10Middleware.exe" >nul 2>&1
-if errorlevel 1 goto :START_FAILED
+if errorlevel 1 (
+  start "SHAB Attendance Middleware" "%ComSpec%" /c "\"%CD%\WL10Middleware.exe\" --dashboard --dashboard-port 5099 1>>\"%LOG_FILE%\" 2>>&1"
+  timeout /t 2 /nobreak >nul
+  tasklist /fi "imagename eq WL10Middleware.exe" | find /i "WL10Middleware.exe" >nul 2>&1
+  if errorlevel 1 goto :START_FAILED
+)
 
 echo Waiting for dashboard to be ready...
 set /a tries=60
@@ -81,9 +89,7 @@ goto :WAIT_LOOP
 echo.
 if defined READY (
   echo Opening browser: %DASH_URL%
-  start "" "%DASH_URL%"
-  echo Creating desktop shortcut...
-  call :CREATE_SHORTCUT
+  call :OPEN_URL "%DASH_URL%"
   echo.
   echo Default login: superadmin / abcd1234
   endlocal
@@ -112,8 +118,6 @@ exit /b 1
 echo Middleware process did not start.
 echo This is usually caused by missing .NET runtime, antivirus blocking the EXE, or missing permissions.
 echo.
-echo Running middleware once to capture startup error...
-"%CD%\WL10Middleware.exe" --dashboard --dashboard-port 5099 1>>"%LOG_FILE%" 2>>&1
 if exist "%LOG_FILE%" echo Log file: & echo   %LOG_FILE% & echo. & start "" notepad.exe "%LOG_FILE%"
 if exist "%LOG_FILE%" findstr /i /c:"You must install or update .NET" "%LOG_FILE%" >nul 2>&1 & call :OPEN_URL "https://dotnet.microsoft.com/en-us/download/dotnet/8.0"
 echo Required runtimes:
@@ -190,7 +194,10 @@ rundll32 url.dll,FileProtocolHandler "%~1" >nul 2>&1
 exit /b 0
 
 :CREATE_SHORTCUT
-set "DESKTOP_DIR=%USERPROFILE%\Desktop"
+set "DESKTOP_RAW="
+for /f "tokens=2*" %%A in ('reg query "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders" /v Desktop 2^>nul ^| find /i "Desktop"') do set "DESKTOP_RAW=%%B"
+if defined DESKTOP_RAW call set "DESKTOP_DIR=%DESKTOP_RAW%"
+if not defined DESKTOP_DIR set "DESKTOP_DIR=%USERPROFILE%\Desktop"
 if not exist "%DESKTOP_DIR%" exit /b 0
 set "CMD_SHORTCUT=%DESKTOP_DIR%\SHAB Attendance Dashboard.cmd"
 > "%CMD_SHORTCUT%" echo @echo off
