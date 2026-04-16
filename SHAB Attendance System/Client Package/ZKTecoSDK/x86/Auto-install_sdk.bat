@@ -39,8 +39,8 @@ if errorlevel 1 (
   exit /b 2
 )
 
->>"%LOG_FILE%" echo [%date% %time%] Checking registry key: HKCR\zkemkeeper.CZKEM
-reg query "HKCR\zkemkeeper.CZKEM" >nul 2>&1
+>>"%LOG_FILE%" echo [%date% %time%] Checking registry key (32-bit view): HKCR\zkemkeeper.CZKEM
+reg query "HKCR\zkemkeeper.CZKEM" /reg:32 >nul 2>&1
 if errorlevel 1 (
   >>"%LOG_FILE%" echo [%date% %time%] ERROR: Registry key not found after registration.
   exit /b 3

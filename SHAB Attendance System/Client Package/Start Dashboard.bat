@@ -231,7 +231,7 @@ if not errorlevel 1 exit /b 0
 exit /b 1
 
 :CHECK_ZKEMKEEPER
-reg query "HKCR\zkemkeeper.CZKEM" >nul 2>&1
+reg query "HKCR\zkemkeeper.CZKEM" /reg:32 >nul 2>&1
 if not errorlevel 1 (
   if exist "%WIN_DIR%\SysWOW64\WindowsPowerShell\v1.0\powershell.exe" (
     "%WIN_DIR%\SysWOW64\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -Command "try{New-Object -ComObject zkemkeeper.CZKEM | Out-Null; exit 0}catch{exit 1}" >nul 2>&1
