@@ -3908,6 +3908,7 @@ static partial class Program
     {
       var isSuperadmin = string.Equals(ctx.User.FindFirstValue("role") ?? string.Empty, "superadmin", StringComparison.Ordinal);
       if (!isSuperadmin) return Results.StatusCode(StatusCodes.Status403Forbidden);
+      var trace = new List<string>(capacity: 32);
 
       static string GetProp(JsonElement el, string name)
       {
@@ -3919,33 +3920,39 @@ static partial class Program
       using var doc = await JsonDocument.ParseAsync(ctx.Request.Body, cancellationToken: ctx.RequestAborted);
       var userId = GetProp(doc.RootElement, "user_id");
       var firstName = GetProp(doc.RootElement, "first_name");
-      if (userId.Length == 0) return Results.Json(new { ok = false, error = "user_id is required" }, JsonOptions);
-      if (!userId.All(char.IsDigit)) return Results.Json(new { ok = false, error = "user_id must be numeric for WL10 enrollment number" }, JsonOptions);
+      trace.Add("Received request: user_id=" + userId + " first_name=" + firstName);
+      if (userId.Length == 0) return Results.Json(new { ok = false, error = "user_id is required", trace }, JsonOptions);
+      if (!userId.All(char.IsDigit)) return Results.Json(new { ok = false, error = "user_id must be numeric for WL10 enrollment number", trace }, JsonOptions);
       if (firstName.Length == 0) firstName = userId;
 
       AppConfig cfg;
       lock (stateGate) cfg = currentConfig;
+      trace.Add("Device target: " + cfg.DeviceIp + ":" + cfg.DevicePort + " machine_number=" + cfg.MachineNumber);
 
       try
       {
+        trace.Add("Initializing ZKTeco SDK (zkemkeeper) COM...");
         var type = Type.GetTypeFromProgID("zkemkeeper.CZKEM", throwOnError: false);
         if (type is null)
         {
           try { type = Type.GetTypeFromCLSID(new Guid("00853A19-BD51-419B-9269-2DABE57EB61F"), throwOnError: false); } catch { type = null; }
         }
-        if (type is null) return Results.Json(new { ok = false, error = "ZKTeco SDK (zkemkeeper) is not installed/registered on this PC." }, JsonOptions);
+        if (type is null) return Results.Json(new { ok = false, error = "ZKTeco SDK (zkemkeeper) is not installed/registered on this PC.", trace }, JsonOptions);
 
         dynamic? zk = null;
         try { zk = Activator.CreateInstance(type); } catch { zk = null; }
-        if (zk is null) return Results.Json(new { ok = false, error = "Failed to initialize zkemkeeper COM object." }, JsonOptions);
+        if (zk is null) return Results.Json(new { ok = false, error = "Failed to initialize zkemkeeper COM object.", trace }, JsonOptions);
 
         try
         {
+          trace.Add("Connecting to device...");
           try { _ = zk.SetCommPassword(cfg.CommPassword); } catch { }
           var connected = false;
           try { connected = (bool)zk.Connect_Net(cfg.DeviceIp, cfg.DevicePort); } catch { connected = false; }
-          if (!connected) return Results.Json(new { ok = false, error = $"Failed to connect to WL10 at {cfg.DeviceIp}:{cfg.DevicePort}.", device_ip = cfg.DeviceIp, device_port = cfg.DevicePort, machine_number = cfg.MachineNumber }, JsonOptions);
+          if (!connected) return Results.Json(new { ok = false, error = $"Failed to connect to WL10 at {cfg.DeviceIp}:{cfg.DevicePort}.", device_ip = cfg.DeviceIp, device_port = cfg.DevicePort, machine_number = cfg.MachineNumber, trace }, JsonOptions);
+          trace.Add("Connected.");
 
+          trace.Add("Checking whether user already exists...");
           try { _ = (bool)zk.ReadAllUserID(cfg.MachineNumber); } catch { }
 
           while (true)
@@ -3962,10 +3969,12 @@ static partial class Program
             if (!ok) break;
             if (string.Equals((enrollNumber ?? string.Empty).Trim(), userId, StringComparison.Ordinal))
             {
-              return Results.Json(new { ok = true, already_exists = true }, JsonOptions);
+              trace.Add("User already exists on device.");
+              return Results.Json(new { ok = true, already_exists = true, device_ip = cfg.DeviceIp, device_port = cfg.DevicePort, machine_number = cfg.MachineNumber, trace }, JsonOptions);
             }
           }
 
+          trace.Add("User not found. Writing user to device...");
           try { _ = zk.EnableDevice(cfg.MachineNumber, false); } catch { }
 
           var created = false;
@@ -3979,12 +3988,15 @@ static partial class Program
             var lastErr = 0;
             try { _ = (bool)zk.GetLastError(out lastErr); } catch { lastErr = 0; }
             try { _ = zk.EnableDevice(cfg.MachineNumber, true); } catch { }
-            return Results.Json(new { ok = false, error = "Device rejected user create request.", last_error = lastErr, device_ip = cfg.DeviceIp, device_port = cfg.DevicePort, machine_number = cfg.MachineNumber }, JsonOptions);
+            trace.Add("Create failed. last_error=" + lastErr);
+            return Results.Json(new { ok = false, error = "Device rejected user create request.", last_error = lastErr, device_ip = cfg.DeviceIp, device_port = cfg.DevicePort, machine_number = cfg.MachineNumber, trace }, JsonOptions);
           }
 
+          trace.Add("Create succeeded. Refreshing device data...");
           try { _ = (bool)zk.RefreshData(cfg.MachineNumber); } catch { }
           try { _ = zk.EnableDevice(cfg.MachineNumber, true); } catch { }
 
+          trace.Add("Verifying user exists after write...");
           var verified = false;
           try
           {
@@ -4022,7 +4034,8 @@ static partial class Program
             }
           }
 
-          return Results.Json(new { ok = true, created = true, verified, device_ip = cfg.DeviceIp, device_port = cfg.DevicePort, machine_number = cfg.MachineNumber }, JsonOptions);
+          trace.Add(verified ? "Verified on device." : "Could not verify on device.");
+          return Results.Json(new { ok = true, created = true, verified, device_ip = cfg.DeviceIp, device_port = cfg.DevicePort, machine_number = cfg.MachineNumber, trace }, JsonOptions);
         }
         finally
         {
@@ -4031,7 +4044,8 @@ static partial class Program
       }
       catch (Exception ex)
       {
-        return Results.Json(new { ok = false, error = ex.Message }, JsonOptions);
+        trace.Add("Exception: " + ex.GetType().FullName + " " + ex.Message);
+        return Results.Json(new { ok = false, error = ex.Message, trace }, JsonOptions);
       }
     }).RequireAuthorization();
 
@@ -6951,7 +6965,11 @@ static partial class Program
       const id = String(row && row.user_id ? row.user_id : '').trim();
       if (!id) { out('Missing user id.'); return; }
       const firstName = String(row && row.full_name ? row.full_name : '').trim();
+      out('Provisioning to device: user_id=' + id + ' first_name=' + firstName + ' ...');
       const r = await postJson('/api/device/user/create', { user_id: id, first_name: firstName });
+      if (r && Array.isArray(r.trace)) {
+        for (const line of r.trace) out('[provision] ' + String(line));
+      }
       if (r && r.ok) {
         if (r.already_exists) out('Device already has user ' + id + '.');
         else if (r.created && r.verified === false) out('Created user ' + id + ' on device, but could not verify. Check device screen.');
