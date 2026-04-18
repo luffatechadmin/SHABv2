@@ -94,14 +94,12 @@ set "WL10_ATTLOG_EXPORT_PATH=%EXPORT_DIR%"
 call :LOG WL10_STATE_PATH=%WL10_STATE_PATH%
 call :LOG WL10_ATTLOG_EXPORT_PATH=%WL10_ATTLOG_EXPORT_PATH%
 
-if exist "%APP_DIR%\coreclr.dll" (
-  call :LOG Self-contained runtime detected: coreclr.dll. Skipping dotnet runtime checks.
-) else (
-  call :LOG Checking .NET runtimes...
-  call :CHECK_DOTNET
-  if errorlevel 1 goto :DOTNET_MISSING
-  call :LOG .NET runtimes detected.
-)
+if exist "%APP_DIR%\coreclr.dll" goto :DOTNET_OK
+call :LOG Checking .NET runtimes...
+call :CHECK_DOTNET
+if errorlevel 1 goto :DOTNET_MISSING
+:DOTNET_OK
+call :LOG Dotnet check OK (or self-contained runtime detected).
 
 echo Creating desktop shortcuts...
 call :LOG Creating desktop shortcuts...
@@ -118,28 +116,29 @@ call :LOG MiddlewareStderr: %MIDDLE_ERR%
 if exist "%MIDDLE_OUT%" del /f /q "%MIDDLE_OUT%" >nul 2>&1
 if exist "%MIDDLE_ERR%" del /f /q "%MIDDLE_ERR%" >nul 2>&1
 
-if /I "%RUN_MODE%"=="console" (
-  echo.
-  echo Running middleware in foreground (console mode)...
-  echo Close this window to stop the dashboard.
-  call :LOG Running middleware in foreground (console mode)...
-  WL10Middleware.exe --dashboard --dashboard-port 5099
-  set "MW_EXIT=%errorlevel%"
-  call :LOG Middleware exited (console mode). ExitCode=%MW_EXIT%
-  echo.
-  echo Middleware exited with code: %MW_EXIT%
-  echo Check logs:
-  echo   %MIDDLE_OUT%
-  echo   %MIDDLE_ERR%
-  echo   %LOG_FILE%
-  echo.
-  pause
-  endlocal & exit /b %MW_EXIT%
-)
+if /I "%RUN_MODE%"=="console" goto :RUN_CONSOLE
 
 set "PS_RC="
 if exist "%PS_EXE%" goto :START_VIA_POWERSHELL
 goto :START_VIA_FALLBACK
+
+:RUN_CONSOLE
+echo.
+echo Running middleware in foreground (console mode)...
+echo Close this window to stop the dashboard.
+call :LOG Running middleware in foreground (console mode)...
+WL10Middleware.exe --dashboard --dashboard-port 5099
+set "MW_EXIT=%errorlevel%"
+call :LOG Middleware exited (console mode). ExitCode=%MW_EXIT%
+echo.
+echo Middleware exited with code: %MW_EXIT%
+echo Check logs:
+echo   %MIDDLE_OUT%
+echo   %MIDDLE_ERR%
+echo   %LOG_FILE%
+echo.
+pause
+endlocal & exit /b %MW_EXIT%
 
 :START_VIA_POWERSHELL
 "%PS_EXE%" -NoProfile -ExecutionPolicy Bypass -Command ^
@@ -149,21 +148,15 @@ goto :START_VIA_FALLBACK
   "try { $p=Start-Process -FilePath $exe -ArgumentList @('--dashboard','--dashboard-port','5099') -RedirectStandardOutput $out -RedirectStandardError $err -PassThru; Write-Output ('PID=' + $p.Id); Start-Sleep -Seconds 2; if ($p.HasExited) { Write-Output ('EXITED=' + $p.ExitCode); exit 100 } else { exit 0 } } catch { Write-Output ('START_ERROR=' + $_.Exception.GetType().FullName + ': ' + $_.Exception.Message); exit 101 }" >>"%LOG_FILE%" 2>>&1
 set "PS_RC=%errorlevel%"
 if "%PS_RC%"=="0" goto :STARTED_OK
-if "%PS_RC%"=="100" (
-  call :LOG Middleware exited immediately after start attempt within 2 seconds.
-  goto :START_FAILED
-)
+if "%PS_RC%"=="100" goto :START_FAILED_EARLY_EXIT
 call :LOG Middleware start via PowerShell failed. rc=%PS_RC%. Trying fallback start.
 
 :START_VIA_FALLBACK
-start "SHAB Attendance Middleware" /min ""%CD%\WL10Middleware.exe" --dashboard --dashboard-port 5099
+start "SHAB Attendance Middleware" /min "%CD%\WL10Middleware.exe" --dashboard --dashboard-port 5099
 
 timeout /t 2 /nobreak >nul
 tasklist /fi "imagename eq WL10Middleware.exe" | find /i "WL10Middleware.exe" >nul 2>&1
-if errorlevel 1 (
-  call :LOG Middleware not found in tasklist after initial start attempt.
-  goto :START_FAILED
-)
+if errorlevel 1 goto :START_FAILED_TASKLIST
 
 :STARTED_OK
 echo Waiting for dashboard to be ready...
@@ -179,16 +172,23 @@ goto :WAIT_LOOP
 
 :OPEN_BROWSER
 echo.
-if defined READY (
-  echo Opening browser: %DASH_URL%
-  call :LOG Dashboard reachable. Opening browser: %DASH_URL%
-  call :OPEN_URL "%DASH_URL%"
-  echo.
-  echo Default login: superadmin / abcd1234
-  call :LOG Done.
-  endlocal
-  exit /b 0
-)
+if not defined READY goto :NOT_READY
+echo Opening browser: %DASH_URL%
+call :LOG Dashboard reachable. Opening browser: %DASH_URL%
+call :OPEN_URL "%DASH_URL%"
+echo.
+echo Default login: superadmin / abcd1234
+call :LOG Done.
+endlocal
+exit /b 0
+
+:START_FAILED_EARLY_EXIT
+call :LOG Middleware exited immediately after start attempt within 2 seconds.
+goto :START_FAILED
+
+:START_FAILED_TASKLIST
+call :LOG Middleware not found in tasklist after initial start attempt.
+goto :START_FAILED
 
 :NOT_READY
 echo Dashboard did not become reachable on port 5099.
@@ -217,10 +217,10 @@ call :LOG Middleware stdout (tail):
 call :TAIL "%MIDDLE_OUT%"
 call :LOG Middleware stderr (tail):
 call :TAIL "%MIDDLE_ERR%"
-if exist "%MIDDLE_ERR%" (
-  for %%A in ("%MIDDLE_ERR%") do set "ERR_SIZE=%%~zA"
-  if not "%ERR_SIZE%"=="0" start "" notepad.exe "%MIDDLE_ERR%"
-)
+if not exist "%MIDDLE_ERR%" goto :NOT_READY_AFTER_ERR_OPEN
+for %%A in ("%MIDDLE_ERR%") do set "ERR_SIZE=%%~zA"
+if not "%ERR_SIZE%"=="0" start "" notepad.exe "%MIDDLE_ERR%"
+:NOT_READY_AFTER_ERR_OPEN
 if exist "%LOG_FILE%" findstr /i /c:"You must install or update .NET" "%LOG_FILE%" >nul 2>&1 & call :OPEN_URL "https://dotnet.microsoft.com/en-us/download/dotnet/8.0"
 for %%A in ("%LOG_FILE%") do set "LOG_SIZE=%%~zA"
 for %%A in ("%LOG_FILE%") do set "LOG_SIZE=%%~zA"
@@ -240,10 +240,10 @@ call :LOG Middleware stdout (tail):
 call :TAIL "%MIDDLE_OUT%"
 call :LOG Middleware stderr (tail):
 call :TAIL "%MIDDLE_ERR%"
-if exist "%MIDDLE_ERR%" (
-  for %%A in ("%MIDDLE_ERR%") do set "ERR_SIZE=%%~zA"
-  if not "%ERR_SIZE%"=="0" start "" notepad.exe "%MIDDLE_ERR%"
-)
+if not exist "%MIDDLE_ERR%" goto :START_FAILED_AFTER_ERR_OPEN
+for %%A in ("%MIDDLE_ERR%") do set "ERR_SIZE=%%~zA"
+if not "%ERR_SIZE%"=="0" start "" notepad.exe "%MIDDLE_ERR%"
+:START_FAILED_AFTER_ERR_OPEN
 echo.
 echo Desktop path:
 echo   %DESKTOP_DIR%
@@ -429,17 +429,18 @@ goto :CREATE_SHORTCUT_FALLBACK
 
 :CREATE_SHORTCUT_FALLBACK
 
-if not exist "%LNK_SHORTCUT%" (
-  set "CMD_SHORTCUT=%DESKTOP_DIR%\SHAB Attendance Dashboard.cmd"
-  > "%CMD_SHORTCUT%" echo @echo off
-  >> "%CMD_SHORTCUT%" echo start "" "%ROOT%Start Dashboard.bat"
-  echo Shortcut created:
-  echo   %CMD_SHORTCUT%
-  call :LOG Shortcut created: %CMD_SHORTCUT%
-  exit /b 0
-)
+if not exist "%LNK_SHORTCUT%" goto :CREATE_SHORTCUT_CMD
 
 echo Shortcut created:
 echo   %LNK_SHORTCUT%
 call :LOG Shortcut created: %LNK_SHORTCUT%
+exit /b 0
+
+:CREATE_SHORTCUT_CMD
+set "CMD_SHORTCUT=%DESKTOP_DIR%\SHAB Attendance Dashboard.cmd"
+> "%CMD_SHORTCUT%" echo @echo off
+>> "%CMD_SHORTCUT%" echo start "" "%ROOT%Start Dashboard.bat"
+echo Shortcut created:
+echo   %CMD_SHORTCUT%
+call :LOG Shortcut created: %CMD_SHORTCUT%
 exit /b 0
