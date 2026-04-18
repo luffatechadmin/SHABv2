@@ -5,3 +5,9 @@
 [Sun 04/19/2026  3:55:16.35] AppDir: C:\Users\admin\Documents\GitHub\SHABv2\App\win-x86
 [Sun 04/19/2026  3:55:16.36] ERROR: Middleware process did not start.
 [Sun 04/19/2026  3:55:16.37] Middleware stdout (tail):
+[Sun 04/19/2026  4:10:49.58] ============================================================
+[Sun 04/19/2026  4:10:49.59] SHAB Attendance System - Start Dashboard
+[Sun 04/19/2026  4:10:49.60] Version: 2026-04-16
+[Sun 04/19/2026  4:10:49.61] Root: C:\Users\admin\Documents\GitHub\SHABv2\
+[Sun 04/19/2026  4:10:49.62] AppDir: C:\Users\admin\Documents\GitHub\SHABv2\App\win-x86
+(missing) "C:\Users\admin\Documents\GitHub\SHABv2\Logs\middleware-stderr.log"
