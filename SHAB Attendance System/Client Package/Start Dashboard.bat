@@ -5,7 +5,7 @@ set "SHAB_START_VERSION=2026-04-16"
 set "ROOT=%~dp0"
 set "APP_DIR=%ROOT%App\win-x86"
 set "SDK_INSTALL=%ROOT%ZKTecoSDK\x86\Auto-install_sdk.bat"
-set "DASH_URL=http://127.0.0.1:5099/login"
+set "DASH_URL=http://localhost:5099/login"
 set "SHORTCUT_ICON=%ROOT%Assets\SHAB Attendance Dashboard.ico"
 set "LOG_DIR=%ROOT%Logs"
 set "LOG_FILE=%LOG_DIR%\attendance-middleware.log"
@@ -116,12 +116,10 @@ if exist "%PS_EXE%" (
     "$exe=Join-Path (Get-Location) 'WL10Middleware.exe';" ^
     "$out='%MIDDLE_OUT%';" ^
     "$err='%MIDDLE_ERR%';" ^
-    "$p=Start-Process -FilePath $exe -ArgumentList @('--dashboard','--dashboard-port','5099') -RedirectStandardOutput $out -RedirectStandardError $err -PassThru;" ^
-    "Write-Output ('PID=' + $p.Id);" ^
-    "Start-Sleep -Seconds 2;" ^
-    "if ($p.HasExited) { Write-Output ('EXITED=' + $p.ExitCode); exit 100 } else { exit 0 }" >>"%LOG_FILE%" 2>>&1
+    "try { $p=Start-Process -FilePath $exe -ArgumentList @('--dashboard','--dashboard-port','5099') -RedirectStandardOutput $out -RedirectStandardError $err -PassThru; Write-Output ('PID=' + $p.Id); Start-Sleep -Seconds 2; if ($p.HasExited) { Write-Output ('EXITED=' + $p.ExitCode); exit 100 } else { exit 0 } } catch { Write-Output ('START_ERROR=' + $_.Exception.GetType().FullName + ': ' + $_.Exception.Message); exit 101 }" >>"%LOG_FILE%" 2>>&1
   if not errorlevel 1 goto :STARTED_OK
-  call :LOG Middleware exited immediately after start attempt. See middleware stderr/stdout.
+  call :LOG Middleware start via PowerShell failed. Trying fallback start...
+  start "SHAB Attendance Middleware" /min ""%CD%\WL10Middleware.exe" --dashboard --dashboard-port 5099
 ) else (
   start "SHAB Attendance Middleware" /min ""%CD%\WL10Middleware.exe" --dashboard --dashboard-port 5099
 )
@@ -181,7 +179,16 @@ call :HTTP_PROBE
 call :LOG Recent crash events (Application log):
 call :LOG_EVENT_ERRORS
 if exist "%LOG_FILE%" echo Log file: & echo   %LOG_FILE% & echo. & start "" notepad.exe "%LOG_FILE%"
+call :LOG Middleware stdout (tail):
+call :TAIL "%MIDDLE_OUT%"
+call :LOG Middleware stderr (tail):
+call :TAIL "%MIDDLE_ERR%"
+if exist "%MIDDLE_ERR%" (
+  for %%A in ("%MIDDLE_ERR%") do set "ERR_SIZE=%%~zA"
+  if not "%ERR_SIZE%"=="0" start "" notepad.exe "%MIDDLE_ERR%"
+)
 if exist "%LOG_FILE%" findstr /i /c:"You must install or update .NET" "%LOG_FILE%" >nul 2>&1 & call :OPEN_URL "https://dotnet.microsoft.com/en-us/download/dotnet/8.0"
+for %%A in ("%LOG_FILE%") do set "LOG_SIZE=%%~zA"
 for %%A in ("%LOG_FILE%") do set "LOG_SIZE=%%~zA"
 if "%LOG_SIZE%"=="0" echo NOTE: Log file is empty. Windows Defender or SmartScreen may be blocking WL10Middleware.exe. & echo Try: Right-click WL10Middleware.exe ^> Properties ^> Unblock, then run again.
 echo.
@@ -195,6 +202,14 @@ exit /b 1
 echo Middleware process did not start.
 echo This is usually caused by missing .NET runtime, antivirus blocking the EXE, or missing permissions.
 call :LOG ERROR: Middleware process did not start.
+call :LOG Middleware stdout (tail):
+call :TAIL "%MIDDLE_OUT%"
+call :LOG Middleware stderr (tail):
+call :TAIL "%MIDDLE_ERR%"
+if exist "%MIDDLE_ERR%" (
+  for %%A in ("%MIDDLE_ERR%") do set "ERR_SIZE=%%~zA"
+  if not "%ERR_SIZE%"=="0" start "" notepad.exe "%MIDDLE_ERR%"
+)
 echo.
 echo Desktop path:
 echo   %DESKTOP_DIR%
@@ -239,7 +254,7 @@ exit /b 1
 :CHECK_PORT
 if exist "%PS_EXE%" (
   "%PS_EXE%" -NoProfile -ExecutionPolicy Bypass -Command ^
-    "$c=New-Object Net.Sockets.TcpClient; try{$c.Connect('127.0.0.1',5099); $c.Close(); exit 0}catch{exit 1}" >nul 2>&1
+    "try { $ok=$false; foreach($h in @('127.0.0.1','localhost')){ try{$c=New-Object Net.Sockets.TcpClient; $c.Connect($h,5099); $c.Close(); $ok=$true; break}catch{} }; if($ok){ exit 0 } else { exit 1 } } catch { exit 1 }" >nul 2>&1
   if not errorlevel 1 exit /b 0
 )
 netstat -ano | findstr /R /C:":5099 .*LISTENING" >nul 2>&1
@@ -312,8 +327,17 @@ endlocal & exit /b 0
 :HTTP_PROBE
 if not exist "%PS_EXE%" exit /b 0
 "%PS_EXE%" -NoProfile -ExecutionPolicy Bypass -Command ^
-  "try { $r=Invoke-WebRequest -Uri 'http://127.0.0.1:5099/login' -UseBasicParsing -TimeoutSec 2; Write-Output ('HTTP ' + [int]$r.StatusCode) } catch { Write-Output ('HTTP_ERROR ' + $_.Exception.GetType().FullName + ' ' + $_.Exception.Message) }" >>"%LOG_FILE%" 2>>&1
+  "try { $r=Invoke-WebRequest -Uri 'http://localhost:5099/login' -UseBasicParsing -TimeoutSec 2; Write-Output ('HTTP ' + [int]$r.StatusCode) } catch { Write-Output ('HTTP_ERROR ' + $_.Exception.GetType().FullName + ' ' + $_.Exception.Message) }" >>"%LOG_FILE%" 2>>&1
 exit /b 0
+
+:TAIL
+setlocal EnableExtensions
+set "F=%~1"
+if not exist "%F%" (>>"%LOG_FILE%" echo (missing) %F% & endlocal & exit /b 0)
+if not exist "%PS_EXE%" (>>"%LOG_FILE%" echo (no powershell) %F% & endlocal & exit /b 0)
+"%PS_EXE%" -NoProfile -ExecutionPolicy Bypass -Command ^
+  "try { $p='%F%'; if (Test-Path $p) { $t = Get-Content -LiteralPath $p -Tail 80 -ErrorAction SilentlyContinue; foreach($l in $t){ Write-Output $l } } } catch { }" >>"%LOG_FILE%" 2>>&1
+endlocal & exit /b 0
 
 :LOG_EVENT_ERRORS
 wevtutil qe Application /c:20 /f:text /rd:true /q:"*[System[(EventID=1000 or EventID=1026) and TimeCreated[timediff(@SystemTime) <= 900000]]]" >>"%LOG_FILE%" 2>>&1
