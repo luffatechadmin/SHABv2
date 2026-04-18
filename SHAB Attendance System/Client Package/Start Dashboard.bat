@@ -7,12 +7,12 @@ set "APP_DIR=%ROOT%App\win-x86"
 set "SDK_INSTALL=%ROOT%ZKTecoSDK\x86\Auto-install_sdk.bat"
 set "DASH_URL=http://127.0.0.1:5099/login"
 set "SHORTCUT_ICON=%ROOT%Assets\SHAB Attendance Dashboard.ico"
-set "BRAND_ICON=%ROOT%..\..\Reference\Communications\Client Communication\Design Layout\SHAB Attendance Dashboard - Logo - Transparent.ico"
-if exist "%BRAND_ICON%" set "SHORTCUT_ICON=%BRAND_ICON%"
 set "LOG_DIR=%ROOT%Logs"
 set "LOG_FILE=%LOG_DIR%\attendance-middleware.log"
 set "MIDDLE_OUT=%LOG_DIR%\middleware-stdout.log"
 set "MIDDLE_ERR=%LOG_DIR%\middleware-stderr.log"
+set "DATA_DIR=%ROOT%Data"
+set "EXPORT_DIR=%ROOT%Exports"
 set "WIN_DIR=%SystemRoot%"
 if not defined WIN_DIR set "WIN_DIR=%windir%"
 set "PS_EXE=%WIN_DIR%\System32\WindowsPowerShell\v1.0\powershell.exe"
@@ -24,6 +24,8 @@ set "DOTNET_X86_EXE=C:\Program Files (x86)\dotnet\dotnet.exe"
 set "DOTNET_X64_EXE=C:\Program Files\dotnet\dotnet.exe"
 
 if not exist "%LOG_DIR%" mkdir "%LOG_DIR%" >nul 2>&1
+if not exist "%DATA_DIR%" mkdir "%DATA_DIR%" >nul 2>&1
+if not exist "%EXPORT_DIR%" mkdir "%EXPORT_DIR%" >nul 2>&1
 
 call :LOG ============================================================
 call :LOG SHAB Attendance System - Start Dashboard
@@ -79,10 +81,20 @@ echo Preparing app files and security settings...
 call :LOG Preparing app files and security settings...
 call :PREPARE_SECURITY
 
-call :LOG Checking .NET runtimes...
-call :CHECK_DOTNET
-if errorlevel 1 goto :DOTNET_MISSING
-call :LOG .NET runtimes detected.
+REM Force local state/export paths so the package is self-contained (no dependency on other folders)
+set "WL10_STATE_PATH=%DATA_DIR%\state.json"
+set "WL10_ATTLOG_EXPORT_PATH=%EXPORT_DIR%"
+call :LOG WL10_STATE_PATH=%WL10_STATE_PATH%
+call :LOG WL10_ATTLOG_EXPORT_PATH=%WL10_ATTLOG_EXPORT_PATH%
+
+if exist "%APP_DIR%\coreclr.dll" (
+  call :LOG Self-contained runtime detected (coreclr.dll). Skipping .NET runtime checks.
+) else (
+  call :LOG Checking .NET runtimes...
+  call :CHECK_DOTNET
+  if errorlevel 1 goto :DOTNET_MISSING
+  call :LOG .NET runtimes detected.
+)
 
 echo Creating desktop shortcuts...
 call :LOG Creating desktop shortcuts...
