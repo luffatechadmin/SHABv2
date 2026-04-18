@@ -82,7 +82,7 @@ if defined PROGID_CLSID (
 
 if exist "%WIN_DIR%\SysWOW64\WindowsPowerShell\v1.0\powershell.exe" (
   >>"%LOG_FILE%" echo [%date% %time%] Checking COM activation in 32-bit PowerShell...
-  "%WIN_DIR%\SysWOW64\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -Command "try{New-Object -ComObject 'zkemkeeper.CZKEM' | Out-Null; exit 0}catch{Write-Output ('COM_FAIL: ' + $PSItem.Exception.Message); exit 5}" >>"%LOG_FILE%" 2>>&1
+  "%WIN_DIR%\SysWOW64\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -Command "try{New-Object -ComObject 'zkemkeeper.ZKEM.1' | Out-Null; exit 0}catch{Write-Output ('COM_FAIL: ' + $PSItem.Exception.Message); exit 5}" >>"%LOG_FILE%" 2>>&1
   if errorlevel 1 (
     >>"%LOG_FILE%" echo [%date% %time%] ERROR: COM activation failed.
     >>"%LOG_FILE%" echo [%date% %time%] Hint: This is commonly caused by missing VC++ x86 runtimes or a broken registry mapping.

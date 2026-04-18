@@ -86,6 +86,72 @@ static partial class Program
     }
   }
 
+  private sealed class MultiTextWriter : TextWriter
+  {
+    private readonly TextWriter[] _writers;
+
+    public MultiTextWriter(params TextWriter[] writers)
+    {
+      _writers = writers?.Where(w => w is not null).ToArray() ?? Array.Empty<TextWriter>();
+    }
+
+    public override Encoding Encoding => _writers.Length > 0 ? _writers[0].Encoding : Encoding.UTF8;
+
+    public override void WriteLine(string? value)
+    {
+      foreach (var w in _writers)
+      {
+        try { w.WriteLine(value); } catch { }
+      }
+    }
+
+    public override void Write(char value)
+    {
+      foreach (var w in _writers)
+      {
+        try { w.Write(value); } catch { }
+      }
+    }
+
+    public override void Write(string? value)
+    {
+      foreach (var w in _writers)
+      {
+        try { w.Write(value); } catch { }
+      }
+    }
+
+    public override void Flush()
+    {
+      foreach (var w in _writers)
+      {
+        try { w.Flush(); } catch { }
+      }
+    }
+  }
+
+  private sealed class TimestampTextWriter : TextWriter
+  {
+    private readonly TextWriter _inner;
+
+    public TimestampTextWriter(TextWriter inner)
+    {
+      _inner = inner;
+    }
+
+    public override Encoding Encoding => _inner.Encoding;
+
+    public override void WriteLine(string? value)
+    {
+      var ts = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff", CultureInfo.InvariantCulture);
+      _inner.WriteLine($"{ts} {value}");
+    }
+
+    public override void Write(char value) => _inner.Write(value);
+    public override void Write(string? value) => _inner.Write(value);
+    public override void Flush() => _inner.Flush();
+  }
+
   private static string? ResolveStaffCsvPath()
   {
     var env = (Environment.GetEnvironmentVariable("WL10_STAFF_CSV_PATH") ?? "").Trim();
@@ -144,14 +210,16 @@ static partial class Program
     return tcs.Task;
   }
 
-  private static async Task<(bool ok, List<(string Id, string Name, string Dept, string Status, string ShiftPattern)> rows, string? error)> TryLoadStaffFromSupabase(AppConfig cfg, CancellationToken ct)
+  private static async Task<(bool ok, List<(string Id, string Name, string Dept, string Status, string ShiftPattern)> rows, string? error)> TryLoadStaffFromSupabase(AppConfig cfg, string? anonKey, CancellationToken ct)
   {
-    if (string.IsNullOrWhiteSpace(cfg.SupabaseUrl) || string.IsNullOrWhiteSpace(cfg.SupabaseServiceRoleKey))
+    var serviceKeyRaw = (cfg.SupabaseServiceRoleKey ?? string.Empty).Trim();
+    var anonRaw = (anonKey ?? string.Empty).Trim();
+    if (string.IsNullOrWhiteSpace(cfg.SupabaseUrl) || (serviceKeyRaw.Length == 0 && anonRaw.Length == 0))
     {
       return (false, new List<(string, string, string, string, string)>(), "Supabase not configured");
     }
 
-    static async Task<(bool ok, List<(string Id, string Name, string Dept, string Status, string ShiftPattern)> rows, string? error)> FetchAsync(AppConfig cfg, bool includeShiftPattern, CancellationToken ct)
+    static async Task<(bool ok, List<(string Id, string Name, string Dept, string Status, string ShiftPattern)> rows, string? error, int statusCode)> FetchAsync(AppConfig cfg, string apiKey, bool includeShiftPattern, CancellationToken ct)
     {
       var baseUrl = cfg.SupabaseUrl.TrimEnd('/');
       var cols = includeShiftPattern
@@ -160,19 +228,19 @@ static partial class Program
       var url = $"{baseUrl}/rest/v1/staff?select={Uri.EscapeDataString(cols)}&order=id.asc&limit=5000";
       using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
       using var req = new HttpRequestMessage(HttpMethod.Get, url);
-      req.Headers.TryAddWithoutValidation("apikey", cfg.SupabaseServiceRoleKey);
-      req.Headers.TryAddWithoutValidation("Authorization", $"Bearer {cfg.SupabaseServiceRoleKey}");
+      req.Headers.TryAddWithoutValidation("apikey", apiKey);
+      req.Headers.TryAddWithoutValidation("Authorization", $"Bearer {apiKey}");
       using var resp = await http.SendAsync(req, ct);
       var body = await resp.Content.ReadAsStringAsync(ct);
       if (!resp.IsSuccessStatusCode)
       {
-        return (false, new List<(string, string, string, string, string)>(), body.Length > 350 ? body[..350] : body);
+        return (false, new List<(string, string, string, string, string)>(), body.Length > 350 ? body[..350] : body, (int)resp.StatusCode);
       }
 
       using var doc = JsonDocument.Parse(body);
       if (doc.RootElement.ValueKind != JsonValueKind.Array)
       {
-        return (false, new List<(string, string, string, string, string)>(), "Unexpected response shape");
+        return (false, new List<(string, string, string, string, string)>(), "Unexpected response shape", 200);
       }
 
       var list = new List<(string Id, string Name, string Dept, string Status, string ShiftPattern)>(capacity: 256);
@@ -186,34 +254,75 @@ static partial class Program
         var sp = includeShiftPattern && el.TryGetProperty("shift_pattern", out var spEl) && spEl.ValueKind == JsonValueKind.String ? (spEl.GetString() ?? "") : "";
         list.Add((id, name, dept, status, sp));
       }
-      return (true, list, null);
+      return (true, list, null, 200);
     }
 
-    var r1 = await FetchAsync(cfg, includeShiftPattern: true, ct);
+    async Task<(bool ok, List<(string Id, string Name, string Dept, string Status, string ShiftPattern)> rows, string? error, int statusCode)> FetchWithFallback(bool includeShiftPattern)
+    {
+      if (serviceKeyRaw.Length > 0)
+      {
+        var r1 = await FetchAsync(cfg, serviceKeyRaw, includeShiftPattern, ct);
+        if (r1.ok) return r1;
+        if (r1.statusCode == 401 && anonRaw.Length > 0)
+        {
+          return await FetchAsync(cfg, anonRaw, includeShiftPattern, ct);
+        }
+        return r1;
+      }
+      return await FetchAsync(cfg, anonRaw, includeShiftPattern, ct);
+    }
+
+    var r1 = await FetchWithFallback(includeShiftPattern: true);
     if (!r1.ok && r1.error is not null && r1.error.Contains("shift_pattern", StringComparison.OrdinalIgnoreCase))
     {
-      var r2 = await FetchAsync(cfg, includeShiftPattern: false, ct);
+      var r2 = await FetchWithFallback(includeShiftPattern: false);
       if (!r2.ok) return (false, r2.rows, r2.error);
       return (true, r2.rows.Select(x => (x.Id, x.Name, x.Dept, x.Status, "")).ToList(), null);
     }
-    return r1;
+    return (r1.ok, r1.rows, r1.error);
   }
 
-  private static async Task<(bool ok, ShiftPatternRow[] rows, string? error)> TryLoadShiftPatternsFromSupabase(AppConfig cfg, CancellationToken ct)
+  private static async Task<(bool ok, ShiftPatternRow[] rows, string? error)> TryLoadShiftPatternsFromSupabase(AppConfig cfg, string? anonKey, CancellationToken ct)
   {
-    if (string.IsNullOrWhiteSpace(cfg.SupabaseUrl) || string.IsNullOrWhiteSpace(cfg.SupabaseServiceRoleKey))
+    var serviceKeyRaw = (cfg.SupabaseServiceRoleKey ?? string.Empty).Trim();
+    var anonRaw = (anonKey ?? string.Empty).Trim();
+    if (string.IsNullOrWhiteSpace(cfg.SupabaseUrl) || (serviceKeyRaw.Length == 0 && anonRaw.Length == 0))
     {
       return (false, Array.Empty<ShiftPatternRow>(), "Supabase not configured");
     }
     var baseUrl = cfg.SupabaseUrl.TrimEnd('/');
     var url = $"{baseUrl}/rest/v1/shift_patterns?select=pattern,working_days,working_hours,break_time,notes&order=pattern.asc&limit=500";
-    using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
-    using var req = new HttpRequestMessage(HttpMethod.Get, url);
-    req.Headers.TryAddWithoutValidation("apikey", cfg.SupabaseServiceRoleKey);
-    req.Headers.TryAddWithoutValidation("Authorization", $"Bearer {cfg.SupabaseServiceRoleKey}");
-    using var resp = await http.SendAsync(req, ct);
-    var body = await resp.Content.ReadAsStringAsync(ct);
-    if (!resp.IsSuccessStatusCode)
+    async Task<(bool ok, string body, int statusCode)> FetchAsync(string apiKey)
+    {
+      using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
+      using var req = new HttpRequestMessage(HttpMethod.Get, url);
+      req.Headers.TryAddWithoutValidation("apikey", apiKey);
+      req.Headers.TryAddWithoutValidation("Authorization", $"Bearer {apiKey}");
+      using var resp = await http.SendAsync(req, ct);
+      var body = await resp.Content.ReadAsStringAsync(ct);
+      return (resp.IsSuccessStatusCode, body, (int)resp.StatusCode);
+    }
+
+    var body = string.Empty;
+    var ok = false;
+    var statusCode = 0;
+    if (serviceKeyRaw.Length > 0)
+    {
+      var r1 = await FetchAsync(serviceKeyRaw);
+      ok = r1.ok; body = r1.body; statusCode = r1.statusCode;
+      if (!ok && statusCode == 401 && anonRaw.Length > 0)
+      {
+        var r2 = await FetchAsync(anonRaw);
+        ok = r2.ok; body = r2.body; statusCode = r2.statusCode;
+      }
+    }
+    else
+    {
+      var r = await FetchAsync(anonRaw);
+      ok = r.ok; body = r.body; statusCode = r.statusCode;
+    }
+
+    if (!ok)
     {
       return (false, Array.Empty<ShiftPatternRow>(), body.Length > 350 ? body[..350] : body);
     }
@@ -251,8 +360,21 @@ static partial class Program
 
     var originalOut = Console.Out;
     var originalErr = Console.Error;
-    var ringOut = new RingBufferTextWriter(originalOut, maxLines: 500);
-    var ringErr = new RingBufferTextWriter(originalErr, maxLines: 500);
+    TextWriter? fileWriter = null;
+    try
+    {
+      var logDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "WL10Middleware", "Logs");
+      Directory.CreateDirectory(logDir);
+      var logPath = Path.Combine(logDir, "middleware.log");
+      var sw = new StreamWriter(new FileStream(logPath, FileMode.Append, FileAccess.Write, FileShare.ReadWrite), Encoding.UTF8) { AutoFlush = true };
+      fileWriter = TextWriter.Synchronized(new TimestampTextWriter(sw));
+    }
+    catch { fileWriter = null; }
+
+    var outInner = fileWriter is null ? originalOut : new MultiTextWriter(originalOut, fileWriter);
+    var errInner = fileWriter is null ? originalErr : new MultiTextWriter(originalErr, fileWriter);
+    var ringOut = new RingBufferTextWriter(outInner, maxLines: 500);
+    var ringErr = new RingBufferTextWriter(errInner, maxLines: 500);
     Console.SetOut(ringOut);
     Console.SetError(ringErr);
 
@@ -303,12 +425,9 @@ static partial class Program
       if (s is not null)
       {
         var key = s.SupabaseKeyIsProtected ? TryUnprotectBase64(s.SupabaseKeyProtectedBase64) : s.SupabaseKeyProtectedBase64;
-        if (!string.IsNullOrWhiteSpace(s.SupabaseUrl)) startingConfig = startingConfig with { SupabaseUrl = s.SupabaseUrl };
         if (!string.IsNullOrWhiteSpace(s.SupabaseAttendanceTable)) startingConfig = startingConfig with { SupabaseAttendanceTable = s.SupabaseAttendanceTable };
         startingConfig = startingConfig with { SupabaseSyncEnabled = s.SupabaseSyncEnabled };
         if (!string.IsNullOrWhiteSpace(key)) startingConfig = startingConfig with { SupabaseServiceRoleKey = key };
-        dashboardSupabaseAnonKey = (s.SupabaseAnonKey ?? string.Empty).Trim();
-        dashboardSupabaseProjectId = (s.SupabaseProjectId ?? string.Empty).Trim();
         dashboardSupabaseJwtSecret = (s.SupabaseJwtSecret ?? string.Empty).Trim();
       }
 
@@ -322,6 +441,7 @@ static partial class Program
       if (poll is not null)
       {
         startingPollIntervalSeconds = poll.PollIntervalSeconds;
+        if (startingPollIntervalSeconds == 600) startingPollIntervalSeconds = 3600;
         startingAutoSyncEnabled = poll.AutoSyncEnabled;
       }
 
@@ -332,6 +452,10 @@ static partial class Program
         .ToArray();
     }
     catch { }
+
+    startingConfig = startingConfig with { SupabaseUrl = DefaultSupabaseUrl, SupabaseSyncEnabled = true };
+    dashboardSupabaseProjectId = DefaultSupabaseProjectId;
+    dashboardSupabaseAnonKey = DefaultSupabasePublishableKey;
 
     static Dictionary<string, string> LoadDotEnv()
     {
@@ -403,23 +527,16 @@ static partial class Program
     if (envViteSupaAnon.Length == 0) envViteSupaAnon = Dot("VITE_SUPABASE_ANON_KEY");
     var envViteSupaProjectId = (Environment.GetEnvironmentVariable("VITE_SUPABASE_PROJECT_ID") ?? "").Trim();
     if (envViteSupaProjectId.Length == 0) envViteSupaProjectId = Dot("VITE_SUPABASE_PROJECT_ID");
-    if (envSupaUrl.Length > 0) startingConfig = startingConfig with { SupabaseUrl = envSupaUrl };
-    else if (envViteSupaUrl.Length > 0) startingConfig = startingConfig with { SupabaseUrl = envViteSupaUrl };
     if (envSupaService.Length > 0) startingConfig = startingConfig with { SupabaseServiceRoleKey = envSupaService };
-    if (envSupaAnon.Length > 0) dashboardSupabaseAnonKey = envSupaAnon;
-    else if (envViteSupaAnon.Length > 0) dashboardSupabaseAnonKey = envViteSupaAnon;
-    if (envSupaProjectId.Length > 0) dashboardSupabaseProjectId = envSupaProjectId;
-    else if (envViteSupaProjectId.Length > 0) dashboardSupabaseProjectId = envViteSupaProjectId;
     if (envSupaJwt.Length > 0) dashboardSupabaseJwtSecret = envSupaJwt;
-    if (string.IsNullOrWhiteSpace(dashboardSupabaseProjectId)) dashboardSupabaseProjectId = InferSupabaseProjectId(startingConfig.SupabaseUrl);
-    if (string.IsNullOrWhiteSpace(startingConfig.SupabaseUrl)) startingConfig = startingConfig with { SupabaseUrl = DefaultSupabaseUrl };
-    if (string.IsNullOrWhiteSpace(dashboardSupabaseProjectId)) dashboardSupabaseProjectId = DefaultSupabaseProjectId;
-    if (string.IsNullOrWhiteSpace(dashboardSupabaseAnonKey)) dashboardSupabaseAnonKey = DefaultSupabasePublishableKey;
+    startingConfig = startingConfig with { SupabaseUrl = DefaultSupabaseUrl };
+    dashboardSupabaseProjectId = DefaultSupabaseProjectId;
+    dashboardSupabaseAnonKey = DefaultSupabasePublishableKey;
 
     lock (stateGate)
     {
       currentConfig = startingConfig;
-      pollIntervalSeconds = Math.Clamp((startingPollIntervalSeconds <= 0 ? (startingConfig.PollIntervalSeconds <= 0 ? 900 : startingConfig.PollIntervalSeconds) : startingPollIntervalSeconds), 60, 3600);
+      pollIntervalSeconds = Math.Clamp((startingPollIntervalSeconds <= 0 ? (startingConfig.PollIntervalSeconds <= 0 ? 3600 : startingConfig.PollIntervalSeconds) : startingPollIntervalSeconds), 60, 3600);
       autoSyncEnabled = startingAutoSyncEnabled;
       dashboardRefreshSeconds = Math.Clamp(startingDashboardRefreshSeconds <= 0 ? 600 : startingDashboardRefreshSeconds, 10, 3600);
     }
@@ -611,7 +728,7 @@ static partial class Program
       var identity = new ClaimsIdentity(claims, CookieAuthenticationDefaults.AuthenticationScheme);
       var principal = new ClaimsPrincipal(identity);
       await ctx.SignInAsync(CookieAuthenticationDefaults.AuthenticationScheme, principal);
-      ctx.Response.Redirect("/?tab=settings&subtab=settings:connection");
+      ctx.Response.Redirect("/?tab=summary&subtab=summary:attendance");
     }).AllowAnonymous();
 
     app.MapPost("/logout", async (HttpContext ctx) =>
@@ -619,6 +736,64 @@ static partial class Program
       await ctx.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
       ctx.Response.Redirect("/login");
     });
+
+    static string? TryFindBrandAsset(string startDir, params string[] relativeCandidates)
+    {
+      try
+      {
+        var d = new DirectoryInfo(startDir);
+        for (var i = 0; i < 10 && d is not null; i++)
+        {
+          foreach (var rel in relativeCandidates)
+          {
+            if (string.IsNullOrWhiteSpace(rel)) continue;
+            var p = Path.GetFullPath(Path.Combine(d.FullName, rel));
+            if (File.Exists(p)) return p;
+          }
+          d = d.Parent;
+        }
+      }
+      catch { }
+      return null;
+    }
+
+    app.MapGet("/assets/logo.png", (HttpContext ctx) =>
+    {
+      var baseDir = AppContext.BaseDirectory;
+      var path =
+        TryFindBrandAsset(baseDir,
+          Path.Combine("Reference", "Communications", "Client Communication", "Design Layout", "SHAB Attendance Dashboard - Logo - Transparent.png"),
+          Path.Combine("SHAB Attendance System", "Client Package", "Assets", "SHAB Attendance Dashboard.png"),
+          Path.Combine("Assets", "SHAB Attendance Dashboard.png"),
+          Path.Combine("..", "..", "Assets", "SHAB Attendance Dashboard.png")
+        )
+        ?? TryFindBrandAsset(Directory.GetCurrentDirectory(),
+          Path.Combine("Reference", "Communications", "Client Communication", "Design Layout", "SHAB Attendance Dashboard - Logo - Transparent.png"),
+          Path.Combine("SHAB Attendance System", "Client Package", "Assets", "SHAB Attendance Dashboard.png")
+        );
+
+      if (string.IsNullOrWhiteSpace(path)) return Results.NotFound();
+      return Results.File(path, "image/png");
+    }).AllowAnonymous();
+
+    app.MapGet("/assets/logo.ico", (HttpContext ctx) =>
+    {
+      var baseDir = AppContext.BaseDirectory;
+      var path =
+        TryFindBrandAsset(baseDir,
+          Path.Combine("Reference", "Communications", "Client Communication", "Design Layout", "SHAB Attendance Dashboard - Logo - Transparent.ico"),
+          Path.Combine("SHAB Attendance System", "Client Package", "Assets", "SHAB Attendance Dashboard.ico"),
+          Path.Combine("Assets", "SHAB Attendance Dashboard.ico"),
+          Path.Combine("..", "..", "Assets", "SHAB Attendance Dashboard.ico")
+        )
+        ?? TryFindBrandAsset(Directory.GetCurrentDirectory(),
+          Path.Combine("Reference", "Communications", "Client Communication", "Design Layout", "SHAB Attendance Dashboard - Logo - Transparent.ico"),
+          Path.Combine("SHAB Attendance System", "Client Package", "Assets", "SHAB Attendance Dashboard.ico")
+        );
+
+      if (string.IsNullOrWhiteSpace(path)) return Results.NotFound();
+      return Results.File(path, "image/x-icon");
+    }).AllowAnonymous();
 
     app.MapGet("/", async (HttpContext ctx) =>
     {
@@ -728,9 +903,11 @@ static partial class Program
           projectId = string.IsNullOrWhiteSpace(pid) ? InferSupabaseProjectId(cfg.SupabaseUrl) : pid,
           attendanceTable = cfg.SupabaseAttendanceTable,
           apiKeyConfigured = !string.IsNullOrWhiteSpace(cfg.SupabaseServiceRoleKey),
+          hasServiceRoleKey = !string.IsNullOrWhiteSpace(cfg.SupabaseServiceRoleKey),
           serviceRoleKey = isSuperadmin ? cfg.SupabaseServiceRoleKey : string.Empty,
           anonKey = anon,
-          jwtSecret = isSuperadmin ? jwt : string.Empty,
+          hasJwtSecret = !string.IsNullOrWhiteSpace(jwt),
+          jwtSecret = string.Empty,
         },
         pc = pcNet,
         process = new
@@ -750,6 +927,199 @@ static partial class Program
         .ToArray();
       return Results.Json(new { lines = merged }, JsonOptions);
     }).RequireAuthorization();
+
+    var lastSystemLogSyncedAtLocal = DateTime.MinValue;
+    var activitySeq = 0L;
+    var lastActivitySyncedSeq = 0L;
+    var activityQ = new ConcurrentQueue<(long seq, DateTimeOffset ts, string scope, string level, string message)>();
+
+    static bool TryParseTsPrefix(string line, out DateTime local)
+    {
+      local = default;
+      if (string.IsNullOrWhiteSpace(line) || line.Length < 23) return false;
+      var ts = line[..23];
+      return DateTime.TryParseExact(ts, "yyyy-MM-dd HH:mm:ss.fff", CultureInfo.InvariantCulture, DateTimeStyles.AssumeLocal, out local);
+    }
+
+    static (string level, string msg) SplitLevelMessage(string raw)
+    {
+      var s = (raw ?? string.Empty).Trim();
+      var level = "INFO";
+      foreach (var p in new[] { "[ERROR]", "[WARN]", "[INFO]", "[DEBUG]" })
+      {
+        if (s.Contains(p, StringComparison.Ordinal))
+        {
+          level = p.Trim('[', ']');
+          var idx = s.IndexOf(p, StringComparison.Ordinal);
+          var msg = (idx >= 0 ? s[(idx + p.Length)..] : s).Trim();
+          return (level, msg);
+        }
+      }
+      return (level, s);
+    }
+
+    async Task<(bool ok, int inserted, string? error)> SyncLogsToSupabaseAsync(IEnumerable<(DateTime localTs, string level, string message, string source)> rows, CancellationToken ct)
+    {
+      AppConfig cfg;
+      lock (stateGate) cfg = currentConfig;
+      if (string.IsNullOrWhiteSpace(cfg.SupabaseUrl) || string.IsNullOrWhiteSpace(cfg.SupabaseServiceRoleKey))
+      {
+        return (false, 0, "Supabase not configured");
+      }
+      var url = cfg.SupabaseUrl.TrimEnd('/') + "/rest/v1/middleware_logs";
+
+      var tz = GetScheduleTimeZone();
+      var list = rows.Take(200).Select(r => new
+      {
+        device_id = cfg.DeviceId,
+        level = r.level,
+        message = r.message,
+        meta = new
+        {
+          source = r.source,
+          ts_local = r.localTs.ToString("O"),
+          ts_kl = TimeZoneInfo.ConvertTime(r.localTs, tz).ToString("O"),
+          ts_utc = TimeZoneInfo.ConvertTimeToUtc(r.localTs, TimeZoneInfo.Local).ToString("O"),
+        }
+      }).ToArray();
+      if (list.Length == 0) return (true, 0, null);
+
+      using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(12) };
+      using var req = new HttpRequestMessage(HttpMethod.Post, url);
+      req.Headers.TryAddWithoutValidation("apikey", cfg.SupabaseServiceRoleKey);
+      req.Headers.TryAddWithoutValidation("Authorization", $"Bearer {cfg.SupabaseServiceRoleKey}");
+      req.Headers.TryAddWithoutValidation("Prefer", "return=minimal");
+      req.Content = new StringContent(JsonSerializer.Serialize(list, JsonOptions), Encoding.UTF8, "application/json");
+      using var resp = await http.SendAsync(req, ct);
+      if (!resp.IsSuccessStatusCode)
+      {
+        var body = await resp.Content.ReadAsStringAsync(ct);
+        return (false, 0, body.Length > 250 ? body[..250] : body);
+      }
+      try
+      {
+        var baseUrl = cfg.SupabaseUrl.TrimEnd('/');
+        var nthUrl = $"{baseUrl}/rest/v1/middleware_logs?select=id&order=id.desc&limit=1&offset=1999";
+        using var nthReq = new HttpRequestMessage(HttpMethod.Get, nthUrl);
+        nthReq.Headers.TryAddWithoutValidation("apikey", cfg.SupabaseServiceRoleKey);
+        nthReq.Headers.TryAddWithoutValidation("Authorization", $"Bearer {cfg.SupabaseServiceRoleKey}");
+        using var nthResp = await http.SendAsync(nthReq, ct);
+        if (nthResp.IsSuccessStatusCode)
+        {
+          var nthBody = await nthResp.Content.ReadAsStringAsync(ct);
+          using var nthDoc = JsonDocument.Parse(nthBody);
+          if (nthDoc.RootElement.ValueKind == JsonValueKind.Array && nthDoc.RootElement.GetArrayLength() > 0)
+          {
+            var first = nthDoc.RootElement[0];
+            if (first.ValueKind == JsonValueKind.Object && first.TryGetProperty("id", out var idProp) && idProp.ValueKind == JsonValueKind.Number && idProp.TryGetInt64(out var cutoffId) && cutoffId > 0)
+            {
+              var delUrl = $"{baseUrl}/rest/v1/middleware_logs?id=lt.{cutoffId}";
+              using var delReq = new HttpRequestMessage(HttpMethod.Delete, delUrl);
+              delReq.Headers.TryAddWithoutValidation("apikey", cfg.SupabaseServiceRoleKey);
+              delReq.Headers.TryAddWithoutValidation("Authorization", $"Bearer {cfg.SupabaseServiceRoleKey}");
+              delReq.Headers.TryAddWithoutValidation("Prefer", "return=minimal");
+              _ = await http.SendAsync(delReq, ct);
+            }
+          }
+        }
+      }
+      catch { }
+      return (true, list.Length, null);
+    }
+
+    app.MapPost("/api/logs/sync", async (HttpContext ctx) =>
+    {
+      var merged = ringOut.Snapshot().Concat(ringErr.Snapshot()).TakeLast(500).ToArray();
+      var parsed = new List<(DateTime localTs, string level, string message, string source)>(capacity: 200);
+      foreach (var line in merged)
+      {
+        if (!TryParseTsPrefix(line, out var tsLocal)) continue;
+        if (tsLocal <= lastSystemLogSyncedAtLocal) continue;
+        var rest = line.Length > 24 ? line[24..] : string.Empty;
+        var (lvl, msg) = SplitLevelMessage(rest);
+        if (string.IsNullOrWhiteSpace(msg)) msg = rest.Trim();
+        parsed.Add((tsLocal, lvl, msg, "system"));
+      }
+      parsed.Sort((a, b) => a.localTs.CompareTo(b.localTs));
+      var (ok, inserted, error) = await SyncLogsToSupabaseAsync(parsed, ctx.RequestAborted);
+      if (ok && inserted > 0)
+      {
+        lastSystemLogSyncedAtLocal = parsed.Take(inserted).Max(x => x.localTs);
+      }
+      return Results.Json(new { ok, inserted, error }, JsonOptions);
+    }).RequireAuthorization();
+
+    app.MapPost("/api/activity/append", async (HttpContext ctx) =>
+    {
+      using var doc = await JsonDocument.ParseAsync(ctx.Request.Body, cancellationToken: ctx.RequestAborted);
+      var root = doc.RootElement;
+      var scope = root.TryGetProperty("scope", out var sEl) && sEl.ValueKind == JsonValueKind.String ? (sEl.GetString() ?? "") : "";
+      var message = root.TryGetProperty("message", out var mEl) && mEl.ValueKind == JsonValueKind.String ? (mEl.GetString() ?? "") : "";
+      var level = root.TryGetProperty("level", out var lEl) && lEl.ValueKind == JsonValueKind.String ? (lEl.GetString() ?? "") : "INFO";
+      var ts = DateTimeOffset.Now;
+      if (root.TryGetProperty("ts", out var tsEl) && tsEl.ValueKind == JsonValueKind.String)
+      {
+        _ = DateTimeOffset.TryParse(tsEl.GetString(), CultureInfo.InvariantCulture, DateTimeStyles.AssumeLocal, out ts);
+      }
+      var seq = Interlocked.Increment(ref activitySeq);
+      activityQ.Enqueue((seq, ts, scope, level, message));
+      while (activityQ.Count > 5000 && activityQ.TryDequeue(out _)) { }
+      try { Console.WriteLine($"[INFO] [Activity] [{scope}] [{level}] {message}"); } catch { }
+      return Results.Json(new { ok = true }, JsonOptions);
+    }).RequireAuthorization();
+
+    app.MapPost("/api/activity/sync", async (HttpContext ctx) =>
+    {
+      var pending = activityQ.Where(x => x.seq > lastActivitySyncedSeq).OrderBy(x => x.seq).Take(200).ToList();
+      var rows = pending.Select(x => (localTs: x.ts.LocalDateTime, level: (x.level ?? "INFO").Trim().ToUpperInvariant(), message: $"[{x.scope}] {x.message}", source: "activity"));
+      var (ok, inserted, error) = await SyncLogsToSupabaseAsync(rows, ctx.RequestAborted);
+      if (ok && inserted > 0)
+      {
+        lastActivitySyncedSeq = pending.Take(inserted).Max(x => x.seq);
+      }
+      return Results.Json(new { ok, inserted, error }, JsonOptions);
+    }).RequireAuthorization();
+
+    _ = Task.Run(async () =>
+    {
+      while (!app.Lifetime.ApplicationStopping.IsCancellationRequested)
+      {
+        try
+        {
+          var sysRows = ringOut.Snapshot().Concat(ringErr.Snapshot())
+            .Select(l => (ok: TryParseTsPrefix(l, out var ts), ts, line: l))
+            .Where(x => x.ok && x.ts > lastSystemLogSyncedAtLocal)
+            .Select(x =>
+            {
+              var rest = x.line.Length > 24 ? x.line[24..] : string.Empty;
+              var (lvl, msg) = SplitLevelMessage(rest);
+              if (string.IsNullOrWhiteSpace(msg)) msg = rest.Trim();
+              return (localTs: x.ts, level: lvl, message: msg, source: "system");
+            })
+            .OrderBy(x => x.localTs)
+            .Take(200)
+            .ToList();
+          var r = await SyncLogsToSupabaseAsync(sysRows, CancellationToken.None);
+          if (r.ok && r.inserted > 0) lastSystemLogSyncedAtLocal = sysRows.Take(r.inserted).Max(x => x.localTs);
+        }
+        catch { }
+
+        try
+        {
+          var pending = activityQ.Where(x => x.seq > lastActivitySyncedSeq).OrderBy(x => x.seq).Take(200).ToList();
+          if (pending.Count > 0)
+          {
+            var rows = pending.Select(x => (localTs: x.ts.LocalDateTime, level: (x.level ?? "INFO").Trim().ToUpperInvariant(), message: $"[{x.scope}] {x.message}", source: "activity"));
+            var r = await SyncLogsToSupabaseAsync(rows, CancellationToken.None);
+            if (r.ok && r.inserted > 0) lastActivitySyncedSeq = pending.Take(r.inserted).Max(x => x.seq);
+          }
+        }
+        catch { }
+
+        try { await Task.Delay(TimeSpan.FromMinutes(2), app.Lifetime.ApplicationStopping); }
+        catch { }
+      }
+    });
 
     app.MapPost("/api/restart", async (HttpContext ctx) =>
     {
@@ -909,8 +1279,8 @@ static partial class Program
 
         if (root.TryGetProperty("supabaseUrl", out var supaUrlEl))
         {
-          var url = (supaUrlEl.GetString() ?? "").Trim();
-          currentConfig = currentConfig with { SupabaseUrl = url };
+          _ = (supaUrlEl.GetString() ?? "").Trim();
+          currentConfig = currentConfig with { SupabaseUrl = DefaultSupabaseUrl };
         }
 
         if (root.TryGetProperty("supabaseAttendanceTable", out var supaTableEl))
@@ -927,31 +1297,38 @@ static partial class Program
         if (root.TryGetProperty("supabaseServiceRoleKey", out var supaSrvEl))
         {
           var k = (supaSrvEl.GetString() ?? "").Trim();
-          currentConfig = currentConfig with { SupabaseServiceRoleKey = k };
+          if (!string.IsNullOrWhiteSpace(k)) currentConfig = currentConfig with { SupabaseServiceRoleKey = k };
         }
         else if (root.TryGetProperty("supabaseApiKey", out var supaKeyEl))
         {
           var k = (supaKeyEl.GetString() ?? "").Trim();
-          currentConfig = currentConfig with { SupabaseServiceRoleKey = k };
+          if (!string.IsNullOrWhiteSpace(k)) currentConfig = currentConfig with { SupabaseServiceRoleKey = k };
         }
 
         if (root.TryGetProperty("supabaseAnonKey", out var supaAnonEl))
         {
-          dashboardSupabaseAnonKey = (supaAnonEl.GetString() ?? string.Empty).Trim();
+          _ = (supaAnonEl.GetString() ?? string.Empty).Trim();
+          dashboardSupabaseAnonKey = DefaultSupabasePublishableKey;
         }
 
         if (root.TryGetProperty("supabaseProjectId", out var supaPidEl))
         {
-          dashboardSupabaseProjectId = (supaPidEl.GetString() ?? string.Empty).Trim();
+          _ = (supaPidEl.GetString() ?? string.Empty).Trim();
+          dashboardSupabaseProjectId = DefaultSupabaseProjectId;
         }
 
         if (root.TryGetProperty("supabaseJwt", out var supaJwtEl))
         {
-          dashboardSupabaseJwtSecret = (supaJwtEl.GetString() ?? string.Empty).Trim();
+          var jwt = (supaJwtEl.GetString() ?? string.Empty).Trim();
+          if (!string.IsNullOrWhiteSpace(jwt)) dashboardSupabaseJwtSecret = jwt;
         }
 
         if (saveSupabaseSettings)
         {
+          currentConfig = currentConfig with { SupabaseUrl = DefaultSupabaseUrl };
+          dashboardSupabaseProjectId = DefaultSupabaseProjectId;
+          dashboardSupabaseAnonKey = DefaultSupabasePublishableKey;
+
           var (protectedKey, isProtected) = TryProtectBase64(currentConfig.SupabaseServiceRoleKey ?? string.Empty);
           dashboardSettingsToSave = new DashboardSettings(
             currentConfig.SupabaseUrl ?? string.Empty,
@@ -1232,7 +1609,8 @@ static partial class Program
 
     app.MapGet("/api/files/converted", () =>
     {
-      var root = Path.Combine(Directory.GetCurrentDirectory(), "Reference");
+      var export = TryResolveAttlogExportPath();
+      var root = export is not null ? (Path.GetDirectoryName(export) ?? Path.Combine(Directory.GetCurrentDirectory(), "Reference")) : Path.Combine(Directory.GetCurrentDirectory(), "Reference");
       var items = new List<object>(capacity: 20);
       if (Directory.Exists(root))
       {
@@ -1267,7 +1645,8 @@ static partial class Program
       if (name.Length == 0) return Results.NotFound();
       if (name.Contains('/') || name.Contains('\\') || name.Contains("..", StringComparison.Ordinal)) return Results.NotFound();
       if (!name.EndsWith(".txt", StringComparison.OrdinalIgnoreCase)) return Results.NotFound();
-      var root = Path.Combine(Directory.GetCurrentDirectory(), "Reference");
+      var export = TryResolveAttlogExportPath();
+      var root = export is not null ? (Path.GetDirectoryName(export) ?? Path.Combine(Directory.GetCurrentDirectory(), "Reference")) : Path.Combine(Directory.GetCurrentDirectory(), "Reference");
       var full = Path.Combine(root, name);
       if (!File.Exists(full)) return Results.NotFound();
       return Results.File(full, "text/plain; charset=utf-8", fileDownloadName: name);
@@ -1280,10 +1659,49 @@ static partial class Program
       var url = root.TryGetProperty("supabaseUrl", out var urlEl) ? (urlEl.GetString() ?? string.Empty).Trim() : string.Empty;
       var anon = root.TryGetProperty("supabaseAnonKey", out var anonEl) ? (anonEl.GetString() ?? string.Empty).Trim() : string.Empty;
       var pid = root.TryGetProperty("supabaseProjectId", out var pidEl) ? (pidEl.GetString() ?? string.Empty).Trim() : string.Empty;
+      var service = root.TryGetProperty("supabaseServiceRoleKey", out var srvEl) ? (srvEl.GetString() ?? string.Empty).Trim() : string.Empty;
+      var jwt = root.TryGetProperty("supabaseJwtSecret", out var jwtEl) ? (jwtEl.GetString() ?? string.Empty).Trim() : string.Empty;
       var outDir = Path.Combine(Directory.GetCurrentDirectory(), "SHAB Dashboard");
       var outPath = Path.Combine(outDir, ".env.local");
       Directory.CreateDirectory(outDir);
-      var text = $"VITE_SUPABASE_URL={url}\nVITE_SUPABASE_ANON_KEY={anon}\nVITE_SUPABASE_PROJECT_ID={pid}\n";
+      if (File.Exists(outPath) && (service.Length == 0 || jwt.Length == 0))
+      {
+        try
+        {
+          foreach (var rawLine in File.ReadAllLines(outPath))
+          {
+            var line = (rawLine ?? string.Empty).Trim();
+            if (line.Length == 0) continue;
+            if (line.StartsWith("#", StringComparison.Ordinal)) continue;
+            if (line.StartsWith("export ", StringComparison.OrdinalIgnoreCase)) line = line["export ".Length..].Trim();
+
+            var eq = line.IndexOf('=', StringComparison.Ordinal);
+            if (eq <= 0) continue;
+            var k = line[..eq].Trim();
+            var v = line[(eq + 1)..].Trim();
+            if (v.Length >= 2)
+            {
+              var first = v[0];
+              var last = v[^1];
+              if ((first == '"' && last == '"') || (first == '\'' && last == '\''))
+              {
+                v = v[1..^1];
+              }
+            }
+            if (service.Length == 0 && k.Equals("SUPABASE_SERVICE_ROLE_KEY", StringComparison.OrdinalIgnoreCase)) service = v;
+            if (jwt.Length == 0 && k.Equals("SUPABASE_JWT_SECRET", StringComparison.OrdinalIgnoreCase)) jwt = v;
+          }
+        }
+        catch { }
+      }
+      var text =
+        $"VITE_SUPABASE_URL={url}\n" +
+        $"VITE_SUPABASE_ANON_KEY={anon}\n" +
+        $"VITE_SUPABASE_PROJECT_ID={pid}\n" +
+        $"SUPABASE_URL={url}\n" +
+        $"SUPABASE_PROJECT_ID={pid}\n" +
+        (service.Length > 0 ? $"SUPABASE_SERVICE_ROLE_KEY={service}\n" : string.Empty) +
+        (jwt.Length > 0 ? $"SUPABASE_JWT_SECRET={jwt}\n" : string.Empty);
       await File.WriteAllTextAsync(outPath, text, Encoding.UTF8, ctx.RequestAborted);
       return Results.Json(new { ok = true, path = outPath }, JsonOptions);
     }).RequireAuthorization();
@@ -1456,11 +1874,28 @@ static partial class Program
       var q = ctx.Request.Query;
       var dateRaw = (q.TryGetValue("date", out var v1) ? v1.ToString() : string.Empty).Trim();
       var deptRaw = (q.TryGetValue("department", out var v2) ? v2.ToString() : string.Empty).Trim();
+      var monthRaw = (q.TryGetValue("calendarMonth", out var v3) ? v3.ToString() : string.Empty).Trim();
 
       var dateLocal = DateOnly.FromDateTime(DateTime.Now);
       if (!string.IsNullOrWhiteSpace(dateRaw))
       {
         _ = DateOnly.TryParseExact(dateRaw, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out dateLocal);
+      }
+      var calMonthRequested = new DateOnly(dateLocal.Year, dateLocal.Month, 1);
+      if (!string.IsNullOrWhiteSpace(monthRaw))
+      {
+        var raw = monthRaw.Trim();
+        if (raw.Length == 7)
+        {
+          var p = raw.Split('-', StringSplitOptions.RemoveEmptyEntries);
+          if (p.Length == 2
+              && int.TryParse(p[0], NumberStyles.Integer, CultureInfo.InvariantCulture, out var y)
+              && int.TryParse(p[1], NumberStyles.Integer, CultureInfo.InvariantCulture, out var m)
+              && y >= 2000 && y <= 2100 && m >= 1 && m <= 12)
+          {
+            calMonthRequested = new DateOnly(y, m, 1);
+          }
+        }
       }
 
       var source = "db";
@@ -1496,9 +1931,11 @@ static partial class Program
 
       var staffRows = new List<(string Id, string Name, string Dept, bool Active, string ShiftPattern)>(capacity: 256);
       var departments = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-      if (!string.IsNullOrWhiteSpace(cfg.SupabaseUrl) && !string.IsNullOrWhiteSpace(cfg.SupabaseServiceRoleKey))
+      string anon;
+      lock (stateGate) anon = dashboardSupabaseAnonKey;
+      if (!string.IsNullOrWhiteSpace(cfg.SupabaseUrl) && (!string.IsNullOrWhiteSpace(cfg.SupabaseServiceRoleKey) || !string.IsNullOrWhiteSpace(anon)))
       {
-        var supa = await TryLoadStaffFromSupabase(cfg, ctx.RequestAborted);
+        var supa = await TryLoadStaffFromSupabase(cfg, anon, ctx.RequestAborted);
         if (!supa.ok)
         {
           return Results.Json(new { ok = false, error = $"Failed to load staff from Supabase: {supa.error}" }, JsonOptions);
@@ -1550,6 +1987,7 @@ static partial class Program
       var start30 = dateLocal.AddDays(-29);
       var start6Months = new DateOnly(dateLocal.AddMonths(-5).Year, dateLocal.AddMonths(-5).Month, 1);
       var rangeStart = start6Months;
+      if (calMonthRequested < rangeStart) rangeStart = calMonthRequested;
 
       var lateAfter = new TimeOnly(9, 15, 0);
 
@@ -1588,9 +2026,9 @@ static partial class Program
         shiftRows = new[]
         {
           new ShiftPatternRow("Normal", "Mon–Fri", "09:00–18:00", "13:00–14:00", "Default"),
-          new ShiftPatternRow("Shift 1", "Mon–Sat", "08:00–16:00", "12:00–13:00", "Default"),
-          new ShiftPatternRow("Shift 2", "Mon–Sat", "16:00–00:00", "20:00–20:30", "Default"),
-          new ShiftPatternRow("Shift 3", "Mon–Sat", "00:00–08:00", "04:00–04:30", "Default"),
+          new ShiftPatternRow("Shift 1", "Mon–Fri", "08:00–16:00", "12:00–13:00", "Default"),
+          new ShiftPatternRow("Shift 2", "Mon–Fri", "16:00–00:00", "20:00–20:30", "Default"),
+          new ShiftPatternRow("Shift 3", "Mon–Fri", "00:00–08:00", "04:00–04:30", "Default"),
         };
       }
 
@@ -1707,14 +2145,17 @@ static partial class Program
           return Results.Json(new { ok = false, error = "Supabase not configured." }, JsonOptions);
         }
         var baseUrl = cfg.SupabaseUrl.TrimEnd('/');
-        var select = Uri.EscapeDataString("staff_id,datetime");
-        var startDt = Uri.EscapeDataString(rangeStart.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) + " 00:00:00");
-        var endDt = Uri.EscapeDataString(dateLocal.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) + " 23:59:59");
+        var select = Uri.EscapeDataString("staff_id,occurred_at");
+        var sg = TimeSpan.FromHours(8);
+        var startUtc = new DateTimeOffset(rangeStart.ToDateTime(new TimeOnly(0, 0, 0)), sg).ToUniversalTime().ToString("O", CultureInfo.InvariantCulture);
+        var endUtc = new DateTimeOffset(dateLocal.ToDateTime(new TimeOnly(23, 59, 59)), sg).ToUniversalTime().ToString("O", CultureInfo.InvariantCulture);
+        var startDt = Uri.EscapeDataString(startUtc);
+        var endDt = Uri.EscapeDataString(endUtc);
         var url =
           $"{baseUrl}/rest/v1/{cfg.SupabaseAttendanceTable}?select={select}" +
-          $"&datetime=gte.{startDt}" +
-          $"&datetime=lte.{endDt}" +
-          $"&order=datetime.desc&limit=50000";
+          $"&occurred_at=gte.{startDt}" +
+          $"&occurred_at=lte.{endDt}" +
+          $"&order=occurred_at.desc&limit=50000";
 
         using var http = new HttpClient();
         using var req = new HttpRequestMessage(HttpMethod.Get, url);
@@ -1739,9 +2180,10 @@ static partial class Program
         foreach (var el in doc.RootElement.EnumerateArray())
         {
           var staffId = el.TryGetProperty("staff_id", out var staffEl) && staffEl.ValueKind == JsonValueKind.String ? staffEl.GetString() : null;
-          var dtRaw = el.TryGetProperty("datetime", out var dtEl) && dtEl.ValueKind == JsonValueKind.String ? dtEl.GetString() : null;
+          var dtRaw = el.TryGetProperty("occurred_at", out var dtEl) && dtEl.ValueKind == JsonValueKind.String ? dtEl.GetString() : null;
           if (string.IsNullOrWhiteSpace(staffId) || string.IsNullOrWhiteSpace(dtRaw)) continue;
-          if (!DateTime.TryParseExact(dtRaw.Trim(), "yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture, DateTimeStyles.None, out var dt)) continue;
+          if (!DateTimeOffset.TryParse(dtRaw.Trim(), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var dto)) continue;
+          var dt = dto.ToOffset(sg).DateTime;
           var d = DateOnly.FromDateTime(dt);
           if (d < rangeStart || d > dateLocal) continue;
           var t = TimeOnly.FromDateTime(dt);
@@ -1765,6 +2207,7 @@ static partial class Program
 
       var summaryByDayStaff = new Dictionary<(DateOnly Day, string StaffId), (TimeOnly? FirstIn, bool Late, double WorkedHours, double BreakHours, double OtHours, bool MissingOut, int Duplicates)>();
       var dayAgg = new Dictionary<DateOnly, (int Present, int Late, double WorkedHours, double BreakHours, double OtHours, int MissingOut, int Duplicates)>();
+      TimeOnly? lastPunchLocalTime = null;
       foreach (var kv in dayStaff)
       {
         var day = kv.Key;
@@ -1791,6 +2234,11 @@ static partial class Program
             lastKept = t;
           }
           if (kept.Count == 0) continue;
+          if (day == dateLocal)
+          {
+            var lp = kept[^1];
+            if (lastPunchLocalTime is null || lp > lastPunchLocalTime.Value) lastPunchLocalTime = lp;
+          }
 
           var workedHours = 0.0;
           var breakHours = 0.0;
@@ -2004,6 +2452,17 @@ static partial class Program
       var avgOt = presentToday > 0 ? todayAgg.OtHours / presentToday : 0.0;
 
       var monthStartCur = new DateOnly(dateLocal.Year, dateLocal.Month, 1);
+      var calMonth = calMonthRequested;
+
+      var monthEndCur = calMonth.AddMonths(1).AddDays(-1);
+      var calendarDays = new List<object>(capacity: 31);
+      var maxPresent = 0;
+      for (var d = calMonth; d <= monthEndCur; d = d.AddDays(1))
+      {
+        var c = dayAgg.TryGetValue(d, out var v) ? v.Present : 0;
+        if (c > maxPresent) maxPresent = c;
+        calendarDays.Add(new { date = d.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), day = d.Day, present = c });
+      }
       var monthWorked = 0.0;
       for (var d = monthStartCur; d <= dateLocal; d = d.AddDays(1))
       {
@@ -2029,6 +2488,15 @@ static partial class Program
         source,
         department = string.IsNullOrWhiteSpace(deptFilter) ? "All" : deptFilter,
         departments = deptList,
+        lastPunchLocalTime = lastPunchLocalTime is null ? string.Empty : lastPunchLocalTime.Value.ToString("HH:mm", CultureInfo.InvariantCulture),
+        calendar = new
+        {
+          month = calMonth.ToString("yyyy-MM", CultureInfo.InvariantCulture),
+          label = calMonth.ToString("MMM yyyy", CultureInfo.InvariantCulture),
+          cutoffDate = monthEndCur.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+          maxPresent = maxPresent,
+          days = calendarDays,
+        },
         roster = new
         {
           totalEmployees = rosterTotal,
@@ -2128,9 +2596,11 @@ static partial class Program
 
       var anyActive = false;
       var staffAll = new List<(string Id, string Name, string Status, string ShiftPattern)>(capacity: 256);
-      if (!string.IsNullOrWhiteSpace(cfg.SupabaseUrl) && !string.IsNullOrWhiteSpace(cfg.SupabaseServiceRoleKey))
+      string anonKeyLocal;
+      lock (stateGate) anonKeyLocal = dashboardSupabaseAnonKey;
+      if (!string.IsNullOrWhiteSpace(cfg.SupabaseUrl) && (!string.IsNullOrWhiteSpace(cfg.SupabaseServiceRoleKey) || !string.IsNullOrWhiteSpace(anonKeyLocal)))
       {
-        var supa = await TryLoadStaffFromSupabase(cfg, ctx.RequestAborted);
+        var supa = await TryLoadStaffFromSupabase(cfg, anonKeyLocal, ctx.RequestAborted);
         if (!supa.ok)
         {
           return Results.Json(new { ok = false, error = $"Failed to load staff from Supabase: {supa.error}" }, JsonOptions);
@@ -2183,9 +2653,9 @@ static partial class Program
       }
 
       ShiftPatternRow[] shiftRows;
-      if (!string.IsNullOrWhiteSpace(cfg.SupabaseUrl) && !string.IsNullOrWhiteSpace(cfg.SupabaseServiceRoleKey))
+      if (!string.IsNullOrWhiteSpace(cfg.SupabaseUrl) && (!string.IsNullOrWhiteSpace(cfg.SupabaseServiceRoleKey) || !string.IsNullOrWhiteSpace(anonKeyLocal)))
       {
-        var supaShifts = await TryLoadShiftPatternsFromSupabase(cfg, ctx.RequestAborted);
+        var supaShifts = await TryLoadShiftPatternsFromSupabase(cfg, anonKeyLocal, ctx.RequestAborted);
         shiftRows = supaShifts.ok ? supaShifts.rows : Array.Empty<ShiftPatternRow>();
       }
       else
@@ -2513,9 +2983,11 @@ static partial class Program
 
       var anyActive = false;
       var staffAll = new List<(string Id, string Name, string Status, string ShiftPattern)>(capacity: 256);
-      if (!string.IsNullOrWhiteSpace(cfg.SupabaseUrl) && !string.IsNullOrWhiteSpace(cfg.SupabaseServiceRoleKey))
+      string anonKeyLocal;
+      lock (stateGate) anonKeyLocal = dashboardSupabaseAnonKey;
+      if (!string.IsNullOrWhiteSpace(cfg.SupabaseUrl) && (!string.IsNullOrWhiteSpace(cfg.SupabaseServiceRoleKey) || !string.IsNullOrWhiteSpace(anonKeyLocal)))
       {
-        var supa = await TryLoadStaffFromSupabase(cfg, ctx.RequestAborted);
+        var supa = await TryLoadStaffFromSupabase(cfg, anonKeyLocal, ctx.RequestAborted);
         if (!supa.ok)
         {
           return Results.Json(new { ok = false, error = $"Failed to load staff from Supabase: {supa.error}" }, JsonOptions);
@@ -2568,9 +3040,9 @@ static partial class Program
       }
 
       ShiftPatternRow[] shiftRows;
-      if (!string.IsNullOrWhiteSpace(cfg.SupabaseUrl) && !string.IsNullOrWhiteSpace(cfg.SupabaseServiceRoleKey))
+      if (!string.IsNullOrWhiteSpace(cfg.SupabaseUrl) && (!string.IsNullOrWhiteSpace(cfg.SupabaseServiceRoleKey) || !string.IsNullOrWhiteSpace(anonKeyLocal)))
       {
-        var supaShifts = await TryLoadShiftPatternsFromSupabase(cfg, ctx.RequestAborted);
+        var supaShifts = await TryLoadShiftPatternsFromSupabase(cfg, anonKeyLocal, ctx.RequestAborted);
         shiftRows = supaShifts.ok ? supaShifts.rows : Array.Empty<ShiftPatternRow>();
       }
       else
@@ -2936,11 +3408,14 @@ static partial class Program
         return bm - am;
       }
 
+      string anonKeyLocal;
+      lock (stateGate) anonKeyLocal = dashboardSupabaseAnonKey;
+
       var staffName = staffId;
       var staffPattern = "Normal";
-      if (!string.IsNullOrWhiteSpace(cfg.SupabaseUrl) && !string.IsNullOrWhiteSpace(cfg.SupabaseServiceRoleKey))
+      if (!string.IsNullOrWhiteSpace(cfg.SupabaseUrl) && (!string.IsNullOrWhiteSpace(cfg.SupabaseServiceRoleKey) || !string.IsNullOrWhiteSpace(anonKeyLocal)))
       {
-        var supa = await TryLoadStaffFromSupabase(cfg, ctx.RequestAborted);
+        var supa = await TryLoadStaffFromSupabase(cfg, anonKeyLocal, ctx.RequestAborted);
         if (!supa.ok)
         {
           return Results.Json(new { ok = false, error = $"Failed to load staff from Supabase: {supa.error}" }, JsonOptions);
@@ -2989,9 +3464,9 @@ static partial class Program
       }
 
       ShiftPatternRow[] shiftRows;
-      if (!string.IsNullOrWhiteSpace(cfg.SupabaseUrl) && !string.IsNullOrWhiteSpace(cfg.SupabaseServiceRoleKey))
+      if (!string.IsNullOrWhiteSpace(cfg.SupabaseUrl) && (!string.IsNullOrWhiteSpace(cfg.SupabaseServiceRoleKey) || !string.IsNullOrWhiteSpace(anonKeyLocal)))
       {
-        var supaShifts = await TryLoadShiftPatternsFromSupabase(cfg, ctx.RequestAborted);
+        var supaShifts = await TryLoadShiftPatternsFromSupabase(cfg, anonKeyLocal, ctx.RequestAborted);
         shiftRows = supaShifts.ok ? supaShifts.rows : Array.Empty<ShiftPatternRow>();
       }
       else
@@ -3328,9 +3803,11 @@ static partial class Program
 
       var anyActive = false;
       var staffAll = new List<(string Id, string Name, string Status, string ShiftPattern)>(capacity: 256);
-      if (!string.IsNullOrWhiteSpace(cfg.SupabaseUrl) && !string.IsNullOrWhiteSpace(cfg.SupabaseServiceRoleKey))
+      string anonKeyLocal;
+      lock (stateGate) anonKeyLocal = dashboardSupabaseAnonKey;
+      if (!string.IsNullOrWhiteSpace(cfg.SupabaseUrl) && (!string.IsNullOrWhiteSpace(cfg.SupabaseServiceRoleKey) || !string.IsNullOrWhiteSpace(anonKeyLocal)))
       {
-        var supa = await TryLoadStaffFromSupabase(cfg, ctx.RequestAborted);
+        var supa = await TryLoadStaffFromSupabase(cfg, anonKeyLocal, ctx.RequestAborted);
         if (!supa.ok)
         {
           return Results.Json(new { ok = false, error = $"Failed to load staff from Supabase: {supa.error}" }, JsonOptions);
@@ -3383,9 +3860,9 @@ static partial class Program
       }
 
       ShiftPatternRow[] shiftRows;
-      if (!string.IsNullOrWhiteSpace(cfg.SupabaseUrl) && !string.IsNullOrWhiteSpace(cfg.SupabaseServiceRoleKey))
+      if (!string.IsNullOrWhiteSpace(cfg.SupabaseUrl) && (!string.IsNullOrWhiteSpace(cfg.SupabaseServiceRoleKey) || !string.IsNullOrWhiteSpace(anonKeyLocal)))
       {
-        var supaShifts = await TryLoadShiftPatternsFromSupabase(cfg, ctx.RequestAborted);
+        var supaShifts = await TryLoadShiftPatternsFromSupabase(cfg, anonKeyLocal, ctx.RequestAborted);
         shiftRows = supaShifts.ok ? supaShifts.rows : Array.Empty<ShiftPatternRow>();
       }
       else
@@ -3623,7 +4100,9 @@ static partial class Program
         var p = list[idx];
         lock (stateGate)
         {
-          pollIntervalSeconds = Math.Clamp(p.PollIntervalSeconds <= 0 ? 600 : p.PollIntervalSeconds, 60, 3600);
+          var sec = p.PollIntervalSeconds <= 0 ? 3600 : p.PollIntervalSeconds;
+          if (sec == 600) sec = 3600;
+          pollIntervalSeconds = Math.Clamp(sec, 60, 3600);
           autoSyncEnabled = p.AutoSyncEnabled;
         }
         var updatedList = (state.PollingPresets ?? Array.Empty<PollingPreset>()).ToList();
@@ -3681,7 +4160,19 @@ static partial class Program
     {
       var path = TryResolveAttlogExportPath();
       if (string.IsNullOrWhiteSpace(path)) return Results.Json(new { rows = Array.Empty<object>(), error = "Could not resolve 1_attlog.dat path" }, JsonOptions);
-      if (!File.Exists(path)) return Results.Json(new { rows = Array.Empty<object>(), error = $"File not found: {path}" }, JsonOptions);
+      if (!File.Exists(path))
+      {
+        try
+        {
+          var dir = Path.GetDirectoryName(Path.GetFullPath(path));
+          if (!string.IsNullOrWhiteSpace(dir)) Directory.CreateDirectory(dir);
+          File.WriteAllText(path, string.Empty, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+        }
+        catch
+        {
+          return Results.Json(new { rows = Array.Empty<object>(), error = $"File not found: {path}" }, JsonOptions);
+        }
+      }
 
       var rows = new List<object>(capacity: 200);
       foreach (var raw in File.ReadLines(path))
@@ -3712,51 +4203,20 @@ static partial class Program
       return Results.Json(new { rows = rows.ToArray() }, JsonOptions);
     }).RequireAuthorization();
 
-    app.MapPost("/api/records/upload", async (HttpContext ctx) =>
-    {
-      if (!ctx.Request.HasFormContentType) return Results.Json(new { ok = false, reason = "bad content type" }, JsonOptions);
-      var form = await ctx.Request.ReadFormAsync(ctx.RequestAborted);
-      var file = form.Files.GetFile("file");
-      if (file is null || file.Length == 0) return Results.Json(new { ok = false, reason = "no file" }, JsonOptions);
-
-      var rows = new List<object>(capacity: 256);
-      using (var stream = file.OpenReadStream())
-      using (var reader = new StreamReader(stream))
-      {
-        while (true)
-        {
-          var line = await reader.ReadLineAsync();
-          if (line is null) break;
-          var s = line.Trim();
-          if (s.Length == 0) continue;
-          var parts = s.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
-          if (parts.Length < 7) continue;
-          var staffId = parts[0].Trim();
-          if (staffId.Length == 0) continue;
-          var dtRaw = parts[1].Trim() + " " + parts[2].Trim();
-          _ = DateTime.TryParseExact(dtRaw, "yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture, DateTimeStyles.None, out _);
-          rows.Add(new
-          {
-            staff_id = staffId,
-            datetime = dtRaw,
-            verified = parts[3].Trim(),
-            status = parts[4].Trim(),
-            workcode = parts[5].Trim(),
-            reserved = parts[6].Trim(),
-          });
-        }
-      }
-
-      return Results.Json(new { ok = true, rows = rows.ToArray() }, JsonOptions);
-    }).RequireAuthorization();
-
     app.MapGet("/api/staff/file", (HttpContext ctx) =>
     {
       AppConfig cfg;
-      lock (stateGate) cfg = currentConfig;
-      if (string.IsNullOrWhiteSpace(cfg.SupabaseUrl) || string.IsNullOrWhiteSpace(cfg.SupabaseServiceRoleKey))
+      string anonKey;
+      lock (stateGate)
       {
-        return Results.Json(new { rows = Array.Empty<object>(), error = "Supabase not configured. Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in Database Sync settings." }, JsonOptions);
+        cfg = currentConfig;
+        anonKey = dashboardSupabaseAnonKey;
+      }
+      var serviceKeyRaw = (cfg.SupabaseServiceRoleKey ?? string.Empty).Trim();
+      var anonRaw = (anonKey ?? string.Empty).Trim();
+      if (string.IsNullOrWhiteSpace(cfg.SupabaseUrl) || (serviceKeyRaw.Length == 0 && anonRaw.Length == 0))
+      {
+        return Results.Json(new { rows = Array.Empty<object>(), error = "Supabase not configured. Set Supabase URL + API key in Database Sync settings." }, JsonOptions);
       }
 
       static string FmtDateOnly(string? raw)
@@ -3774,7 +4234,7 @@ static partial class Program
         return s.Length >= 10 ? s[..10] : s;
       }
 
-      static async Task<(bool ok, object[] rows, string? error, bool shiftPatternSupported)> TryFetchAsync(AppConfig cfg, bool includeShiftPattern, CancellationToken ct)
+      static async Task<(bool ok, object[] rows, string? error, bool shiftPatternSupported, int statusCode)> TryFetchAsync(AppConfig cfg, string apiKey, bool includeShiftPattern, CancellationToken ct)
       {
         var baseUrl = cfg.SupabaseUrl.TrimEnd('/');
         var cols = includeShiftPattern
@@ -3783,17 +4243,17 @@ static partial class Program
         var url = $"{baseUrl}/rest/v1/staff?select={Uri.EscapeDataString(cols)}&order=id.asc&limit=5000";
         using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
         using var req = new HttpRequestMessage(HttpMethod.Get, url);
-        req.Headers.TryAddWithoutValidation("apikey", cfg.SupabaseServiceRoleKey);
-        req.Headers.TryAddWithoutValidation("Authorization", $"Bearer {cfg.SupabaseServiceRoleKey}");
+        req.Headers.TryAddWithoutValidation("apikey", apiKey);
+        req.Headers.TryAddWithoutValidation("Authorization", $"Bearer {apiKey}");
         using var resp = await http.SendAsync(req, ct);
         var body = await resp.Content.ReadAsStringAsync(ct);
         if (!resp.IsSuccessStatusCode)
         {
-          return (false, Array.Empty<object>(), body.Length > 350 ? body[..350] : body, includeShiftPattern);
+          return (false, Array.Empty<object>(), body.Length > 350 ? body[..350] : body, includeShiftPattern, (int)resp.StatusCode);
         }
 
         using var doc = JsonDocument.Parse(body);
-        if (doc.RootElement.ValueKind != JsonValueKind.Array) return (false, Array.Empty<object>(), "Unexpected response shape", includeShiftPattern);
+        if (doc.RootElement.ValueKind != JsonValueKind.Array) return (false, Array.Empty<object>(), "Unexpected response shape", includeShiftPattern, 200);
         var list = new List<object>(capacity: 256);
         foreach (var el in doc.RootElement.EnumerateArray())
         {
@@ -3801,6 +4261,7 @@ static partial class Program
           if (id.Length == 0) continue;
           var fullName = el.TryGetProperty("full_name", out var nEl) && nEl.ValueKind == JsonValueKind.String ? (nEl.GetString() ?? "") : "";
           var role = el.TryGetProperty("role", out var rEl) && rEl.ValueKind == JsonValueKind.String ? (rEl.GetString() ?? "") : "";
+          if (id == "16" && role.Equals("superadmin", StringComparison.OrdinalIgnoreCase)) role = "Manager";
           var dept = el.TryGetProperty("department", out var dEl) && dEl.ValueKind == JsonValueKind.String ? (dEl.GetString() ?? "") : "";
           var status = el.TryGetProperty("status", out var stEl) && stEl.ValueKind == JsonValueKind.String ? (stEl.GetString() ?? "") : "";
           var dj = el.TryGetProperty("date_joined", out var djEl) && djEl.ValueKind == JsonValueKind.String ? djEl.GetString() : null;
@@ -3816,16 +4277,418 @@ static partial class Program
             shift_pattern = sp,
           });
         }
-        return (true, list.ToArray(), null, includeShiftPattern);
+        return (true, list.ToArray(), null, includeShiftPattern, 200);
       }
 
-      var t = TryFetchAsync(cfg, includeShiftPattern: true, ctx.RequestAborted).GetAwaiter().GetResult();
+      var apiKey = serviceKeyRaw.Length > 0 ? serviceKeyRaw : anonRaw;
+      var t = TryFetchAsync(cfg, apiKey, includeShiftPattern: true, ctx.RequestAborted).GetAwaiter().GetResult();
+      if (!t.ok && t.statusCode == 401 && apiKey == serviceKeyRaw && anonRaw.Length > 0)
+      {
+        t = TryFetchAsync(cfg, anonRaw, includeShiftPattern: true, ctx.RequestAborted).GetAwaiter().GetResult();
+      }
       if (!t.ok && t.error is not null && t.error.Contains("shift_pattern", StringComparison.OrdinalIgnoreCase))
       {
-        t = TryFetchAsync(cfg, includeShiftPattern: false, ctx.RequestAborted).GetAwaiter().GetResult();
+        t = TryFetchAsync(cfg, apiKey, includeShiftPattern: false, ctx.RequestAborted).GetAwaiter().GetResult();
+        if (!t.ok && t.statusCode == 401 && apiKey == serviceKeyRaw && anonRaw.Length > 0)
+        {
+          t = TryFetchAsync(cfg, anonRaw, includeShiftPattern: false, ctx.RequestAborted).GetAwaiter().GetResult();
+        }
       }
       if (!t.ok) return Results.Json(new { rows = Array.Empty<object>(), error = t.error ?? "Failed to load staff" }, JsonOptions);
       return Results.Json(new { rows = t.rows }, JsonOptions);
+    }).RequireAuthorization();
+
+    app.MapGet("/api/staff/attendance/month", async (HttpContext ctx) =>
+    {
+      var q = ctx.Request.Query;
+      var staffId = (q.TryGetValue("staffId", out var v1) ? v1.ToString() : string.Empty).Trim();
+      var monthRaw = (q.TryGetValue("month", out var v2) ? v2.ToString() : string.Empty).Trim();
+      if (string.IsNullOrWhiteSpace(staffId)) return Results.Json(new { ok = false, error = "staffId required" }, JsonOptions);
+
+      var now = DateTime.Now;
+      var year = now.Year;
+      var month = now.Month;
+      if (!string.IsNullOrWhiteSpace(monthRaw))
+      {
+        var parts = monthRaw.Split('-', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (parts.Length == 2 && int.TryParse(parts[0], out var y) && int.TryParse(parts[1], out var m))
+        {
+          if (y >= 2000 && y <= 2100) year = y;
+          if (m >= 1 && m <= 12) month = m;
+        }
+      }
+
+      var monthStart = new DateOnly(year, month, 1);
+      var monthEnd = monthStart.AddMonths(1).AddDays(-1);
+
+      AppConfig cfg;
+      lock (stateGate) cfg = currentConfig;
+
+      if (string.IsNullOrWhiteSpace(cfg.SupabaseUrl) || string.IsNullOrWhiteSpace(cfg.SupabaseServiceRoleKey) || string.IsNullOrWhiteSpace(cfg.SupabaseAttendanceTable))
+      {
+        return Results.Json(new { ok = false, error = "Supabase not configured." }, JsonOptions);
+      }
+
+      static bool TryParseHm(string raw, out TimeOnly t)
+      {
+        raw = (raw ?? string.Empty).Trim();
+        if (raw.Length == 0) { t = default; return false; }
+        if (TimeOnly.TryParseExact(raw, "HH:mm", CultureInfo.InvariantCulture, DateTimeStyles.None, out t)) return true;
+        if (TimeOnly.TryParseExact(raw, "HH:mm:ss", CultureInfo.InvariantCulture, DateTimeStyles.None, out t)) return true;
+        return false;
+      }
+
+      static bool TryParseTimeRange(string raw, out TimeOnly start, out TimeOnly end)
+      {
+        start = default;
+        end = default;
+        raw = (raw ?? string.Empty).Trim();
+        if (raw.Length == 0) return false;
+        var sep = raw.Contains('–', StringComparison.Ordinal) ? '–' : '-';
+        var parts = raw.Split(sep, StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length != 2) return false;
+        return TryParseHm(parts[0], out start) && TryParseHm(parts[1], out end);
+      }
+
+      static HashSet<DayOfWeek> ParseWorkingDays(string raw)
+      {
+        raw = (raw ?? string.Empty).Trim();
+        if (raw.Length == 0) return new HashSet<DayOfWeek>(new[] { DayOfWeek.Monday, DayOfWeek.Tuesday, DayOfWeek.Wednesday, DayOfWeek.Thursday, DayOfWeek.Friday });
+        raw = raw.Replace("to", "–", StringComparison.OrdinalIgnoreCase);
+        raw = raw.Replace("-", "–", StringComparison.Ordinal);
+
+        static bool TryMap(string s, out DayOfWeek d)
+        {
+          d = default;
+          s = (s ?? string.Empty).Trim();
+          if (s.Length < 3) return false;
+          var k = s[..3].ToLowerInvariant();
+          if (k == "mon") { d = DayOfWeek.Monday; return true; }
+          if (k == "tue") { d = DayOfWeek.Tuesday; return true; }
+          if (k == "wed") { d = DayOfWeek.Wednesday; return true; }
+          if (k == "thu") { d = DayOfWeek.Thursday; return true; }
+          if (k == "fri") { d = DayOfWeek.Friday; return true; }
+          if (k == "sat") { d = DayOfWeek.Saturday; return true; }
+          if (k == "sun") { d = DayOfWeek.Sunday; return true; }
+          return false;
+        }
+
+        if (raw.Contains('–', StringComparison.Ordinal))
+        {
+          var dashParts = raw.Split('–', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+          if (dashParts.Length == 2 && TryMap(dashParts[0], out var a) && TryMap(dashParts[1], out var b))
+          {
+            var set = new HashSet<DayOfWeek>();
+            var cur = (int)a;
+            while (true)
+            {
+              set.Add((DayOfWeek)cur);
+              if (cur == (int)b) break;
+              cur = (cur + 1) % 7;
+            }
+            return set;
+          }
+        }
+
+        var res = new HashSet<DayOfWeek>();
+        foreach (var p in raw.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+          if (!TryMap(p, out var d)) continue;
+          res.Add(d);
+        }
+        if (res.Count == 0) res = new HashSet<DayOfWeek>(new[] { DayOfWeek.Monday, DayOfWeek.Tuesday, DayOfWeek.Wednesday, DayOfWeek.Thursday, DayOfWeek.Friday });
+        return res;
+      }
+
+      var state = LoadState(statePath);
+      string anon;
+      lock (stateGate) anon = dashboardSupabaseAnonKey;
+
+      var staffName = staffId;
+      var staffDept = string.Empty;
+      var staffPattern = "Normal";
+      var supa = await TryLoadStaffFromSupabase(cfg, anon, ctx.RequestAborted);
+      if (supa.ok)
+      {
+        var r = supa.rows.FirstOrDefault(x => string.Equals((x.Id ?? string.Empty).Trim(), staffId, StringComparison.Ordinal));
+        if (!string.IsNullOrWhiteSpace(r.Id))
+        {
+          staffName = string.IsNullOrWhiteSpace(r.Name) ? staffName : r.Name;
+          staffDept = (r.Dept ?? string.Empty).Trim();
+          staffPattern = string.IsNullOrWhiteSpace(r.ShiftPattern) ? staffPattern : r.ShiftPattern.Trim();
+        }
+      }
+
+      var supaShifts = await TryLoadShiftPatternsFromSupabase(cfg, anon, ctx.RequestAborted);
+      var shiftRows = supaShifts.ok ? supaShifts.rows : Array.Empty<ShiftPatternRow>();
+      if (shiftRows.Length == 0) shiftRows = (state.ShiftPatterns ?? Array.Empty<ShiftPatternRow>()).ToArray();
+      if (shiftRows.Length == 0)
+      {
+        shiftRows = new[]
+        {
+          new ShiftPatternRow("Normal", "Mon–Fri", "09:00–18:00", "13:00–14:00", "Default"),
+          new ShiftPatternRow("Shift 1", "Mon–Sat", "08:00–16:00", "12:00–13:00", "Default"),
+          new ShiftPatternRow("Shift 2", "Mon–Sat", "16:00–00:00", "20:00–20:30", "Default"),
+          new ShiftPatternRow("Shift 3", "Mon–Sat", "00:00–08:00", "04:00–04:30", "Default"),
+        };
+      }
+
+      var shiftByPattern = shiftRows
+        .Where(r => !string.IsNullOrWhiteSpace(r.Pattern))
+        .GroupBy(r => r.Pattern.Trim(), StringComparer.OrdinalIgnoreCase)
+        .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+
+      ShiftPatternRow? shiftRow = shiftByPattern.TryGetValue(staffPattern.Trim(), out var sr) ? sr : null;
+      shiftRow ??= shiftByPattern.TryGetValue("Normal", out var sr2) ? sr2 : null;
+      var workingDays = shiftRow is null ? new HashSet<DayOfWeek>(new[] { DayOfWeek.Monday, DayOfWeek.Tuesday, DayOfWeek.Wednesday, DayOfWeek.Thursday, DayOfWeek.Friday }) : ParseWorkingDays(shiftRow.WorkingDays ?? string.Empty);
+      var schedStart = new TimeOnly(9, 0, 0);
+      var schedEnd = new TimeOnly(18, 0, 0);
+      if (shiftRow is not null && TryParseTimeRange(shiftRow.WorkingHours ?? string.Empty, out var st, out var en))
+      {
+        schedStart = st;
+        schedEnd = en;
+      }
+      var breakStart = new TimeOnly(13, 0, 0);
+      var breakEnd = new TimeOnly(14, 0, 0);
+      var hasBreak = false;
+      if (shiftRow is not null && TryParseTimeRange(shiftRow.Break ?? string.Empty, out var bst, out var ben))
+      {
+        breakStart = bst;
+        breakEnd = ben;
+        hasBreak = true;
+      }
+
+      var sg = TimeSpan.FromHours(8);
+      var startUtc = new DateTimeOffset(monthStart.ToDateTime(new TimeOnly(0, 0, 0)), sg).ToUniversalTime().ToString("O", CultureInfo.InvariantCulture);
+      var endUtc = new DateTimeOffset(monthEnd.ToDateTime(new TimeOnly(23, 59, 59)), sg).ToUniversalTime().ToString("O", CultureInfo.InvariantCulture);
+
+      var baseUrl = cfg.SupabaseUrl.TrimEnd('/');
+      var select = Uri.EscapeDataString("staff_id,occurred_at");
+      var sid = Uri.EscapeDataString(staffId);
+      var url =
+        $"{baseUrl}/rest/v1/{cfg.SupabaseAttendanceTable}?select={select}" +
+        $"&staff_id=eq.{sid}" +
+        $"&occurred_at=gte.{Uri.EscapeDataString(startUtc)}" +
+        $"&occurred_at=lte.{Uri.EscapeDataString(endUtc)}" +
+        $"&order=occurred_at.asc&limit=50000";
+
+      var byDay = new Dictionary<DateOnly, List<TimeOnly>>();
+      using (var http = new HttpClient())
+      using (var req = new HttpRequestMessage(HttpMethod.Get, url))
+      {
+        req.Headers.TryAddWithoutValidation("apikey", cfg.SupabaseServiceRoleKey);
+        req.Headers.TryAddWithoutValidation("Authorization", $"Bearer {cfg.SupabaseServiceRoleKey}");
+        req.Headers.TryAddWithoutValidation("Accept", "application/json");
+        using var res = await http.SendAsync(req, ctx.RequestAborted);
+        if (!res.IsSuccessStatusCode)
+        {
+          var body = await res.Content.ReadAsStringAsync(ctx.RequestAborted);
+          return Results.Json(new { ok = false, error = $"Supabase HTTP {(int)res.StatusCode} {res.ReasonPhrase}. {body}" }, JsonOptions);
+        }
+        var text = await res.Content.ReadAsStringAsync(ctx.RequestAborted);
+        using var doc = JsonDocument.Parse(text);
+        if (doc.RootElement.ValueKind != JsonValueKind.Array) return Results.Json(new { ok = false, error = "Supabase returned invalid JSON." }, JsonOptions);
+        foreach (var el in doc.RootElement.EnumerateArray())
+        {
+          var dtRaw = el.TryGetProperty("occurred_at", out var dtEl) && dtEl.ValueKind == JsonValueKind.String ? dtEl.GetString() : null;
+          if (string.IsNullOrWhiteSpace(dtRaw)) continue;
+          if (!DateTimeOffset.TryParse(dtRaw.Trim(), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var dto)) continue;
+          var dt = dto.ToOffset(sg).DateTime;
+          var d = DateOnly.FromDateTime(dt);
+          if (d < monthStart || d > monthEnd) continue;
+          var t = TimeOnly.FromDateTime(dt);
+          if (!byDay.TryGetValue(d, out var list)) { list = new List<TimeOnly>(capacity: 8); byDay[d] = list; }
+          list.Add(t);
+        }
+      }
+
+      static int MinutesBetween(TimeOnly a, TimeOnly b)
+      {
+        var am = a.Hour * 60 + a.Minute;
+        var bm = b.Hour * 60 + b.Minute;
+        return bm - am;
+      }
+
+      int MinuteOfDay(TimeOnly t) => t.Hour * 60 + t.Minute;
+
+      var days = new List<object>(capacity: 35);
+      var presentDays = 0;
+      var lateDays = 0;
+      var missingOutDays = 0;
+      var duplicatePunches = 0;
+
+      var tzLocal = GetScheduleTimeZone();
+      var todayLocal = DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(DateTime.UtcNow, tzLocal));
+      var cutoff = (todayLocal.Year == monthStart.Year && todayLocal.Month == monthStart.Month) ? todayLocal : monthEnd;
+      if (cutoff > monthEnd) cutoff = monthEnd;
+      if (cutoff < monthStart) cutoff = monthStart;
+
+      var loopEnd = cutoff;
+      if (monthStart.Year != todayLocal.Year || monthStart.Month != todayLocal.Month) loopEnd = monthEnd;
+
+      var schedStartMin0 = MinuteOfDay(schedStart);
+      var schedEndMin0 = MinuteOfDay(schedEnd);
+      var schedStartMin = schedStartMin0;
+      var schedEndMin = schedEndMin0;
+      var overnight = schedEndMin0 <= schedStartMin0;
+      if (overnight) schedEndMin += 1440;
+
+      var breakStartMin = 0;
+      var breakEndMin = 0;
+      if (hasBreak)
+      {
+        breakStartMin = MinuteOfDay(breakStart);
+        breakEndMin = MinuteOfDay(breakEnd);
+        if (overnight && breakStartMin < schedStartMin0) breakStartMin += 1440;
+        if (overnight && breakEndMin < schedStartMin0) breakEndMin += 1440;
+        if (breakEndMin <= breakStartMin) breakEndMin += 1440;
+      }
+
+      int AdjustPunchMin(int m)
+      {
+        if (overnight && m < schedEndMin0) return m + 1440;
+        return m;
+      }
+
+      static void AddSeg(List<(int s, int e, string kind)> segs, int s, int e, string kind)
+      {
+        if (e <= s) return;
+        segs.Add((s, e, kind));
+      }
+
+      static List<(int s, int e, string kind)> MergeSegs(List<(int s, int e, string kind)> segs)
+      {
+        if (segs.Count <= 1) return segs;
+        segs.Sort((a, b) => a.s.CompareTo(b.s));
+        var res = new List<(int s, int e, string kind)>(capacity: segs.Count);
+        var cur = segs[0];
+        for (var i = 1; i < segs.Count; i++)
+        {
+          var n = segs[i];
+          if (n.kind == cur.kind && n.s <= cur.e)
+          {
+            cur.e = Math.Max(cur.e, n.e);
+            continue;
+          }
+          res.Add(cur);
+          cur = n;
+        }
+        res.Add(cur);
+        return res;
+      }
+      for (var d = monthStart; d <= loopEnd; d = d.AddDays(1))
+      {
+        var punches = byDay.TryGetValue(d, out var list) ? list.OrderBy(x => x).ToList() : new List<TimeOnly>();
+        var kept = new List<TimeOnly>(capacity: punches.Count);
+        TimeOnly? lastKept = null;
+        var dup = 0;
+        foreach (var t in punches)
+        {
+          if (lastKept is not null)
+          {
+            var diff = MinutesBetween(lastKept.Value, t);
+            if (diff >= 0 && diff < 3) { dup++; continue; }
+          }
+          kept.Add(t);
+          lastKept = t;
+        }
+
+        var isWorkingDay = workingDays.Contains(d.DayOfWeek);
+        var isPresent = kept.Count > 0;
+        if (d <= cutoff)
+        {
+          if (isWorkingDay)
+          {
+            duplicatePunches += dup;
+            if (isPresent) presentDays++;
+            if (isPresent && kept.Count % 2 == 1) missingOutDays++;
+            if (isPresent)
+            {
+              var firstIn = kept[0];
+              var late = MinutesBetween(schedStart, firstIn) > 15;
+              if (late) lateDays++;
+            }
+          }
+        }
+
+        var segTriples = new List<(int s, int e, string kind)>(capacity: 12);
+        for (var i = 0; i + 1 < kept.Count; i += 2)
+        {
+          var a = AdjustPunchMin(MinuteOfDay(kept[i]));
+          var b = AdjustPunchMin(MinuteOfDay(kept[i + 1]));
+          if (b <= a) b += 1440;
+
+          AddSeg(segTriples, a, Math.Min(b, schedStartMin), "extra");
+
+          var inS = Math.Max(a, schedStartMin);
+          var inE = Math.Min(b, schedEndMin);
+          if (inE > inS)
+          {
+            if (hasBreak)
+            {
+              AddSeg(segTriples, inS, Math.Min(inE, breakStartMin), "work");
+              AddSeg(segTriples, Math.Max(inS, breakStartMin), Math.Min(inE, breakEndMin), "break");
+              AddSeg(segTriples, Math.Max(inS, breakEndMin), inE, "work");
+            }
+            else
+            {
+              AddSeg(segTriples, inS, inE, "work");
+            }
+          }
+
+          AddSeg(segTriples, Math.Max(a, schedEndMin), b, "extra");
+        }
+        segTriples = MergeSegs(segTriples);
+        var segs = segTriples
+          .Select(s => new { start = Math.Max(0, Math.Min(1440, s.s)), end = Math.Max(0, Math.Min(1440, s.e)), kind = s.kind })
+          .Where(x => x.end > x.start)
+          .ToArray();
+
+        var missingOutAtMin = 0;
+        if (isWorkingDay && kept.Count % 2 == 1 && kept.Count > 0)
+        {
+          var mm = AdjustPunchMin(MinuteOfDay(kept[^1]));
+          missingOutAtMin = Math.Max(0, Math.Min(1440, mm));
+        }
+
+        var clockIn = kept.Count > 0 ? kept[0].ToString("HH:mm", CultureInfo.InvariantCulture) : "-";
+        var clockOut = kept.Count > 1 ? kept[^1].ToString("HH:mm", CultureInfo.InvariantCulture) : "-";
+        var durationMin = (kept.Count > 1) ? Math.Max(0, MinutesBetween(kept[0], kept[^1])) : 0;
+
+        days.Add(new
+        {
+          date = d.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+          dow = d.DayOfWeek.ToString(),
+          workingDay = isWorkingDay,
+          present = isPresent,
+          clockIn,
+          clockOut,
+          durationMin,
+          punches = kept.Select(x => x.ToString("HH:mm", CultureInfo.InvariantCulture)).ToArray(),
+          segments = segs,
+          missingOutAtMin = missingOutAtMin
+        });
+      }
+
+      var workingDaysElapsed = 0;
+      for (var d = monthStart; d <= cutoff; d = d.AddDays(1)) if (workingDays.Contains(d.DayOfWeek)) workingDaysElapsed++;
+      var absentDays = Math.Max(0, workingDaysElapsed - presentDays);
+
+      return Results.Json(new
+      {
+        ok = true,
+        staff = new { id = staffId, name = staffName, department = staffDept, shiftPattern = staffPattern },
+        month = monthStart.ToString("yyyy-MM", CultureInfo.InvariantCulture),
+        stats = new { presentDays, absentDays, lateDays, missingOutDays, duplicatePunches },
+        schedule = new
+        {
+          start = schedStart.ToString("HH:mm", CultureInfo.InvariantCulture),
+          end = schedEnd.ToString("HH:mm", CultureInfo.InvariantCulture),
+          breakStart = hasBreak ? breakStart.ToString("HH:mm", CultureInfo.InvariantCulture) : string.Empty,
+          breakEnd = hasBreak ? breakEnd.ToString("HH:mm", CultureInfo.InvariantCulture) : string.Empty,
+        },
+        days
+      }, JsonOptions);
     }).RequireAuthorization();
 
     app.MapPost("/api/staff/save", async (HttpContext ctx) =>
@@ -3943,12 +4806,12 @@ static partial class Program
       }
 
       using var doc = await JsonDocument.ParseAsync(ctx.Request.Body, cancellationToken: ctx.RequestAborted);
-      var userId = GetProp(doc.RootElement, "user_id");
+      var userIdRaw = GetProp(doc.RootElement, "user_id");
       var firstName = GetProp(doc.RootElement, "first_name");
-      trace.Add("Received request: user_id=" + userId + " first_name=" + firstName);
-      if (userId.Length == 0) return Results.Json(new { ok = false, error = "user_id is required", trace }, JsonOptions);
-      if (!userId.All(char.IsDigit)) return Results.Json(new { ok = false, error = "user_id must be numeric for WL10 enrollment number", trace }, JsonOptions);
-      if (firstName.Length == 0) firstName = userId;
+      var fullName = GetProp(doc.RootElement, "full_name");
+      var role = GetProp(doc.RootElement, "role");
+      trace.Add("Received request: user_id=" + userIdRaw + " first_name=" + firstName + " full_name=" + fullName + " role=" + role);
+      if (userIdRaw.Length == 0) return Results.Json(new { ok = false, error = "user_id is required", trace }, JsonOptions);
 
       AppConfig cfg;
       lock (stateGate) cfg = currentConfig;
@@ -3956,6 +4819,32 @@ static partial class Program
 
       try
       {
+        if (Environment.Is64BitProcess)
+        {
+          trace.Add("Process architecture: x64 (COM requires x86 for this SDK build).");
+          return Results.Json(new
+          {
+            ok = false,
+            error = "ZKTeco SDK is 32-bit and cannot be loaded by a 64-bit process. Run WL10Middleware as x86.",
+            hint = @"If running from source: set SHAB_BUILD_ARCH=x86 then restart. If using client package: use win-x86 build.",
+            trace
+          }, JsonOptions);
+        }
+
+        var staffNumber = ExtractStaffNumber(cfg, userIdRaw);
+        if (staffNumber is null)
+        {
+          return Results.Json(new { ok = false, error = "user_id must contain a valid staff number for WL10 enrollment.", trace }, JsonOptions);
+        }
+        var enrollNumber = staffNumber.Value.ToString(CultureInfo.InvariantCulture);
+        trace.Add("Resolved enrollment_number=" + enrollNumber);
+
+        var nameToSet = (firstName.Length > 0 ? firstName : fullName).Trim();
+        if (nameToSet.Length == 0) nameToSet = userIdRaw;
+        var isTargetSuperadmin = role.Length > 0 && role.Contains("superadmin", StringComparison.OrdinalIgnoreCase);
+        var desiredPrivilege = isTargetSuperadmin ? 3 : 0;
+        trace.Add("Target privilege: " + (isTargetSuperadmin ? "admin(3)" : "user(0)"));
+
         var result = await RunStaAsync<object>(() =>
         {
           var t = new List<string>(capacity: 64);
@@ -3963,15 +4852,40 @@ static partial class Program
           t.Add("STA thread started.");
           t.Add("Initializing ZKTeco SDK (zkemkeeper) COM...");
 
-          var type = Type.GetTypeFromProgID("zkemkeeper.CZKEM", throwOnError: false);
+          Type? type = null;
+          foreach (var progId in new[] { "zkemkeeper.CZKEM", "zkemkeeper.ZKEM", "zkemkeeper.ZKEM.1" })
+          {
+            try
+            {
+              var candidate = Type.GetTypeFromProgID(progId, throwOnError: false);
+              if (candidate is not null && candidate.GUID != Guid.Empty)
+              {
+                type = candidate;
+                t.Add("Using ProgID: " + progId);
+                break;
+              }
+              if (candidate is not null && candidate.GUID == Guid.Empty)
+              {
+                t.Add("ProgID has no CLSID mapping: " + progId);
+              }
+            }
+            catch { }
+          }
           if (type is null)
           {
-            try { type = Type.GetTypeFromCLSID(new Guid("00853A19-BD51-419B-9269-2DABE57EB61F"), throwOnError: false); } catch { type = null; }
+            try
+            {
+              type = Type.GetTypeFromCLSID(new Guid("00853A19-BD51-419B-9269-2DABE57EB61F"), throwOnError: false);
+              if (type is not null) t.Add("Using CLSID: {00853A19-BD51-419B-9269-2DABE57EB61F}");
+            }
+            catch { type = null; }
           }
           if (type is null)
           {
             return (object)new { ok = false, error = "ZKTeco SDK (zkemkeeper) is not installed/registered on this PC.", trace = t.ToArray() };
           }
+
+          t.Add("Process architecture: " + (Environment.Is64BitProcess ? "x64" : "x86") + " OS: " + (Environment.Is64BitOperatingSystem ? "x64" : "x86"));
 
           dynamic? zk = null;
           try { zk = Activator.CreateInstance(type); }
@@ -3983,7 +4897,16 @@ static partial class Program
           }
           if (zk is null)
           {
-            return (object)new { ok = false, error = "Failed to initialize zkemkeeper COM object.", trace = t.ToArray() };
+            var hint = Environment.Is64BitProcess
+              ? "This is usually caused by using a 32-bit ZKTeco SDK with a 64-bit process. Install/register the ZKTeco SDK and run the middleware as x86."
+              : "Install/register the ZKTeco SDK (zkemkeeper.dll) on this PC.";
+            return (object)new
+            {
+              ok = false,
+              error = "Failed to initialize zkemkeeper COM object. " + hint,
+              hint = @"Run as Administrator: ""SHAB Attendance System\Client Package\ZKTecoSDK\x86\Auto-install_sdk.bat""",
+              trace = t.ToArray()
+            };
           }
 
           try
@@ -4001,33 +4924,93 @@ static partial class Program
             t.Add("Checking whether user already exists...");
             try { _ = (bool)zk.ReadAllUserID(cfg.MachineNumber); } catch { }
 
+            var exists = false;
+            var existingName = "";
+            var existingPassword = "";
+            var existingPrivilege = 0;
+            var existingEnabled = true;
             while (true)
             {
-              string enrollNumber;
-              string name;
+              string enrollRead;
+              string nameRead;
               string password;
               int privilege;
               bool enabled;
 
               bool ok;
-              try { ok = (bool)zk.SSR_GetAllUserInfo(cfg.MachineNumber, out enrollNumber, out name, out password, out privilege, out enabled); }
+              try { ok = (bool)zk.SSR_GetAllUserInfo(cfg.MachineNumber, out enrollRead, out nameRead, out password, out privilege, out enabled); }
               catch { break; }
               if (!ok) break;
-              if (string.Equals((enrollNumber ?? string.Empty).Trim(), userId, StringComparison.Ordinal))
+              if (string.Equals((enrollRead ?? string.Empty).Trim(), enrollNumber, StringComparison.Ordinal))
               {
                 t.Add("User already exists on device.");
-              return (object)new { ok = true, already_exists = true, device_ip = cfg.DeviceIp, device_port = cfg.DevicePort, machine_number = cfg.MachineNumber, trace = t.ToArray() };
+                exists = true;
+                existingName = (nameRead ?? string.Empty).Trim();
+                existingPassword = (password ?? string.Empty).Trim();
+                existingPrivilege = privilege;
+                existingEnabled = enabled;
+                break;
               }
+            }
+
+            if (exists)
+            {
+              var existingPrivRaw = existingPrivilege;
+              var currentPriv = Math.Clamp(existingPrivRaw, 0, 3);
+              var targetPriv = isTargetSuperadmin ? 3 : currentPriv;
+              var needsName = nameToSet.Length > 0 && !string.Equals(existingName, nameToSet, StringComparison.Ordinal);
+              var needsPriv = targetPriv != existingPrivRaw;
+              if (needsName || needsPriv)
+              {
+                if (needsName) t.Add("Updating user name on device: from='" + existingName + "' to='" + nameToSet + "'");
+                if (needsPriv) t.Add("Updating privilege on device: from=" + currentPriv + " to=" + targetPriv);
+                try { _ = zk.EnableDevice(cfg.MachineNumber, false); } catch { }
+
+                var updated = false;
+                var nameFinal = needsName ? nameToSet : existingName;
+                try { updated = (bool)zk.SSR_SetUserInfo(cfg.MachineNumber, enrollNumber, nameFinal, existingPassword, targetPriv, existingEnabled); } catch { updated = false; }
+                if (!updated)
+                {
+                  try { updated = (bool)zk.SetUserInfo(cfg.MachineNumber, int.Parse(enrollNumber, CultureInfo.InvariantCulture), nameFinal, existingPassword, targetPriv, existingEnabled); } catch { updated = false; }
+                }
+
+                try { _ = (bool)zk.RefreshData(cfg.MachineNumber); } catch { }
+                try { _ = zk.EnableDevice(cfg.MachineNumber, true); } catch { }
+
+                return (object)new
+                {
+                  ok = updated,
+                  already_exists = true,
+                  updated,
+                  device_ip = cfg.DeviceIp,
+                  device_port = cfg.DevicePort,
+                  machine_number = cfg.MachineNumber,
+                  enrollment_number = enrollNumber,
+                  privilege_to = targetPriv,
+                  trace = t.ToArray()
+                };
+              }
+
+              return (object)new
+              {
+                ok = true,
+                already_exists = true,
+                device_ip = cfg.DeviceIp,
+                device_port = cfg.DevicePort,
+                machine_number = cfg.MachineNumber,
+                enrollment_number = enrollNumber,
+                trace = t.ToArray()
+              };
             }
 
             t.Add("User not found. Writing user to device...");
             try { _ = zk.EnableDevice(cfg.MachineNumber, false); } catch { }
 
             var created = false;
-            try { created = (bool)zk.SSR_SetUserInfo(cfg.MachineNumber, userId, firstName, "", 0, true); } catch { created = false; }
+            try { created = (bool)zk.SSR_SetUserInfo(cfg.MachineNumber, enrollNumber, nameToSet, "", desiredPrivilege, true); } catch { created = false; }
             if (!created)
             {
-              try { created = (bool)zk.SetUserInfo(cfg.MachineNumber, int.Parse(userId, CultureInfo.InvariantCulture), firstName, "", 0, true); } catch { created = false; }
+              try { created = (bool)zk.SetUserInfo(cfg.MachineNumber, int.Parse(enrollNumber, CultureInfo.InvariantCulture), nameToSet, "", desiredPrivilege, true); } catch { created = false; }
             }
             if (!created)
             {
@@ -4050,7 +5033,7 @@ static partial class Program
               string vPwd;
               int vPriv;
               bool vEnabled;
-              verified = (bool)zk.SSR_GetUserInfo(cfg.MachineNumber, userId, out vName, out vPwd, out vPriv, out vEnabled);
+              verified = (bool)zk.SSR_GetUserInfo(cfg.MachineNumber, enrollNumber, out vName, out vPwd, out vPriv, out vEnabled);
             }
             catch
             {
@@ -4062,17 +5045,17 @@ static partial class Program
               try { _ = (bool)zk.ReadAllUserID(cfg.MachineNumber); } catch { }
               while (true)
               {
-                string enrollNumber;
+                string enrollNumberRead;
                 string name;
                 string password;
                 int privilege;
                 bool enabled;
 
                 bool ok;
-                try { ok = (bool)zk.SSR_GetAllUserInfo(cfg.MachineNumber, out enrollNumber, out name, out password, out privilege, out enabled); }
+                try { ok = (bool)zk.SSR_GetAllUserInfo(cfg.MachineNumber, out enrollNumberRead, out name, out password, out privilege, out enabled); }
                 catch { break; }
                 if (!ok) break;
-                if (string.Equals((enrollNumber ?? string.Empty).Trim(), userId, StringComparison.Ordinal))
+                if (string.Equals((enrollNumberRead ?? string.Empty).Trim(), enrollNumber, StringComparison.Ordinal))
                 {
                   verified = true;
                   break;
@@ -4081,7 +5064,192 @@ static partial class Program
             }
 
             t.Add(verified ? "Verified on device." : "Could not verify on device.");
-            return (object)new { ok = true, created = true, verified, device_ip = cfg.DeviceIp, device_port = cfg.DevicePort, machine_number = cfg.MachineNumber, trace = t.ToArray() };
+            return (object)new { ok = true, created = true, verified, device_ip = cfg.DeviceIp, device_port = cfg.DevicePort, machine_number = cfg.MachineNumber, enrollment_number = enrollNumber, trace = t.ToArray() };
+          }
+          finally
+          {
+            try { zk.Disconnect(); } catch { }
+          }
+        }, ctx.RequestAborted);
+
+        return Results.Json(result, JsonOptions);
+      }
+      catch (Exception ex)
+      {
+        trace.Add("Exception: " + ex.GetType().FullName + " " + ex.Message);
+        return Results.Json(new { ok = false, error = ex.Message, trace }, JsonOptions);
+      }
+    }).RequireAuthorization();
+
+    app.MapPost("/api/device/user/grant-admin", async (HttpContext ctx) =>
+    {
+      var isSuperadmin = string.Equals(ctx.User.FindFirstValue("role") ?? string.Empty, "superadmin", StringComparison.Ordinal);
+      if (!isSuperadmin) return Results.StatusCode(StatusCodes.Status403Forbidden);
+      var trace = new List<string>(capacity: 32);
+
+      static string GetProp(JsonElement el, string name)
+      {
+        if (el.ValueKind != JsonValueKind.Object) return string.Empty;
+        if (!el.TryGetProperty(name, out var v)) return string.Empty;
+        return (v.GetString() ?? string.Empty).Trim();
+      }
+
+      using var doc = await JsonDocument.ParseAsync(ctx.Request.Body, cancellationToken: ctx.RequestAborted);
+      var userIdRaw = GetProp(doc.RootElement, "user_id");
+      trace.Add("Received request: user_id=" + userIdRaw);
+      if (userIdRaw.Length == 0) return Results.Json(new { ok = false, error = "user_id is required", trace }, JsonOptions);
+
+      AppConfig cfg;
+      lock (stateGate) cfg = currentConfig;
+      trace.Add("Device target: " + cfg.DeviceIp + ":" + cfg.DevicePort + " machine_number=" + cfg.MachineNumber);
+
+      try
+      {
+        if (Environment.Is64BitProcess)
+        {
+          trace.Add("Process architecture: x64 (COM requires x86 for this SDK build).");
+          return Results.Json(new
+          {
+            ok = false,
+            error = "ZKTeco SDK is 32-bit and cannot be loaded by a 64-bit process. Run WL10Middleware as x86.",
+            hint = @"If running from source: set SHAB_BUILD_ARCH=x86 then restart. If using client package: use win-x86 build.",
+            trace
+          }, JsonOptions);
+        }
+
+        var staffNumber = ExtractStaffNumber(cfg, userIdRaw);
+        if (staffNumber is null)
+        {
+          return Results.Json(new { ok = false, error = "user_id must contain a valid staff number for WL10 enrollment.", trace }, JsonOptions);
+        }
+        var enrollNumber = staffNumber.Value.ToString(CultureInfo.InvariantCulture);
+        trace.Add("Resolved enrollment_number=" + enrollNumber);
+
+        var result = await RunStaAsync<object>(() =>
+        {
+          var t = new List<string>(capacity: 64);
+          t.AddRange(trace);
+          t.Add("STA thread started.");
+          t.Add("Initializing ZKTeco SDK (zkemkeeper) COM...");
+
+          Type? type = null;
+          foreach (var progId in new[] { "zkemkeeper.CZKEM", "zkemkeeper.ZKEM", "zkemkeeper.ZKEM.1" })
+          {
+            try
+            {
+              var candidate = Type.GetTypeFromProgID(progId, throwOnError: false);
+              if (candidate is not null && candidate.GUID != Guid.Empty)
+              {
+                type = candidate;
+                t.Add("Using ProgID: " + progId);
+                break;
+              }
+            }
+            catch { }
+          }
+          if (type is null)
+          {
+            try
+            {
+              type = Type.GetTypeFromCLSID(new Guid("00853A19-BD51-419B-9269-2DABE57EB61F"), throwOnError: false);
+              if (type is not null) t.Add("Using CLSID: {00853A19-BD51-419B-9269-2DABE57EB61F}");
+            }
+            catch { type = null; }
+          }
+          if (type is null)
+          {
+            return (object)new { ok = false, error = "ZKTeco SDK (zkemkeeper) is not installed/registered on this PC.", trace = t.ToArray() };
+          }
+
+          dynamic? zk = null;
+          try { zk = Activator.CreateInstance(type); } catch { zk = null; }
+          if (zk is null)
+          {
+            return (object)new
+            {
+              ok = false,
+              error = "Failed to initialize zkemkeeper COM object.",
+              hint = @"Run as Administrator: ""SHAB Attendance System\Client Package\ZKTecoSDK\x86\Auto-install_sdk.bat""",
+              trace = t.ToArray()
+            };
+          }
+
+          try
+          {
+            t.Add("Connecting to device...");
+            try { _ = zk.SetCommPassword(cfg.CommPassword); } catch { }
+            var connected = false;
+            try { connected = (bool)zk.Connect_Net(cfg.DeviceIp, cfg.DevicePort); } catch { connected = false; }
+            if (!connected)
+            {
+              return (object)new { ok = false, error = $"Failed to connect to WL10 at {cfg.DeviceIp}:{cfg.DevicePort}.", trace = t.ToArray() };
+            }
+            t.Add("Connected.");
+
+            t.Add("Searching user on device...");
+            try { _ = (bool)zk.ReadAllUserID(cfg.MachineNumber); } catch { }
+
+            var found = false;
+            var name = "";
+            var password = "";
+            var privilege = 0;
+            var enabled = true;
+
+            while (true)
+            {
+              string enrollRead;
+              string nameRead;
+              string passwordRead;
+              int privilegeRead;
+              bool enabledRead;
+
+              bool ok;
+              try { ok = (bool)zk.SSR_GetAllUserInfo(cfg.MachineNumber, out enrollRead, out nameRead, out passwordRead, out privilegeRead, out enabledRead); }
+              catch { break; }
+              if (!ok) break;
+              if (!string.Equals((enrollRead ?? string.Empty).Trim(), enrollNumber, StringComparison.Ordinal)) continue;
+
+              found = true;
+              name = (nameRead ?? string.Empty).Trim();
+              password = (passwordRead ?? string.Empty).Trim();
+              privilege = privilegeRead;
+              enabled = enabledRead;
+              break;
+            }
+
+            if (!found)
+            {
+              return (object)new { ok = false, error = "User not found on device. Create the user first, then grant admin.", enrollment_number = enrollNumber, trace = t.ToArray() };
+            }
+
+            const int adminPrivilege = 3;
+            if (privilege == adminPrivilege)
+            {
+              return (object)new { ok = true, already_admin = true, enrollment_number = enrollNumber, privilege_from = privilege, privilege_to = adminPrivilege, trace = t.ToArray() };
+            }
+
+            t.Add("Granting admin privilege...");
+            try { _ = zk.EnableDevice(cfg.MachineNumber, false); } catch { }
+
+            var updated = false;
+            try { updated = (bool)zk.SSR_SetUserInfo(cfg.MachineNumber, enrollNumber, name, password, adminPrivilege, enabled); } catch { updated = false; }
+            if (!updated)
+            {
+              try { updated = (bool)zk.SetUserInfo(cfg.MachineNumber, int.Parse(enrollNumber, CultureInfo.InvariantCulture), name, password, adminPrivilege, enabled); } catch { updated = false; }
+            }
+
+            try { _ = (bool)zk.RefreshData(cfg.MachineNumber); } catch { }
+            try { _ = zk.EnableDevice(cfg.MachineNumber, true); } catch { }
+
+            return (object)new
+            {
+              ok = updated,
+              updated,
+              enrollment_number = enrollNumber,
+              privilege_from = privilege,
+              privilege_to = adminPrivilege,
+              trace = t.ToArray()
+            };
           }
           finally
           {
@@ -4101,7 +5269,14 @@ static partial class Program
     app.MapGet("/api/shifts", (HttpContext ctx) =>
     {
       AppConfig cfg;
-      lock (stateGate) cfg = currentConfig;
+      string anonKey;
+      lock (stateGate)
+      {
+        cfg = currentConfig;
+        anonKey = dashboardSupabaseAnonKey;
+      }
+      var serviceKeyRaw = (cfg.SupabaseServiceRoleKey ?? string.Empty).Trim();
+      var anonRaw = (anonKey ?? string.Empty).Trim();
 
       static ShiftPatternRow[] DefaultRows()
       {
@@ -4114,7 +5289,7 @@ static partial class Program
         };
       }
 
-      if (string.IsNullOrWhiteSpace(cfg.SupabaseUrl) || string.IsNullOrWhiteSpace(cfg.SupabaseServiceRoleKey))
+      if (string.IsNullOrWhiteSpace(cfg.SupabaseUrl) || (serviceKeyRaw.Length == 0 && anonRaw.Length == 0))
       {
         var state = LoadState(statePath);
         var rows = (state.ShiftPatterns ?? Array.Empty<ShiftPatternRow>()).ToArray();
@@ -4126,14 +5301,26 @@ static partial class Program
       {
         var baseUrl = cfg.SupabaseUrl.TrimEnd('/');
         var url = $"{baseUrl}/rest/v1/shift_patterns?select=pattern,working_days,working_hours,break_time,notes&order=pattern.asc&limit=500";
-        using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
-        using var req = new HttpRequestMessage(HttpMethod.Get, url);
-        req.Headers.TryAddWithoutValidation("apikey", cfg.SupabaseServiceRoleKey);
-        req.Headers.TryAddWithoutValidation("Authorization", $"Bearer {cfg.SupabaseServiceRoleKey}");
-        using var resp = http.Send(req);
-        var body = resp.Content.ReadAsStringAsync().GetAwaiter().GetResult();
-        if (!resp.IsSuccessStatusCode) throw new InvalidOperationException(body);
-        using var doc = JsonDocument.Parse(body);
+        static (bool ok, string body, int statusCode) Fetch(string url, string apiKey)
+        {
+          using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
+          using var req = new HttpRequestMessage(HttpMethod.Get, url);
+          req.Headers.TryAddWithoutValidation("apikey", apiKey);
+          req.Headers.TryAddWithoutValidation("Authorization", $"Bearer {apiKey}");
+          using var resp = http.Send(req);
+          var body = resp.Content.ReadAsStringAsync().GetAwaiter().GetResult();
+          return (resp.IsSuccessStatusCode, body, (int)resp.StatusCode);
+        }
+
+        var apiKey = serviceKeyRaw.Length > 0 ? serviceKeyRaw : anonRaw;
+        var r1 = Fetch(url, apiKey);
+        if (!r1.ok && r1.statusCode == 401 && apiKey == serviceKeyRaw && anonRaw.Length > 0)
+        {
+          r1 = Fetch(url, anonRaw);
+        }
+        if (!r1.ok) throw new InvalidOperationException(r1.body);
+
+        using var doc = JsonDocument.Parse(r1.body);
         if (doc.RootElement.ValueKind != JsonValueKind.Array) throw new InvalidOperationException("Unexpected response shape");
         var list = new List<ShiftPatternRow>(capacity: 64);
         foreach (var el in doc.RootElement.EnumerateArray())
@@ -4232,6 +5419,101 @@ static partial class Program
       return Results.Json(new { ok = true }, JsonOptions);
     }).RequireAuthorization();
 
+    async Task<(bool ok, string? error)> ExecuteSupabaseOnlyUpdateFromAttlog(CancellationToken ct)
+    {
+      if (!await syncGate.WaitAsync(0, ct)) return (false, "sync already running");
+      try
+      {
+        AppConfig cfg;
+        lock (stateGate) cfg = currentConfig;
+
+        var configured = !string.IsNullOrWhiteSpace(cfg.SupabaseUrl)
+          && !string.IsNullOrWhiteSpace(cfg.SupabaseServiceRoleKey)
+          && !string.IsNullOrWhiteSpace(cfg.SupabaseAttendanceTable);
+        var enabled = cfg.SupabaseSyncEnabled && configured;
+        if (!enabled) return (false, "supabase not configured or disabled");
+
+        runtime.LastSyncStartedAtUtc = DateTimeOffset.UtcNow;
+        runtime.LastSyncFinishedAtUtc = null;
+        runtime.LastSyncError = null;
+        runtime.LastSyncResult = "running";
+
+        runtime.LastSupabaseSyncStartedAtUtc = runtime.LastSyncStartedAtUtc;
+        runtime.LastSupabaseSyncFinishedAtUtc = null;
+        runtime.LastSupabaseSyncError = null;
+        runtime.LastSupabaseSyncResult = "running";
+        runtime.LastSupabaseUpsertedCount = 0;
+
+        try
+        {
+          var path = TryResolveAttlogExportPath();
+          if (string.IsNullOrWhiteSpace(path)) throw new InvalidOperationException("Could not resolve 1_attlog.dat path");
+          if (!File.Exists(path)) throw new InvalidOperationException($"File not found: {path}");
+
+          var rows = ReadAttlogRows(path);
+          var keys = new HashSet<string>(StringComparer.Ordinal);
+          var distinctRows = new List<AttlogRow>(capacity: rows.Count);
+          for (var i = 0; i < rows.Count; i++)
+          {
+            var r = rows[i];
+            var k = r.StaffId + "|" + r.DateTime;
+            if (!keys.Add(k)) continue;
+            distinctRows.Add(r);
+          }
+
+          await UpsertAttlogRowsToSupabase(cfg, distinctRows, ct);
+          runtime.LastSupabaseSyncResult = "ok";
+          runtime.LastSupabaseUpsertedCount = keys.Count;
+          runtime.LastSyncResult = "ok";
+          return (true, null);
+        }
+        catch (Exception ex)
+        {
+          runtime.LastSyncResult = "error";
+          runtime.LastSyncError = ex.ToString();
+          runtime.LastSupabaseSyncResult = "error";
+          runtime.LastSupabaseSyncError = ex.ToString();
+          return (false, ex.Message);
+        }
+        finally
+        {
+          runtime.LastSyncFinishedAtUtc = DateTimeOffset.UtcNow;
+          runtime.LastSupabaseSyncFinishedAtUtc = runtime.LastSyncFinishedAtUtc;
+        }
+      }
+      finally
+      {
+        syncGate.Release();
+      }
+    }
+
+    async Task ExecuteTargetedAutoSync(CancellationToken ct)
+    {
+      try
+      {
+        AppConfig cfg;
+        lock (stateGate) cfg = currentConfig;
+
+        var supabaseConfigured = !string.IsNullOrWhiteSpace(cfg.SupabaseUrl)
+          && !string.IsNullOrWhiteSpace(cfg.SupabaseServiceRoleKey)
+          && !string.IsNullOrWhiteSpace(cfg.SupabaseAttendanceTable);
+        var supaOk = cfg.SupabaseSyncEnabled && supabaseConfigured;
+
+        var (devOk, _, _) = await ProbeTcpAsync(cfg.DeviceIp, cfg.DevicePort, TimeSpan.FromSeconds(2), ct);
+        if (devOk)
+        {
+          _ = ExecuteSync(verify: false, today: false, supabaseOverride: supaOk ? (bool?)null : false, ct);
+          return;
+        }
+
+        if (supaOk)
+        {
+          _ = await ExecuteSupabaseOnlyUpdateFromAttlog(ct);
+        }
+      }
+      catch { }
+    }
+
     var poller = Task.Run(async () =>
     {
       using var timer = new PeriodicTimer(TimeSpan.FromSeconds(1));
@@ -4290,7 +5572,7 @@ static partial class Program
 
         if (nowUtc >= nextUtc.Value)
         {
-          _ = ExecuteSync(verify: false, today: false, supabaseOverride: null, app.Lifetime.ApplicationStopping);
+          _ = ExecuteTargetedAutoSync(app.Lifetime.ApplicationStopping);
           if (hasSchedule)
           {
             nextUtc = ComputeNextScheduledSyncUtc(sched ?? Array.Empty<string>(), nowUtc.AddSeconds(1), tz);
@@ -4305,7 +5587,7 @@ static partial class Program
     });
 
     Console.WriteLine($"Dashboard running at {urls}");
-    Console.WriteLine("Login: superadmin / abcd1234 (override with WL10_DASHBOARD_USER and WL10_DASHBOARD_PASSWORD)");
+    Console.WriteLine("Dashboard login configured. Override credentials with WL10_DASHBOARD_USER and WL10_DASHBOARD_PASSWORD.");
 
     await app.RunAsync();
     await poller;
@@ -4404,7 +5686,7 @@ static partial class Program
     try
     {
       var baseUrl = config.SupabaseUrl.TrimEnd('/');
-      var url = $"{baseUrl}/rest/v1/{config.SupabaseAttendanceTable}?select=datetime&order=datetime.desc&limit=1";
+      var url = $"{baseUrl}/rest/v1/{config.SupabaseAttendanceTable}?select=occurred_at&order=occurred_at.desc&limit=1";
 
       using var http = new HttpClient();
       using var req = new HttpRequestMessage(HttpMethod.Get, url);
@@ -4418,11 +5700,10 @@ static partial class Program
       using var doc = JsonDocument.Parse(text);
       if (doc.RootElement.ValueKind != JsonValueKind.Array || doc.RootElement.GetArrayLength() == 0) return null;
       var first = doc.RootElement[0];
-      if (!first.TryGetProperty("datetime", out var dtEl)) return null;
+      if (!first.TryGetProperty("occurred_at", out var dtEl)) return null;
       var s = dtEl.GetString();
       if (string.IsNullOrWhiteSpace(s)) return null;
-      if (!DateTime.TryParseExact(s.Trim(), "yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture, DateTimeStyles.None, out var dt)) return null;
-      var dto = new DateTimeOffset(DateTime.SpecifyKind(dt, DateTimeKind.Unspecified), TimeSpan.FromHours(8));
+      if (!DateTimeOffset.TryParse(s.Trim(), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var dto)) return null;
       return dto.ToUniversalTime();
     }
     catch
@@ -4438,8 +5719,8 @@ static partial class Program
     try
     {
       var baseUrl = config.SupabaseUrl.TrimEnd('/');
-      var select = Uri.EscapeDataString("staff_id,datetime,verified,status,workcode,reserved");
-      var url = $"{baseUrl}/rest/v1/{config.SupabaseAttendanceTable}?select={select}&order=datetime.desc&limit={Math.Clamp(limit, 1, 200)}";
+      var select = Uri.EscapeDataString("staff_id,device_id,datetime,occurred_at,event_date,verified,status,workcode,reserved,created_at");
+      var url = $"{baseUrl}/rest/v1/{config.SupabaseAttendanceTable}?select={select}&order=occurred_at.desc&limit={Math.Clamp(limit, 1, 200)}";
 
       using var http = new HttpClient();
       using var req = new HttpRequestMessage(HttpMethod.Get, url);
@@ -4452,12 +5733,28 @@ static partial class Program
       var text = await res.Content.ReadAsStringAsync(ct);
       using var doc = JsonDocument.Parse(text);
       if (doc.RootElement.ValueKind != JsonValueKind.Array) return Array.Empty<object>();
-      var arr = new object[doc.RootElement.GetArrayLength()];
-      for (var i = 0; i < doc.RootElement.GetArrayLength(); i++)
+      var list = new List<object>(capacity: doc.RootElement.GetArrayLength());
+      foreach (var el in doc.RootElement.EnumerateArray())
       {
-        arr[i] = doc.RootElement[i].Clone();
+        var staffId = el.TryGetProperty("staff_id", out var sidEl) && sidEl.ValueKind == JsonValueKind.String ? (sidEl.GetString() ?? "") : "";
+        var dtText = el.TryGetProperty("datetime", out var dtEl) && dtEl.ValueKind == JsonValueKind.String ? (dtEl.GetString() ?? "") : "";
+        var occurredAt = el.TryGetProperty("occurred_at", out var oaEl) && oaEl.ValueKind == JsonValueKind.String ? (oaEl.GetString() ?? "") : "";
+        var dtOut = dtText.Trim();
+        if (dtOut.Length == 0)
+        {
+          dtOut = occurredAt;
+          if (DateTimeOffset.TryParse(occurredAt, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var dto))
+          {
+            dtOut = dto.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
+          }
+        }
+        var verified = el.TryGetProperty("verified", out var vEl) && vEl.ValueKind == JsonValueKind.String ? (vEl.GetString() ?? "") : "";
+        var status = el.TryGetProperty("status", out var stEl) && stEl.ValueKind == JsonValueKind.String ? (stEl.GetString() ?? "") : "";
+        var workcode = el.TryGetProperty("workcode", out var wcEl) && wcEl.ValueKind == JsonValueKind.String ? (wcEl.GetString() ?? "") : "";
+        var reserved = el.TryGetProperty("reserved", out var rsEl) && rsEl.ValueKind == JsonValueKind.String ? (rsEl.GetString() ?? "") : "";
+        list.Add(new { staff_id = staffId, datetime = dtOut, verified, status, workcode, reserved });
       }
-      return arr;
+      return list.ToArray();
     }
     catch
     {
@@ -4480,34 +5777,63 @@ static partial class Program
     try
     {
       var baseUrl = baseUrlRaw.TrimEnd('/');
-      var select = Uri.EscapeDataString("staff_id,datetime,verified,status,workcode,reserved");
-      var url = $"{baseUrl}/rest/v1/{tableRaw}?select={select}&order=datetime.desc&limit={Math.Clamp(limit, 1, 200)}";
-      if (!string.IsNullOrWhiteSpace(from)) url += "&datetime=gte." + Uri.EscapeDataString(from.Trim());
-      if (!string.IsNullOrWhiteSpace(to)) url += "&datetime=lte." + Uri.EscapeDataString(to.Trim());
+      var select = Uri.EscapeDataString("staff_id,device_id,datetime,occurred_at,event_date,verified,status,workcode,reserved,created_at");
+      var url = $"{baseUrl}/rest/v1/{tableRaw}?select={select}&order=occurred_at.desc&limit={Math.Clamp(limit, 1, 200)}";
+      if (!string.IsNullOrWhiteSpace(from)) url += "&occurred_at=gte." + Uri.EscapeDataString(from.Trim());
+      if (!string.IsNullOrWhiteSpace(to)) url += "&occurred_at=lte." + Uri.EscapeDataString(to.Trim());
 
-      using var http = new HttpClient();
-      using var req = new HttpRequestMessage(HttpMethod.Get, url);
-      req.Headers.TryAddWithoutValidation("apikey", apiKey);
-      req.Headers.TryAddWithoutValidation("Authorization", $"Bearer {apiKey}");
-      req.Headers.TryAddWithoutValidation("Accept", "application/json");
-
-      using var res = await http.SendAsync(req, ct);
-      if (!res.IsSuccessStatusCode)
+      static async Task<(bool ok, object[] rows, string? error, int statusCode)> FetchAsync(string url, string apiKey, CancellationToken ct)
       {
-        var body = await res.Content.ReadAsStringAsync(ct);
-        var msg = $"Supabase query failed: {(int)res.StatusCode} {res.ReasonPhrase}. Body={body}";
-        return (false, Array.Empty<object>(), msg);
+        using var http = new HttpClient();
+        using var req = new HttpRequestMessage(HttpMethod.Get, url);
+        req.Headers.TryAddWithoutValidation("apikey", apiKey);
+        req.Headers.TryAddWithoutValidation("Authorization", $"Bearer {apiKey}");
+        req.Headers.TryAddWithoutValidation("Accept", "application/json");
+
+        using var res = await http.SendAsync(req, ct);
+        if (!res.IsSuccessStatusCode)
+        {
+          var body = await res.Content.ReadAsStringAsync(ct);
+          var msg = $"Supabase query failed: {(int)res.StatusCode} {res.ReasonPhrase}. Body={body}";
+          return (false, Array.Empty<object>(), msg, (int)res.StatusCode);
+        }
+
+        var text = await res.Content.ReadAsStringAsync(ct);
+        using var doc = JsonDocument.Parse(text);
+        if (doc.RootElement.ValueKind != JsonValueKind.Array) return (false, Array.Empty<object>(), "Supabase returned non-array JSON", 200);
+
+        var list = new List<object>(capacity: doc.RootElement.GetArrayLength());
+        foreach (var el in doc.RootElement.EnumerateArray())
+        {
+          var staffId = el.TryGetProperty("staff_id", out var sidEl) && sidEl.ValueKind == JsonValueKind.String ? (sidEl.GetString() ?? "") : "";
+          var dtText = el.TryGetProperty("datetime", out var dtEl) && dtEl.ValueKind == JsonValueKind.String ? (dtEl.GetString() ?? "") : "";
+          var occurredAt = el.TryGetProperty("occurred_at", out var oaEl) && oaEl.ValueKind == JsonValueKind.String ? (oaEl.GetString() ?? "") : "";
+          var dtOut = dtText.Trim();
+          if (dtOut.Length == 0)
+          {
+            dtOut = occurredAt;
+            if (DateTimeOffset.TryParse(occurredAt, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var dto))
+            {
+              dtOut = dto.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
+            }
+          }
+          var verified = el.TryGetProperty("verified", out var vEl) && vEl.ValueKind == JsonValueKind.String ? (vEl.GetString() ?? "") : "";
+          var status = el.TryGetProperty("status", out var stEl) && stEl.ValueKind == JsonValueKind.String ? (stEl.GetString() ?? "") : "";
+          var workcode = el.TryGetProperty("workcode", out var wcEl) && wcEl.ValueKind == JsonValueKind.String ? (wcEl.GetString() ?? "") : "";
+          var reserved = el.TryGetProperty("reserved", out var rsEl) && rsEl.ValueKind == JsonValueKind.String ? (rsEl.GetString() ?? "") : "";
+          list.Add(new { staff_id = staffId, datetime = dtOut, verified, status, workcode, reserved });
+        }
+
+        return (true, list.ToArray(), null, 200);
       }
 
-      var text = await res.Content.ReadAsStringAsync(ct);
-      using var doc = JsonDocument.Parse(text);
-      if (doc.RootElement.ValueKind != JsonValueKind.Array) return (false, Array.Empty<object>(), "Supabase returned non-array JSON");
-      var arr = new object[doc.RootElement.GetArrayLength()];
-      for (var i = 0; i < doc.RootElement.GetArrayLength(); i++)
+      var r1 = await FetchAsync(url, apiKey, ct);
+      if (!r1.ok && r1.statusCode == 401 && serviceKeyRaw.Length > 0 && anonRaw.Length > 0)
       {
-        arr[i] = doc.RootElement[i].Clone();
+        var r2 = await FetchAsync(url, anonRaw, ct);
+        return (r2.ok, r2.rows, r2.error);
       }
-      return (true, arr, null);
+      return (r1.ok, r1.rows, r1.error);
     }
     catch (Exception ex)
     {
@@ -4532,20 +5858,33 @@ static partial class Program
       var baseUrl = baseUrlRaw.TrimEnd('/');
       var url = $"{baseUrl}/rest/v1/{tableRaw}?select=staff_id";
 
-      using var http = new HttpClient();
-      using var req = new HttpRequestMessage(HttpMethod.Get, url);
-      req.Headers.TryAddWithoutValidation("apikey", apiKey);
-      req.Headers.TryAddWithoutValidation("Authorization", $"Bearer {apiKey}");
-      req.Headers.TryAddWithoutValidation("Accept", "application/json");
-      req.Headers.TryAddWithoutValidation("Prefer", "count=exact");
-      req.Headers.TryAddWithoutValidation("Range-Unit", "items");
-      req.Headers.TryAddWithoutValidation("Range", "0-0");
-
-      using var res = await http.SendAsync(req, ct);
-      if (!res.IsSuccessStatusCode)
+      static async Task<(bool ok, HttpResponseMessage res, string body)> SendAsync(string url, string apiKey, CancellationToken ct)
       {
+        var http = new HttpClient();
+        var req = new HttpRequestMessage(HttpMethod.Get, url);
+        req.Headers.TryAddWithoutValidation("apikey", apiKey);
+        req.Headers.TryAddWithoutValidation("Authorization", $"Bearer {apiKey}");
+        req.Headers.TryAddWithoutValidation("Accept", "application/json");
+        req.Headers.TryAddWithoutValidation("Prefer", "count=exact");
+        req.Headers.TryAddWithoutValidation("Range-Unit", "items");
+        req.Headers.TryAddWithoutValidation("Range", "0-0");
+        var res = await http.SendAsync(req, ct);
         var body = await res.Content.ReadAsStringAsync(ct);
-        return (false, 0, $"Supabase count failed: {(int)res.StatusCode} {res.ReasonPhrase}. Body={body}");
+        req.Dispose();
+        http.Dispose();
+        return (res.IsSuccessStatusCode, res, body);
+      }
+
+      var (ok1, res1, body1) = await SendAsync(url, apiKey, ct);
+      if (!ok1 && (int)res1.StatusCode == 401 && serviceKeyRaw.Length > 0 && anonRaw.Length > 0)
+      {
+        res1.Dispose();
+        (ok1, res1, body1) = await SendAsync(url, anonRaw, ct);
+      }
+      using var res = res1;
+      if (!ok1)
+      {
+        return (false, 0, $"Supabase count failed: {(int)res.StatusCode} {res.ReasonPhrase}. Body={body1}");
       }
 
       string? contentRange = null;
@@ -4564,8 +5903,7 @@ static partial class Program
         }
       }
 
-      var text = await res.Content.ReadAsStringAsync(ct);
-      using var doc = JsonDocument.Parse(text);
+      using var doc = JsonDocument.Parse(body1);
       if (doc.RootElement.ValueKind != JsonValueKind.Array) return (false, 0, "Supabase returned non-array JSON");
       return (true, doc.RootElement.GetArrayLength(), null);
     }
@@ -4590,22 +5928,50 @@ static partial class Program
     try
     {
       var baseUrl = baseUrlRaw.TrimEnd('/');
-      var url = $"{baseUrl}/rest/v1/{tableRaw}?select=staff_id&datetime=gte.{Uri.EscapeDataString(from)}&datetime=lte.{Uri.EscapeDataString(to)}";
-
-      using var http = new HttpClient();
-      using var req = new HttpRequestMessage(HttpMethod.Get, url);
-      req.Headers.TryAddWithoutValidation("apikey", apiKey);
-      req.Headers.TryAddWithoutValidation("Authorization", $"Bearer {apiKey}");
-      req.Headers.TryAddWithoutValidation("Accept", "application/json");
-      req.Headers.TryAddWithoutValidation("Prefer", "count=exact");
-      req.Headers.TryAddWithoutValidation("Range-Unit", "items");
-      req.Headers.TryAddWithoutValidation("Range", "0-0");
-
-      using var res = await http.SendAsync(req, ct);
-      if (!res.IsSuccessStatusCode)
+      static string NormalizeRange(string raw)
       {
+        var s = (raw ?? string.Empty).Trim();
+        if (s.Length == 0) return string.Empty;
+        if (s.Contains('T', StringComparison.Ordinal)) return s;
+        if (DateTime.TryParseExact(s, "yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture, DateTimeStyles.None, out var dt))
+        {
+          var dto = new DateTimeOffset(DateTime.SpecifyKind(dt, DateTimeKind.Unspecified), TimeSpan.FromHours(8));
+          return dto.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture);
+        }
+        return s;
+      }
+
+      var fromNorm = NormalizeRange(from);
+      var toNorm = NormalizeRange(to);
+      var url = $"{baseUrl}/rest/v1/{tableRaw}?select=staff_id&occurred_at=gte.{Uri.EscapeDataString(fromNorm)}&occurred_at=lte.{Uri.EscapeDataString(toNorm)}";
+
+      static async Task<(bool ok, HttpResponseMessage res, string body)> SendAsync(string url, string apiKey, CancellationToken ct)
+      {
+        var http = new HttpClient();
+        var req = new HttpRequestMessage(HttpMethod.Get, url);
+        req.Headers.TryAddWithoutValidation("apikey", apiKey);
+        req.Headers.TryAddWithoutValidation("Authorization", $"Bearer {apiKey}");
+        req.Headers.TryAddWithoutValidation("Accept", "application/json");
+        req.Headers.TryAddWithoutValidation("Prefer", "count=exact");
+        req.Headers.TryAddWithoutValidation("Range-Unit", "items");
+        req.Headers.TryAddWithoutValidation("Range", "0-0");
+        var res = await http.SendAsync(req, ct);
         var body = await res.Content.ReadAsStringAsync(ct);
-        return (false, 0, $"Supabase count failed: {(int)res.StatusCode} {res.ReasonPhrase}. Body={body}");
+        req.Dispose();
+        http.Dispose();
+        return (res.IsSuccessStatusCode, res, body);
+      }
+
+      var (ok1, res1, body1) = await SendAsync(url, apiKey, ct);
+      if (!ok1 && (int)res1.StatusCode == 401 && serviceKeyRaw.Length > 0 && anonRaw.Length > 0)
+      {
+        res1.Dispose();
+        (ok1, res1, body1) = await SendAsync(url, anonRaw, ct);
+      }
+      using var res = res1;
+      if (!ok1)
+      {
+        return (false, 0, $"Supabase count failed: {(int)res.StatusCode} {res.ReasonPhrase}. Body={body1}");
       }
 
       string? contentRange = null;
@@ -4624,8 +5990,7 @@ static partial class Program
         }
       }
 
-      var text = await res.Content.ReadAsStringAsync(ct);
-      using var doc = JsonDocument.Parse(text);
+      using var doc = JsonDocument.Parse(body1);
       if (doc.RootElement.ValueKind != JsonValueKind.Array) return (false, 0, "Supabase returned non-array JSON");
       return (true, doc.RootElement.GetArrayLength(), null);
     }
@@ -4727,14 +6092,17 @@ static partial class Program
     {
       var baseUrl = config.SupabaseUrl.TrimEnd('/');
       var rangeStart = (start7 < weekStart) ? start7 : weekStart;
-      var select = Uri.EscapeDataString("staff_id,datetime");
-      var startDt = Uri.EscapeDataString(rangeStart.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) + " 00:00:00");
-      var endDt = Uri.EscapeDataString(todayLocal + " 23:59:59");
+      var select = Uri.EscapeDataString("staff_id,occurred_at");
+      var sg = TimeSpan.FromHours(8);
+      var startUtc = new DateTimeOffset(rangeStart.ToDateTime(new TimeOnly(0, 0, 0)), sg).ToUniversalTime().ToString("O", CultureInfo.InvariantCulture);
+      var endUtc = new DateTimeOffset(todayDate.ToDateTime(new TimeOnly(23, 59, 59)), sg).ToUniversalTime().ToString("O", CultureInfo.InvariantCulture);
+      var startDt = Uri.EscapeDataString(startUtc);
+      var endDt = Uri.EscapeDataString(endUtc);
       var url =
         $"{baseUrl}/rest/v1/{config.SupabaseAttendanceTable}?select={select}" +
-        $"&datetime=gte.{startDt}" +
-        $"&datetime=lte.{endDt}" +
-        $"&order=datetime.desc&limit=50000";
+        $"&occurred_at=gte.{startDt}" +
+        $"&occurred_at=lte.{endDt}" +
+        $"&order=occurred_at.desc&limit=50000";
 
       using var http = new HttpClient();
       using var req = new HttpRequestMessage(HttpMethod.Get, url);
@@ -4757,9 +6125,10 @@ static partial class Program
       foreach (var el in doc.RootElement.EnumerateArray())
       {
         var staffId = el.TryGetProperty("staff_id", out var staffEl) && staffEl.ValueKind == JsonValueKind.String ? staffEl.GetString() : null;
-        var dtRaw = el.TryGetProperty("datetime", out var dtEl) && dtEl.ValueKind == JsonValueKind.String ? dtEl.GetString() : null;
+        var dtRaw = el.TryGetProperty("occurred_at", out var dtEl) && dtEl.ValueKind == JsonValueKind.String ? dtEl.GetString() : null;
         if (string.IsNullOrWhiteSpace(dtRaw)) continue;
-        if (!DateTime.TryParseExact(dtRaw.Trim(), "yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture, DateTimeStyles.None, out var dt)) continue;
+        if (!DateTimeOffset.TryParse(dtRaw.Trim(), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var dto)) continue;
+        var dt = dto.ToOffset(sg).DateTime;
         var d = DateOnly.FromDateTime(dt);
 
         if (d == todayDate)
@@ -5064,34 +6433,35 @@ static partial class Program
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>SHAB Attendance Dashboard</title>
+  <link rel="icon" href="/assets/logo.ico" />
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800&display=swap" rel="stylesheet">
   <style>
     *{box-sizing:border-box}
-    :root{--bg:#fff7ed;--panel:#ffffff;--panel2:#f8fafc;--text:#0f172a;--muted:#64748b;--border:#e5e7eb;--border2:#cbd5e1;--btn:#f1f5f9;--btnH:#e2e8f0;--accent:#2563eb;--accent2:#0ea5e9;--ok:#16a34a;--bad:#dc2626;--fontHead:"Nunito","Segoe UI Rounded","Arial Rounded MT Bold","Trebuchet MS",system-ui,sans-serif}
-    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;margin:0;background:var(--bg);color:var(--text);overflow-x:hidden}
+    :root{--bg:#F7F9FC;--panel:#ffffff;--panel2:#f8fafc;--text:#0f172a;--muted:#6b7280;--border:#e5e7eb;--border2:#d1d5db;--btn:#f3f4f6;--btnH:#e5e7eb;--navy:#163A70;--teal:#2BB7A9;--activeBg:#D6F2EE;--activeText:#163A70;--accent:var(--navy);--accent2:var(--teal);--ok:#16a34a;--bad:#dc2626;--fontHead:"Nunito","Segoe UI","Inter",system-ui,sans-serif}
+    body{font-family:"Nunito",system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;margin:0;background:var(--bg);color:var(--text);overflow-x:hidden}
     header{display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border-bottom:1px solid var(--border);background:var(--panel);position:sticky;top:0;z-index:2000}
     h1{font-family:var(--fontHead);font-size:16px;margin:0;font-weight:900}
     .title,.summaryTitle,.summaryWrap .title,.kTitle,.miniKpiTitle,.donutTitle,.sparkTitle,.subTitle,.modalTitle{font-family:var(--fontHead)}
-    .btn{padding:8px 10px;border-radius:10px;border:1px solid var(--border2);background:var(--btn);color:var(--text);cursor:pointer;transition:background .12s ease,border-color .12s ease,transform .05s ease,box-shadow .12s ease}
-    .btn:hover{background:var(--btnH);border-color:var(--border2);box-shadow:0 0 0 3px rgba(37,99,235,.10)}
-    .btn:active{transform:translateY(1px);box-shadow:0 0 0 3px rgba(37,99,235,.14)}
+    .btn{padding:8px 10px;border-radius:10px;border:1px solid var(--border2);background:var(--btn);color:var(--text);cursor:pointer;font-family:inherit;font-size:12px;transition:background .12s ease,border-color .12s ease,transform .05s ease,box-shadow .12s ease}
+    .btn:hover{background:var(--btnH);border-color:var(--border2);box-shadow:0 0 0 3px rgba(43,183,169,.14)}
+    .btn:active{transform:translateY(1px);box-shadow:0 0 0 3px rgba(43,183,169,.20)}
     .btn:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
     .btn:disabled{opacity:.55;cursor:not-allowed;box-shadow:none}
     .btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
-    main{max-width:1200px;margin:0 auto;padding:16px;overflow-x:hidden}
-    .tabs{display:flex;gap:8px;flex-wrap:wrap;margin:0 0 14px}
+    main{max-width:none;margin:0;padding:0;overflow-x:hidden}
+    .tabs{display:none}
     .tabBtn{padding:9px 12px;border-radius:12px;border:1px solid var(--border);background:var(--panel);color:var(--text);cursor:pointer;font-size:12px;transition:background .12s ease,border-color .12s ease,transform .05s ease,box-shadow .12s ease}
-    .tabBtn:hover{background:var(--btn);border-color:var(--border2);box-shadow:0 0 0 3px rgba(37,99,235,.08)}
+    .tabBtn:hover{background:var(--btn);border-color:var(--border2);box-shadow:0 0 0 3px rgba(43,183,169,.12)}
     .tabBtn:active{transform:translateY(1px)}
     .tabBtn:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
     .tabBtn.active{background:var(--btn);border-color:var(--border2)}
     .tabPanel{display:none}
     .tabPanel.active{display:block}
-    .subTabs{display:flex;gap:8px;flex-wrap:wrap;margin:0 0 14px}
+    .subTabs{display:none}
     .subTabBtn{padding:9px 12px;border-radius:12px;border:1px solid #e5e7eb;background:#ffffff;color:#0f172a;cursor:pointer;font-size:12px;transition:background .12s ease,border-color .12s ease,transform .05s ease,box-shadow .12s ease}
-    .subTabBtn:hover{background:#f1f5f9;border-color:#cbd5e1;box-shadow:0 0 0 3px rgba(37,99,235,.08)}
+    .subTabBtn:hover{background:#f1f5f9;border-color:#cbd5e1;box-shadow:0 0 0 3px rgba(43,183,169,.12)}
     .subTabBtn:active{transform:translateY(1px)}
     .subTabBtn:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
     .subTabBtn.active{background:#f1f5f9;border-color:#cbd5e1}
@@ -5100,13 +6470,21 @@ static partial class Program
     .grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;overflow-x:hidden}
     .card{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:14px;min-width:0}
     .title{font-size:12px;color:var(--muted);margin:0 0 10px;min-width:0}
+    .titleRow{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;margin:0 0 10px;min-width:0}
+    .titleRow .title{margin:0}
+    .staffLog{flex:1;min-width:0;text-align:right;font-variant-numeric:tabular-nums;white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word}
+    .staffLog.okText{color:var(--ok)}
+    .staffLog.badText{color:var(--bad)}
     .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center;min-width:0}
+    .row.noWrap{flex-wrap:nowrap}
+    .toolbarRight{justify-content:flex-end}
     .kv{font-size:12px;color:var(--muted);min-width:0}
     .val{color:var(--text)}
     .pill{display:inline-flex;align-items:center;gap:6px;padding:4px 8px;border-radius:999px;border:1px solid var(--border2);background:var(--panel2);font-size:12px}
     .ok{border-color:rgba(22,163,74,.45);background:rgba(22,163,74,.10)}
     .bad{border-color:rgba(220,38,38,.45);background:rgba(220,38,38,.10)}
-    input,select{padding:8px 10px;border-radius:10px;border:1px solid var(--border2);background:var(--panel);color:var(--text)}
+    input,select,textarea{padding:8px 10px;border-radius:10px;border:1px solid var(--border2);background:var(--panel);color:var(--text);font-family:inherit;font-size:12px}
+    button{font-family:inherit;font-size:12px}
     pre{margin:0;max-height:60vh;overflow-y:auto;overflow-x:hidden;background:var(--panel2);border:1px solid var(--border);border-radius:10px;padding:10px;font-size:12px;line-height:1.35;white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word}
     table{width:100%;border-collapse:collapse;table-layout:fixed}
     th,td{border-bottom:1px solid var(--border);padding:8px 6px;font-size:12px;text-align:left;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -5114,9 +6492,15 @@ static partial class Program
     td .btn{display:inline-block;margin:4px 0}
     .muted{color:var(--muted)}
     .formGrid{display:grid;grid-template-columns:160px minmax(0,1fr);gap:10px 12px;align-items:center}
+    .formGrid input,.formGrid select,.formGrid textarea{width:100%;min-width:0}
+    .formGrid textarea{padding:8px 10px;border-radius:10px;border:1px solid var(--border2);background:var(--panel);color:var(--text);font-family:inherit;resize:none;overflow:hidden}
     label{font-size:12px;color:var(--muted)}
     .hint{font-size:12px;color:var(--muted)}
+    th.sortable{cursor:pointer;user-select:none}
+    th.sortable:hover{text-decoration:underline}
     .kpis{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}
+    .kpis.kpis1{grid-template-columns:1fr}
+    .kpis.kpis2{grid-template-columns:repeat(2,minmax(0,1fr))}
     .kpi{background:var(--panel2);border:1px solid var(--border);border-radius:12px;padding:16px}
     .kTitle{font-size:12px;color:var(--muted);margin-bottom:6px}
     .kVal{font-size:28px;font-weight:700}
@@ -5137,7 +6521,7 @@ static partial class Program
     @media (max-width: 900px){.summaryWrap .kpis{grid-template-columns:repeat(2,minmax(0,1fr))}}
     @media (max-width: 520px){.summaryWrap .kpis{grid-template-columns:1fr}}
     .summaryWrap .kpi{background:linear-gradient(180deg,#ffffff,#f8fafc);border-color:#e5e7eb;position:relative;overflow:hidden}
-    .summaryWrap .kpi::after{content:'';position:absolute;inset:-2px -2px auto auto;width:120px;height:120px;background:radial-gradient(circle at 40% 40%,rgba(37,99,235,.16),transparent 60%);pointer-events:none}
+    .summaryWrap .kpi::after{content:'';position:absolute;inset:-2px -2px auto auto;width:120px;height:120px;background:radial-gradient(circle at 40% 40%,rgba(43,183,169,.18),transparent 60%);pointer-events:none}
     .summaryWrap .kTitle{font-size:12px;font-weight:600;letter-spacing:.02em;text-transform:uppercase}
     .summaryWrap .kVal{font-size:34px;color:#0f172a}
     .summaryWrap .pill{background:#f8fafc;border-color:#e2e8f0;color:#0f172a}
@@ -5154,21 +6538,21 @@ static partial class Program
     .yNums{position:absolute;left:8px;top:10px;bottom:28px;width:28px;display:flex;flex-direction:column;justify-content:space-between;align-items:flex-end;font-size:10px;color:#64748b;font-variant-numeric:tabular-nums;pointer-events:none}
     .barsGrid{position:relative;display:grid;grid-template-columns:repeat(24,minmax(0,1fr));gap:4px;align-items:end;height:160px}
     .barsGrid .bar2{border-radius:6px 6px 0 0;min-height:2px}
-    .barsGrid .bar2.device{background:linear-gradient(180deg,#2563eb,#1d4ed8)}
-    .barsGrid .bar2.db{background:linear-gradient(180deg,#0ea5e9,#0284c7)}
+    .barsGrid .bar2.device{background:linear-gradient(180deg,#163A70,#0f2a56)}
+    .barsGrid .bar2.db{background:linear-gradient(180deg,#2BB7A9,#169a8e)}
     .xAxis{position:relative;display:grid;grid-template-columns:repeat(24,minmax(0,1fr));gap:4px;margin-top:6px;font-size:9px;color:#64748b}
     .xAxis span{text-align:center;opacity:.85}
     .legend{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:10px}
     .legItem{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:#64748b}
     .dot{width:10px;height:10px;border-radius:999px}
-    .dot.device{background:#2563eb}
-    .dot.db{background:#0ea5e9}
+    .dot.device{background:#163A70}
+    .dot.db{background:#2BB7A9}
     .groupGrid{position:relative;display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:10px;align-items:end;height:170px}
     .gCol{position:relative;display:flex;flex-direction:column;align-items:stretch;gap:6px;min-width:0}
     .gBars{display:flex;gap:4px;align-items:flex-end;justify-content:center;height:140px}
-    .gBar{width:12px;border-radius:6px 6px 0 0;min-height:2px}
-    .gBar.device{background:linear-gradient(180deg,#2563eb,#1d4ed8)}
-    .gBar.db{background:linear-gradient(180deg,#0ea5e9,#0284c7)}
+    .gBar{width:16px;border-radius:6px 6px 0 0;min-height:4px}
+    .gBar.device{background:linear-gradient(180deg,#163A70,#0f2a56)}
+    .gBar.db{background:linear-gradient(180deg,#2BB7A9,#169a8e)}
     .gLbl{font-size:10px;color:#64748b;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
     .summaryWrap .muted{color:#64748b}
     .subCards{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
@@ -5180,16 +6564,55 @@ static partial class Program
     .subVal.mono{font-variant-numeric:tabular-nums;font-feature-settings:"tnum" 1;white-space:pre-wrap;overflow-wrap:anywhere}
     .flagWrap{white-space:normal;overflow-wrap:anywhere;line-height:1.15}
     .loadRow{display:flex;align-items:center;gap:12px;padding:10px 12px;border:1px dashed #e5e7eb;border-radius:12px;background:linear-gradient(180deg,#ffffff,#f8fafc);margin-bottom:10px}
-    .ring{position:relative;width:38px;height:38px;border-radius:999px;display:grid;place-items:center;background:conic-gradient(#2563eb var(--pct), #e2e8f0 0)}
+    .ring{position:relative;width:38px;height:38px;border-radius:999px;display:grid;place-items:center;background:conic-gradient(#163A70 var(--pct), #e2e8f0 0)}
     .ring::before{content:'';width:30px;height:30px;border-radius:999px;background:#fff}
     .ringText{position:absolute;font-size:11px;font-weight:800;color:#0f172a}
     .loadText{font-size:12px;color:#64748b}
     .loadText strong{color:#0f172a}
     .modalBack{position:fixed;inset:0;background:rgba(15,23,42,.35);display:none;align-items:flex-start;justify-content:center;padding:16px;z-index:5000;overflow:auto}
     .modalCard{width:min(720px,100%);max-height:calc(100vh - 32px);background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:14px;display:flex;flex-direction:column;overflow:hidden}
+    .modalCard.wide{width:min(1100px,100%)}
     .modalHead{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px}
     .modalTitle{font-size:13px;color:var(--text);font-weight:700}
     .modalBody{flex:1;min-height:0;overflow:auto}
+    .staffHead{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px}
+    .staffLeft{display:flex;gap:12px;align-items:center;min-width:0}
+    .staffAvatar{width:44px;height:44px;border-radius:999px;background:linear-gradient(180deg,#163A70,#2BB7A9);color:#fff;font-weight:900;display:flex;align-items:center;justify-content:center;flex:0 0 auto}
+    .staffName{font-weight:900;color:var(--text);font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .staffMeta{color:var(--muted);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .staffStats{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px;margin:10px 0 14px}
+    @media (max-width: 900px){.staffStats{grid-template-columns:repeat(2,minmax(0,1fr))}}
+    .staffStat{border:1px solid var(--border2);border-radius:12px;background:var(--panel2);padding:10px}
+    .staffStatT{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;font-weight:800}
+    .staffStatV{font-size:18px;color:var(--text);font-weight:900;margin-top:4px}
+    .monthRow{display:flex;gap:10px;align-items:center;justify-content:space-between;margin-bottom:10px}
+    .dayList{display:flex;flex-direction:column;gap:10px}
+    .dayCard{border:1px solid var(--border2);border-radius:14px;background:linear-gradient(180deg,#ffffff,#f8fafc);padding:10px 12px}
+    .dayTop{display:flex;align-items:center;justify-content:space-between;gap:10px}
+    .dayBadge{display:inline-flex;align-items:center;gap:6px;border-radius:999px;padding:4px 10px;border:1px solid rgba(226,232,240,.95);background:#fff;font-size:11px;font-weight:900;color:#0f172a;white-space:nowrap}
+    .dayBadge.bad{border-color:rgba(239,68,68,.35);background:rgba(239,68,68,.08);color:#7f1d1d}
+    .dayBadge.warn{border-color:rgba(245,158,11,.40);background:rgba(245,158,11,.10);color:#7c2d12}
+    .dayBadge.off{border-color:rgba(148,163,184,.55);background:rgba(148,163,184,.12);color:#334155}
+    .dayTitle{font-weight:900;color:#0f172a;font-size:12px}
+    .dayTimes{font-size:12px;color:#334155;font-variant-numeric:tabular-nums}
+    .tl{margin-top:8px}
+    .axis{display:flex;justify-content:space-between;color:#94a3b8;font-size:10px;font-variant-numeric:tabular-nums}
+    .track{position:relative;height:14px;border-radius:999px;background:rgba(226,232,240,.85);border:1px solid rgba(226,232,240,.95);overflow:visible;margin-top:6px}
+    .seg{position:absolute;top:0;bottom:0;border-radius:999px;overflow:visible}
+    .seg.work{background:linear-gradient(90deg,#163A70,#0f2a56)}
+    .seg.break{background:linear-gradient(90deg,#94a3b8,#64748b)}
+    .seg.extra{background:linear-gradient(90deg,#fbbf24,#f59e0b)}
+    .missDot{position:absolute;top:50%;transform:translate(-50%,-50%);width:8px;height:8px;border-radius:999px;background:#ef4444;border:2px solid #fff;box-shadow:0 10px 20px rgba(2,6,23,.18);z-index:25}
+    .tlLegend{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:8px 0 10px}
+    .tlLeg{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:#64748b}
+    .tlDot{width:10px;height:10px;border-radius:999px}
+    .tlDot.work{background:#163A70}
+    .tlDot.break{background:#64748b}
+    .tlDot.extra{background:#f59e0b}
+    .tlDot.miss{background:#ef4444}
+    .segTip{display:none;position:absolute;left:50%;transform:translateX(-50%);top:-54px;background:#0f172a;color:#fff;padding:10px 12px;border-radius:14px;font-size:12px;line-height:1.25;box-shadow:0 18px 42px rgba(2,6,23,.28);white-space:nowrap;z-index:30}
+    .segTip::after{content:'';position:absolute;left:50%;transform:translateX(-50%);bottom:-6px;width:12px;height:12px;background:#0f172a;transform-origin:center;rotate:45deg;border-radius:3px}
+    .seg:hover .segTip{display:block}
     .modalGrid{display:grid;grid-template-columns:160px minmax(0,1fr);gap:10px 12px;align-items:center}
     .modalGrid label{color:var(--muted)}
     .modalTable{width:100%;border-collapse:collapse;font-size:12px}
@@ -5199,29 +6622,102 @@ static partial class Program
     .modalPunchTable th,.modalPunchTable td{border:1px solid var(--border);padding:8px 10px;vertical-align:top}
     .modalPunchTable th{background:var(--panel2);text-align:left;color:var(--muted);font-weight:800}
     .modalFoot{display:flex;gap:10px;justify-content:flex-end;margin-top:12px}
-    .iconBtn{padding:6px 8px;border-radius:10px;border:1px solid var(--border2);background:var(--btn);color:var(--text);cursor:pointer}
+    .iconBtn{display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;padding:0;border-radius:10px;border:1px solid var(--border2);background:var(--btn);color:var(--text);cursor:pointer}
     .iconBtn:hover{background:var(--btnH);border-color:var(--border2)}
+    .iconBtn svg{width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+    .actionIcons{display:flex;align-items:center;justify-content:flex-start;gap:6px}
+    .actionSep{width:1px;height:18px;background:var(--border2);opacity:.8}
     .dlIconBtn{display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;padding:0;border-radius:10px;border:1px solid var(--border2);background:var(--btn);color:var(--text);cursor:pointer}
     .dlIconBtn:hover{background:var(--btnH);border-color:var(--border2)}
     .dlIconBtn svg{width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
     .analysisGrid{display:grid;grid-template-columns:repeat(12,minmax(0,1fr));gap:14px}
     .analysisCard{grid-column:1/-1}
     .analysisFilters{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:10px}
+    .snapGrid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
+    .snapGrid3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+    @media (max-width: 900px){.snapGrid3{grid-template-columns:repeat(2,minmax(0,1fr))}}
+    @media (max-width: 520px){.snapGrid3{grid-template-columns:1fr}}
+    .snapCol{display:grid;grid-template-columns:1fr;gap:12px;margin-top:10px}
+    @media (max-width: 900px){.snapGrid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+    @media (max-width: 520px){.snapGrid{grid-template-columns:1fr}}
+    .snapCard{border:1px solid #e5e7eb;border-radius:14px;background:linear-gradient(180deg,#ffffff,#f8fafc);padding:14px 14px 12px;cursor:pointer;display:flex;flex-direction:column;gap:8px;min-width:0;text-align:left}
+    .snapCard:hover{border-color:rgba(22,58,112,.85);background:linear-gradient(180deg,#163A70,#0f2a56);box-shadow:0 10px 26px rgba(2,6,23,.14);transform:translateY(-1px)}
+    .snapCard:hover .snapTitle,.snapCard:hover .snapMeta,.snapCard:hover .snapVal{color:#ffffff}
+    .snapCard:hover .snapGo{background:rgba(255,255,255,.12);border-color:rgba(255,255,255,.35);color:#ffffff}
+    .snapCard.teal:hover{border-color:rgba(16,185,129,.85);background:linear-gradient(180deg,#0f766e,#064e3b);box-shadow:0 10px 26px rgba(2,6,23,.14);transform:translateY(-1px)}
+    .snapCard.teal:hover .snapTitle,.snapCard.teal:hover .snapMeta,.snapCard.teal:hover .snapVal{color:#ffffff}
+    .snapCard.teal:hover .snapGo{background:rgba(255,255,255,.12);border-color:rgba(255,255,255,.35);color:#ffffff}
+    .snapCard:active{transform:translateY(0)}
+    .snapTop{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}
+    .snapTitle{font-size:12px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.06em}
+    .snapGo{width:26px;height:26px;border-radius:999px;border:1px solid rgba(226,232,240,.95);display:flex;align-items:center;justify-content:center;color:#0f172a;background:#fff;flex:0 0 auto}
+    .snapVal{font-size:32px;font-weight:900;color:#0f172a;line-height:1}
+    .snapVal.note{font-size:14px;font-weight:800;line-height:1.25}
+    .snapMeta{font-size:12px;color:#64748b;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .snapMeta.wrap{white-space:normal}
     .anaTopSplit{grid-column:1/-1;display:grid;grid-template-columns:2fr 1fr;gap:14px;align-items:stretch}
     @media (max-width: 900px){.anaTopSplit{grid-template-columns:1fr}}
-    .anaLeftStack{display:grid;grid-template-rows:1fr 1fr;gap:14px;min-width:0;height:100%}
+    .anaLeftStack{display:grid;grid-template-rows:1fr auto;gap:14px;min-width:0;height:100%}
     .anaLeftStack>.card{height:100%}
+    .anaRightStack{display:grid;grid-template-rows:1fr auto;gap:14px;min-width:0;height:100%}
+    .anaRightStack>.card{height:100%}
     .anaSysCard{height:100%;display:flex;flex-direction:column}
     .anaSysCard .miniKpisV{flex:0 0 auto}
     .anaSysCard .anaAlertsWrap{margin-top:auto}
+    .anaFillCard{height:100%;display:flex;flex-direction:column}
+    .anaFillCard .chartHost{flex:1 1 auto;min-height:260px}
+    .anaFillCard .chartHost .groupGrid{height:200px}
+    .anaFillCard .chartHost .gBars{height:160px}
+    .anaFillCard .hBars{flex:1 1 auto}
+
+    .empList{display:flex;flex-direction:column;gap:10px}
+    .empCard{border:1px solid rgba(226,232,240,.95);border-radius:14px;background:linear-gradient(180deg,#ffffff,#f8fafc);padding:10px 12px;display:grid;grid-template-columns:minmax(0,1fr) 92px;gap:10px;align-items:center}
+    .empName{font-size:12px;font-weight:800;color:#0f172a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .empDept{font-size:12px;color:#64748b;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px}
+    .empPct{font-size:12px;color:#0f172a;font-weight:800;text-align:right}
+    .empTrack{height:10px;border-radius:999px;background:rgba(226,232,240,.75);border:1px solid rgba(226,232,240,.95);overflow:hidden;margin-top:8px}
+    .empFill{height:100%;border-radius:999px;background:linear-gradient(90deg,#163A70,#2BB7A9)}
+    #anaTopEmployees{max-height:260px;overflow:auto;padding-right:2px}
+
+    .gNum{font-size:10px;color:rgba(100,116,139,.95);text-align:center;margin-bottom:6px;font-variant-numeric:tabular-nums}
+    .calHead{display:flex;align-items:flex-end;justify-content:space-between;gap:10px;margin-bottom:10px}
+    .calTitle{font-weight:900;color:#0f172a;font-size:14px;letter-spacing:.02em}
+    .calSub{color:#64748b;font-size:12px;margin-top:2px}
+    .monthInput{padding:6px 10px;border-radius:999px;border:1px solid rgba(226,232,240,.95);background:#fff;color:#0f172a;font-weight:800;font-size:12px;font-family:inherit}
+    .calGrid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:6px}
+    .calDow{color:#64748b;font-size:11px;text-transform:uppercase;letter-spacing:.08em;text-align:center;padding:6px 0}
+    .calGrid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:6px;grid-auto-rows:1fr}
+    .calCell{border:1px solid rgba(226,232,240,.9);border-radius:10px;background:#f8fafc;min-height:82px;position:relative;overflow:hidden}
+    .calCell.off{background:transparent;border-color:transparent}
+    .calCell .d{position:absolute;left:8px;top:6px;font-size:11px;color:#64748b}
+    .calCell .v{position:absolute;left:0;right:0;top:50%;transform:translateY(-45%);text-align:center;font-weight:900;font-variant-numeric:tabular-nums;color:#0f172a}
+    .calCell.z0{background:#f8fafc}
+    .calCell.z1{background:#fef3c7}
+    .calCell.z2{background:#fde68a}
+    .calCell.z3{background:#fdba74}
+    .calCell.z4{background:#fb923c;color:#0f172a}
+    .calCell.z5{background:#f97316;color:#0f172a}
+    .calCell.future{background:linear-gradient(180deg,#f8fafc,#f1f5f9);opacity:.55}
     .miniKpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
     @media (max-width: 900px){.miniKpis{grid-template-columns:repeat(2,minmax(0,1fr))}}
     @media (max-width: 520px){.miniKpis{grid-template-columns:1fr}}
     .miniKpisV{display:flex;flex-direction:column;gap:12px}
     #subtab-summary-attendance .card{position:relative;border-radius:18px;border-color:rgba(148,163,184,.55);box-shadow:0 14px 40px rgba(2,6,23,.08);background:linear-gradient(180deg,#ffffff,#f8fafc)}
-    #subtab-summary-attendance .card::before{content:'';position:absolute;left:0;right:0;top:0;height:4px;background:linear-gradient(90deg,rgba(37,99,235,.92),rgba(14,165,233,.86));opacity:.9}
+    #subtab-summary-attendance .card::before{content:'';position:absolute;left:0;right:0;top:0;height:4px;background:linear-gradient(90deg,rgba(22,58,112,.92),rgba(43,183,169,.86));opacity:.9}
+    #tab-staffRecords table th,#tab-staffRecords table td{white-space:normal;overflow-wrap:anywhere;word-break:break-word}
+    #subtab-staff-staff table th:nth-child(1),#subtab-staff-staff table td:nth-child(1){width:44px}
+    #subtab-staff-staff table th:nth-child(2),#subtab-staff-staff table td:nth-child(2){width:90px;white-space:nowrap}
+    #subtab-staff-staff table th:nth-child(6),#subtab-staff-staff table td:nth-child(6){white-space:nowrap}
+    #subtab-staff-staff table th:nth-child(7),#subtab-staff-staff table td:nth-child(7){white-space:nowrap}
+    #subtab-staff-staff table th:nth-child(9),#subtab-staff-staff table td:nth-child(9){width:96px;white-space:nowrap}
+    #subtab-staff-shift table th:nth-child(1),#subtab-staff-shift table td:nth-child(1){width:44px}
+    #subtab-staff-shift table th:nth-child(7),#subtab-staff-shift table td:nth-child(7){width:56px;white-space:nowrap}
+    .wdBox{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+    .wdItem{display:inline-flex;align-items:center;gap:4px;border:1px solid rgba(226,232,240,.95);background:#fff;border-radius:999px;padding:4px 8px;font-size:11px;color:#334155}
+    .wdItem input{width:14px;height:14px}
+    .wdItem span{font-weight:800;letter-spacing:.01em}
     #subtab-summary-attendance .title{color:#0f172a}
-    #subtab-summary-attendance .title::after{content:'';display:block;height:2px;width:52px;margin-top:8px;border-radius:999px;background:linear-gradient(90deg,rgba(37,99,235,.92),rgba(14,165,233,.86))}
+    #subtab-summary-attendance .title::after{content:'';display:block;height:2px;width:52px;margin-top:8px;border-radius:999px;background:linear-gradient(90deg,rgba(22,58,112,.92),rgba(43,183,169,.86))}
 
     .miniKpi{--kpi:#2563eb;background:linear-gradient(180deg,#ffffff,var(--panel2));border:1px solid rgba(148,163,184,.55);border-left:5px solid var(--kpi);border-radius:16px;padding:14px;min-width:0;position:relative;overflow:hidden;box-shadow:0 10px 30px rgba(2,6,23,.06)}
     .miniKpi::after{content:'';position:absolute;right:-46px;top:-46px;width:140px;height:140px;border-radius:999px;background:radial-gradient(circle at 40% 40%,color-mix(in srgb,var(--kpi) 26%,transparent),transparent 62%);pointer-events:none}
@@ -5260,7 +6756,7 @@ static partial class Program
     .donutItem{display:flex;align-items:center;justify-content:space-between;gap:10px;font-size:12px;color:var(--muted)}
     .sw{width:10px;height:10px;border-radius:3px;flex:0 0 auto}
     .gaugeBox{display:flex;flex-direction:column;align-items:center;gap:8px}
-    .gauge{position:relative;width:180px;height:108px;overflow:hidden}
+    .gauge{position:relative;width:180px;height:124px;overflow:hidden}
     .gaugeArc{position:absolute;left:0;right:0;bottom:-72px;width:180px;height:180px;border-radius:999px;background:conic-gradient(from 180deg, #e5e7eb 0deg 180deg, transparent 180deg 360deg)}
     .gaugeArc::after{content:'';position:absolute;inset:22px;border-radius:999px;background:#fff;border:1px solid var(--border)}
     .gaugeNeedle{position:absolute;left:50%;bottom:0;width:4px;height:72px;background:#334155;border-radius:999px;transform-origin:50% 100%;transform:translateX(-50%) rotate(var(--gNeedle));box-shadow:0 1px 2px rgba(15,23,42,.25)}
@@ -5275,16 +6771,183 @@ static partial class Program
     @media (max-width: 900px){.charts{grid-template-columns:1fr}}
     @media (max-width: 900px){.grid{grid-template-columns:1fr}.formGrid{grid-template-columns:1fr}}
     @media (max-width: 700px){.summaryWrap .kpis{grid-template-columns:1fr}}
+
+    .appShell{display:flex;min-height:100vh;background:var(--bg)}
+    .sideBar{width:280px;flex:0 0 auto;display:flex;flex-direction:column;gap:14px;padding:16px 14px;background:#ffffff;border-right:1px solid var(--border);position:sticky;top:0;height:100vh;overflow:auto;transition:width .22s ease,padding .22s ease}
+    body.sideCollapsed .sideBar{width:72px;padding:16px 10px}
+    .sideBrand{display:flex;align-items:center;gap:10px;padding:8px 8px;border-radius:14px;background:linear-gradient(135deg,rgba(22,58,112,.08),rgba(43,183,169,.10))}
+    .sideLogo{width:38px;height:38px;object-fit:contain;flex:0 0 auto}
+    .sideBrandText{min-width:0}
+    .sideBrandName{font-family:var(--fontHead);font-weight:900;color:var(--navy);font-size:13px;line-height:1.1}
+    .sideBrandTag{color:var(--muted);font-size:11px;line-height:1.1;margin-top:3px}
+    body.sideCollapsed .sideBrandText{display:none}
+    .sideNav{display:flex;flex-direction:column;gap:4px}
+    .navSection{margin-top:10px;padding-top:10px;border-top:1px solid var(--border)}
+    .navBtn{width:100%;display:flex;align-items:center;gap:10px;padding:10px 10px;border-radius:12px;border:1px solid transparent;background:transparent;color:#1F2937;cursor:pointer;text-align:left;font-size:13px;font-weight:700;transition:background .12s ease,color .12s ease,border-color .12s ease}
+    .navBtn:hover{background:rgba(15,23,42,.04)}
+    .navBtn.active{background:var(--activeBg);color:var(--activeText);border-color:rgba(43,183,169,.30)}
+    .navBtn svg{width:18px;height:18px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;flex:0 0 auto}
+    .navLabel{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    body.sideCollapsed .navLabel{display:none}
+    .navChev{margin-left:auto;opacity:.75;transition:transform .18s ease}
+    body.sideCollapsed .navChev{display:none}
+    .navGroup.open>.navBtn .navChev{transform:rotate(90deg)}
+    .navChildren{display:none;flex-direction:column;gap:2px;padding-left:30px;margin-top:2px}
+    body.sideCollapsed .navChildren{padding-left:0}
+    .navGroup.open .navChildren{display:flex}
+    .navChild{font-size:12px;font-weight:700;padding:9px 10px}
+    body.sideCollapsed .navChild{height:40px;padding:0;border:1px solid rgba(22,58,112,.16);background:rgba(22,58,112,.06);border-radius:12px;display:flex;align-items:center;justify-content:center}
+    body.sideCollapsed .navChild::before{content:'';width:10px;height:10px;border-radius:999px;background:rgba(100,116,139,.85);box-shadow:0 0 0 4px rgba(22,58,112,.10)}
+    body.sideCollapsed .navChild.active{background:var(--activeBg);border-color:rgba(43,183,169,.55)}
+    body.sideCollapsed .navChild.active::before{background:rgba(43,183,169,.92);box-shadow:0 0 0 4px rgba(22,58,112,.10)}
+    .mainCol{flex:1;min-width:0;display:flex;flex-direction:column}
+    .topBar{position:sticky;top:0;z-index:2000;display:flex;align-items:center;gap:12px;padding:12px 16px;background:linear-gradient(90deg,var(--navy),var(--teal));color:#fff;border-bottom:1px solid rgba(15,23,42,.12)}
+    .topBar .iconBtn{border-color:rgba(255,255,255,.35);background:rgba(255,255,255,.10);color:#fff}
+    .topBar .iconBtn:hover{background:rgba(255,255,255,.16);border-color:rgba(255,255,255,.45)}
+    .topTitleWrap{min-width:0}
+    .topTitle{font-family:var(--fontHead);font-weight:900;font-size:14px;line-height:1.1}
+    .topSub{font-size:12px;opacity:.9;line-height:1.1;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .topRight{margin-left:auto;display:flex;align-items:center;gap:10px}
+    .content{max-width:1200px;margin:0 auto;padding:16px 16px 26px;min-width:0;width:100%}
+
+    .syncCards{display:flex;gap:12px;align-items:stretch}
+    @media (max-width: 900px){.syncCards{width:100%;justify-content:flex-start;flex-wrap:wrap}}
+    .syncCard{min-width:170px;border:1px solid var(--border);background:linear-gradient(180deg,#ffffff,var(--panel2));border-radius:14px;padding:12px;box-shadow:0 10px 28px rgba(2,6,23,.06)}
+    .syncCardTitle{font-size:11px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+    .syncCardVal{margin-top:8px;display:flex;align-items:center;gap:8px}
+    .syncCardVal .pill{height:24px;padding:0 10px;border-radius:999px;font-weight:900}
+    .syncCardVal .pill.ok{background:rgba(43,183,169,.12);border-color:rgba(43,183,169,.35);color:var(--navy)}
+    .syncCardVal .pill.bad{background:rgba(220,38,38,.10);border-color:rgba(220,38,38,.25);color:#7f1d1d}
+
+    .cardHead{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:-14px -14px 12px;padding:12px 14px;border-bottom:1px solid var(--border);background:linear-gradient(90deg,rgba(22,58,112,.10),rgba(43,183,169,.10))}
+    .cardHeadTitle{font-family:var(--fontHead);font-weight:900;color:var(--navy);font-size:13px;letter-spacing:.08em;text-transform:uppercase}
+    .filterBar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;background:linear-gradient(180deg,#ffffff,var(--panel2));border:1px solid var(--border);border-radius:14px;padding:10px 12px;margin-bottom:10px}
+    .filterBar label{font-size:11px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+    .dateInput{height:38px;padding:8px 10px;border-radius:12px;border:1px solid var(--border2);background:#ffffff;font-family:inherit;font-size:12px}
+    .filterBar .btn{height:38px}
+
+    .prettyTable{width:100%;border-collapse:separate;border-spacing:0;font-size:12.5px}
+    .prettyTable thead th{position:sticky;top:0;background:linear-gradient(90deg,rgba(22,58,112,.10),rgba(43,183,169,.10));border-bottom:1px solid var(--border);padding:12px 12px;text-align:left;color:#0f172a;font-weight:900}
+    .prettyTable thead th:first-child{border-top-left-radius:14px}
+    .prettyTable thead th:last-child{border-top-right-radius:14px}
+    .prettyTable tbody td{padding:12px 12px;border-bottom:1px solid rgba(226,232,240,.9);background:#fff}
+    .prettyTable tbody tr:hover td{background:rgba(22,58,112,.03)}
+    .prettyTable tbody tr:last-child td:first-child{border-bottom-left-radius:14px}
+    .prettyTable tbody tr:last-child td:last-child{border-bottom-right-radius:14px}
+    .prettyTable th.sortable{cursor:pointer;user-select:none}
+    .prettyTable th.sortable::after{content:'↕';margin-left:8px;color:rgba(15,23,42,.35);font-weight:900}
+    .prettyTable th.sortable.sortedAsc::after{content:'▲';color:rgba(22,58,112,.75)}
+    .prettyTable th.sortable.sortedDesc::after{content:'▼';color:rgba(22,58,112,.75)}
+
+    .sectionHead{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:14px;margin-bottom:10px;padding:10px 12px;border:1px solid var(--border);border-radius:12px;background:linear-gradient(90deg,rgba(22,58,112,.08),rgba(43,183,169,.08))}
+    .sectionHeadTitle{font-family:var(--fontHead);font-weight:900;color:var(--navy);font-size:12px;letter-spacing:.08em;text-transform:uppercase}
+
+    .formGrid.compactLabels{grid-template-columns:120px minmax(0,1fr)}
+    .bulletList{margin:8px 0 0 18px;padding:0;color:var(--muted);font-size:12px}
+    .bulletList li{margin:6px 0;overflow-wrap:anywhere;word-break:break-word}
+    .timeRow{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+    .timeInput{height:38px;border-radius:12px;border:1px solid var(--border2);background:#ffffff;padding:8px 10px;font-family:inherit;font-size:12px}
+    .timeCards{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+    @media (max-width: 1100px){.timeCards{grid-template-columns:repeat(2,minmax(0,1fr))}}
+    @media (max-width: 520px){.timeCards{grid-template-columns:1fr}}
+    .timeCard{border:1px solid #e5e7eb;background:linear-gradient(180deg,#ffffff,#f8fafc);border-radius:12px;padding:10px 12px;display:flex;align-items:center;justify-content:space-between;gap:10px;min-width:0}
+    .timeCardVal{font-weight:600;color:#0f172a;font-variant-numeric:tabular-nums;letter-spacing:.02em}
+    .timeCardBtns{display:flex;gap:8px;align-items:center}
+
+    .toast{position:fixed;right:18px;bottom:18px;z-index:5000;min-width:240px;max-width:360px;border-radius:14px;padding:12px 14px;border:1px solid rgba(226,232,240,.9);background:#ffffff;box-shadow:0 18px 48px rgba(2,6,23,.18);display:none}
+    .toast.show{display:block;animation:toastIn .12s ease-out}
+    .toast.ok{border-color:rgba(43,183,169,.38);background:linear-gradient(180deg,#ffffff,rgba(43,183,169,.08))}
+    .toast.bad{border-color:rgba(220,38,38,.25);background:linear-gradient(180deg,#ffffff,rgba(220,38,38,.06))}
+    .toastTitle{font-weight:900;color:var(--navy);font-size:12px;letter-spacing:.08em;text-transform:uppercase}
+    .toastMsg{margin-top:6px;color:#0f172a;font-size:13px;line-height:1.25}
+    @keyframes toastIn{from{transform:translateY(8px);opacity:.0}to{transform:translateY(0);opacity:1}}
   </style>
 </head>
 <body>
-  <header>
-    <h1>SHAB Attendance Dashboard</h1>
-    <div class="row">
-      <form method="post" action="/logout"><button class="btn" type="submit">Logout</button></form>
-    </div>
-  </header>
-  <main>
+  <div class="appShell">
+    <aside class="sideBar" id="sideBar">
+      <div class="sideBrand">
+        <img class="sideLogo" src="/assets/logo.png" alt="SHAB Attendance Dashboard" />
+        <div class="sideBrandText">
+          <div class="sideBrandName">SHAB Attendance System</div>
+          <div class="sideBrandTag">Attendance Dashboard</div>
+        </div>
+      </div>
+
+      <nav class="sideNav" id="sideNav" aria-label="Sidebar">
+        <button class="navBtn" type="button" data-tab="summary" data-subtab-group="summary" data-subtab="attendance">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 10.5l8-6 8 6V20a1 1 0 0 1-1 1h-5v-7H10v7H5a1 1 0 0 1-1-1v-9.5z"/></svg>
+          <span class="navLabel">Summary</span>
+        </button>
+
+        <div class="navGroup" data-group="sheet">
+          <button class="navBtn" type="button" data-accordion="sheet">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3h10a2 2 0 0 1 2 2v3H5V5a2 2 0 0 1 2-2z"/><path d="M5 8h14v13a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V8z"/><path d="M7 12h3M7 16h3M12 12h3M12 16h3"/></svg>
+            <span class="navLabel">Attendance Spreadsheet</span>
+            <svg class="navChev" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 18l6-6-6-6"/></svg>
+          </button>
+          <div class="navChildren">
+            <button class="navBtn navChild" type="button" data-tab="attendanceSpreadsheet" data-subtab-group="sheet" data-subtab="daily"><span class="navLabel">Daily</span></button>
+            <button class="navBtn navChild" type="button" data-tab="attendanceSpreadsheet" data-subtab-group="sheet" data-subtab="weekly"><span class="navLabel">Weekly</span></button>
+            <button class="navBtn navChild" type="button" data-tab="attendanceSpreadsheet" data-subtab-group="sheet" data-subtab="monthly"><span class="navLabel">Monthly</span></button>
+          </div>
+        </div>
+
+        <div class="navGroup" data-group="staff">
+          <button class="navBtn" type="button" data-accordion="staff">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><path d="M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8z"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+            <span class="navLabel">Staff Records</span>
+            <svg class="navChev" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 18l6-6-6-6"/></svg>
+          </button>
+          <div class="navChildren">
+            <button class="navBtn navChild" type="button" data-tab="staffRecords" data-subtab-group="staff" data-subtab="staff"><span class="navLabel">Employee List</span></button>
+            <button class="navBtn navChild" type="button" data-tab="staffRecords" data-subtab-group="staff" data-subtab="shift"><span class="navLabel">Shift Pattern</span></button>
+          </div>
+        </div>
+
+        <div class="navGroup" data-group="raw">
+          <button class="navBtn" type="button" data-accordion="raw">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h16v6H4z"/><path d="M4 14h16v6H4z"/><path d="M8 7h.01M8 17h.01"/></svg>
+            <span class="navLabel">Raw Data</span>
+            <svg class="navChev" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 18l6-6-6-6"/></svg>
+          </button>
+          <div class="navChildren">
+            <button class="navBtn navChild" type="button" data-tab="rawData" data-subtab-group="raw" data-subtab="device"><span class="navLabel">Device Records</span></button>
+            <button class="navBtn navChild" type="button" data-tab="rawData" data-subtab-group="raw" data-subtab="db"><span class="navLabel">Database Records</span></button>
+          </div>
+        </div>
+
+        <div class="navSection"></div>
+
+        <div class="navGroup" data-group="settings">
+          <button class="navBtn" type="button" data-accordion="settings">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7z"/><path d="M19.4 15a7.8 7.8 0 0 0 .1-1 7.8 7.8 0 0 0-.1-1l2.1-1.6-2-3.4-2.5 1a7.3 7.3 0 0 0-1.7-1L15 2h-6l-.4 2.9a7.3 7.3 0 0 0-1.7 1l-2.5-1-2 3.4L4.6 12a7.8 7.8 0 0 0-.1 1 7.8 7.8 0 0 0 .1 1L2.5 15.6l2 3.4 2.5-1a7.3 7.3 0 0 0 1.7 1L9 22h6l.4-2.9a7.3 7.3 0 0 0 1.7-1l2.5 1 2-3.4L19.4 15z"/></svg>
+            <span class="navLabel">Settings</span>
+            <svg class="navChev" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 18l6-6-6-6"/></svg>
+          </button>
+          <div class="navChildren">
+            <button class="navBtn navChild" type="button" data-tab="settings" data-subtab-group="settings" data-subtab="connection"><span class="navLabel">Connection</span></button>
+            <button class="navBtn navChild" type="button" data-tab="settings" data-subtab-group="settings" data-subtab="logs"><span class="navLabel">Logs</span></button>
+          </div>
+        </div>
+      </nav>
+    </aside>
+
+    <div class="mainCol">
+      <header class="topBar">
+        <button class="iconBtn" id="sideToggle" type="button" title="Toggle sidebar">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+        </button>
+        <div class="topTitleWrap">
+          <div class="topTitle" id="topTitle">Summary</div>
+          <div class="topSub" id="topSub">Attendance Analysis</div>
+        </div>
+        <div class="topRight">
+          <form method="post" action="/logout"><button class="btn iconBtn" type="submit" title="Logout"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 17l1 1h8a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-8l-1 1"/><path d="M15 12H3"/><path d="M6 9l-3 3 3 3"/></svg></button></form>
+        </div>
+      </header>
+
+      <main class="content">
     <div class="tabs" role="tablist" aria-label="Dashboard tabs">
       <button class="tabBtn active" id="tabBtn-summary" type="button" data-tab="summary">Summary</button>
       <button class="tabBtn" id="tabBtn-attendanceSpreadsheet" type="button" data-tab="attendanceSpreadsheet">Attendance Spreadsheet</button>
@@ -5300,6 +6963,16 @@ static partial class Program
             <div class="summaryTitle">Device &amp; Sync Summary</div>
             <div class="summarySub">Attendance and database overview</div>
           </div>
+          <div class="syncCards">
+            <div class="syncCard">
+              <div class="syncCardTitle">Device Sync</div>
+              <div class="syncCardVal"><span class="pill" id="sumDeviceSyncPill">Unknown</span></div>
+            </div>
+            <div class="syncCard">
+              <div class="syncCardTitle">Database Sync</div>
+              <div class="syncCardVal"><span class="pill" id="sumDbSyncPill">Unknown</span></div>
+            </div>
+          </div>
         </div>
         <div class="subTabs" role="tablist" aria-label="Summary sub-tabs">
           <button class="subTabBtn active" type="button" data-subtab-group="summary" data-subtab="attendance">Attendance Analysis</button>
@@ -5311,97 +6984,109 @@ static partial class Program
               <div class="title">Executive Snapshot</div>
               <div class="analysisFilters">
                 <label for="anaDate">Date</label>
-                <input id="anaDate" type="date" />
+                <input id="anaDate" type="date" lang="en-GB" />
                 <label for="anaDept">Department</label>
                 <select id="anaDept"><option value="All">All</option></select>
                 <button class="btn" id="anaRefresh" type="button">Refresh</button>
               </div>
               <div class="muted" id="anaNote" style="display:none"></div>
-              <div class="miniKpis">
-                <div class="miniKpi">
-                  <div class="miniKpiTitle">Employees</div>
-                  <div class="miniKpiVal" id="anaTotal">-</div>
-                  <div class="miniKpiMeta" id="anaScope">-</div>
-                </div>
-                <div class="miniKpi">
-                  <div class="miniKpiTitle">Present</div>
-                  <div class="miniKpiVal" id="anaPresent">-</div>
-                  <div class="miniKpiMeta" id="anaAttendancePct">-</div>
-                </div>
-                <div class="miniKpi">
-                  <div class="miniKpiTitle">Absent</div>
-                  <div class="miniKpiVal" id="anaAbsent">-</div>
-                  <div class="miniKpiMeta" id="anaAbsenteePct">-</div>
-                </div>
-                <div class="miniKpi">
-                  <div class="miniKpiTitle">Attendance %</div>
-                  <div class="miniKpiVal" id="anaAttRateVal">-</div>
-                  <div class="miniKpiMeta">Rate</div>
-                </div>
-                <div class="miniKpi">
-                  <div class="miniKpiTitle">Absenteeism %</div>
-                  <div class="miniKpiVal" id="anaAbsRateVal">-</div>
-                  <div class="miniKpiMeta">Rate</div>
-                </div>
-                <div class="miniKpi">
-                  <div class="miniKpiTitle">Late Comers</div>
-                  <div class="miniKpiVal" id="anaLate">-</div>
-                  <div class="miniKpiMeta">After 09:15</div>
-                </div>
-                <div class="miniKpi">
-                  <div class="miniKpiTitle">Avg Work Hours</div>
-                  <div class="miniKpiVal" id="anaAvgWork">-</div>
-                  <div class="miniKpiMeta">Per present employee</div>
-                </div>
-                <div class="miniKpi">
-                  <div class="miniKpiTitle">Break vs OT</div>
-                  <div class="miniKpiVal" id="anaBreakVsOt">-</div>
-                  <div class="miniKpiMeta"><span id="anaAvgBreak">-</span> break • <span id="anaAvgOt">-</span> OT</div>
-                </div>
+              <div class="snapGrid" id="anaSnapGrid">
+                <button class="snapCard" type="button" data-go="sheetDaily">
+                  <div class="snapTop"><div class="snapTitle">Employee</div><div class="snapGo">↗</div></div>
+                  <div class="snapVal" id="anaSnapTotal">-</div>
+                  <div class="snapMeta" id="anaSnapScope">-</div>
+                </button>
+                <button class="snapCard" type="button" data-go="sheetDaily">
+                  <div class="snapTop"><div class="snapTitle">Present</div><div class="snapGo">↗</div></div>
+                  <div class="snapVal" id="anaSnapPresent">-</div>
+                  <div class="snapMeta" id="anaSnapPresentMeta">Today</div>
+                </button>
+                <button class="snapCard" type="button" data-go="sheetDaily">
+                  <div class="snapTop"><div class="snapTitle">Absent</div><div class="snapGo">↗</div></div>
+                  <div class="snapVal" id="anaSnapAbsent">-</div>
+                  <div class="snapMeta" id="anaSnapAbsentMeta">Today</div>
+                </button>
+                <button class="snapCard" type="button" data-go="sheetDaily">
+                  <div class="snapTop"><div class="snapTitle">Late Comers</div><div class="snapGo">↗</div></div>
+                  <div class="snapVal" id="anaSnapLate">-</div>
+                  <div class="snapMeta">After 09:15</div>
+                </button>
+
+                <button class="snapCard" type="button" data-go="sheetDaily">
+                  <div class="snapTop"><div class="snapTitle">Attendance %</div><div class="snapGo">↗</div></div>
+                  <div class="snapVal" id="anaSnapAttPct">-</div>
+                  <div class="snapMeta">Rate</div>
+                </button>
+                <button class="snapCard" type="button" data-go="sheetDaily">
+                  <div class="snapTop"><div class="snapTitle">Absenteeism %</div><div class="snapGo">↗</div></div>
+                  <div class="snapVal" id="anaSnapAbsPct">-</div>
+                  <div class="snapMeta">Rate</div>
+                </button>
+                <button class="snapCard" type="button" data-go="sheetDaily">
+                  <div class="snapTop"><div class="snapTitle">Average Work Hours</div><div class="snapGo">↗</div></div>
+                  <div class="snapVal" id="anaSnapAvgWork">-</div>
+                  <div class="snapMeta">Per present employee</div>
+                </button>
+                <button class="snapCard" type="button" data-go="sheetDaily">
+                  <div class="snapTop"><div class="snapTitle">Expected Work Hours</div><div class="snapGo">↗</div></div>
+                  <div class="snapVal" id="anaSnapExpHours">-</div>
+                  <div class="snapMeta">Present / 100% attendance</div>
+                </button>
               </div>
             </div>
 
             <div class="anaTopSplit">
               <div class="anaLeftStack">
                 <div class="card">
-                  <div class="title">Top Employees</div>
-                  <div class="hint" style="margin-bottom:8px">Top 5 employees by attendance (last 30 days)</div>
-                  <div id="anaTopEmployees" class="hBars"></div>
+                  <div class="cardHead">
+                    <div class="cardHeadTitle">Calendar</div>
+                    <div class="row" style="gap:8px">
+                      <input id="anaCalMonth" class="monthInput" type="month" />
+                    </div>
+                  </div>
+                  <div class="hint" id="anaCalSub" style="margin-bottom:8px">Count of staff present for each day</div>
+                  <div class="calGrid" id="anaCalDow">
+                    <div class="calDow">Sun</div><div class="calDow">Mon</div><div class="calDow">Tue</div><div class="calDow">Wed</div><div class="calDow">Thu</div><div class="calDow">Fri</div><div class="calDow">Sat</div>
+                  </div>
+                  <div style="height:6px"></div>
+                  <div class="calGrid" id="anaCalGrid"></div>
                 </div>
 
-                <div class="card">
-                  <div class="title">Last 7 Days (Present)</div>
+                <div class="card anaFillCard">
+                  <div class="title">Last 7 Days Attendance</div>
                   <div class="chartHost" id="anaAttendDays"></div>
                 </div>
               </div>
 
-              <div class="card anaSysCard">
-                <div class="title">System &amp; Alerts</div>
-                <div class="miniKpisV">
-                  <div class="miniKpi">
-                    <div class="miniKpiTitle">Database Punches (Today)</div>
-                    <div class="miniKpiVal" id="anaIntDbToday">-</div>
-                    <div class="miniKpiMeta">From Supabase</div>
-                  </div>
-                  <div class="miniKpi">
-                    <div class="miniKpiTitle">Missing Out</div>
-                    <div class="miniKpiVal" id="anaIntMissingOut">-</div>
-                    <div class="miniKpiMeta">Single punch day</div>
-                  </div>
-                  <div class="miniKpi">
-                    <div class="miniKpiTitle">Duplicate Punches</div>
-                    <div class="miniKpiVal" id="anaIntDuplicates">-</div>
-                    <div class="miniKpiMeta">Within 3 min</div>
-                  </div>
-                  <div class="miniKpi">
-                    <div class="miniKpiTitle">Last Sync</div>
-                    <div class="miniKpiVal" id="anaIntLastSync">-</div>
-                    <div class="miniKpiMeta">Middleware</div>
+              <div class="anaRightStack">
+                <div class="card anaSysCard">
+                  <div class="title">System &amp; Alerts</div>
+                  <div class="snapCol">
+                    <button class="snapCard teal" type="button" data-go="sheetDaily">
+                      <div class="snapTop"><div class="snapTitle">Database Punches</div><div class="snapGo">↗</div></div>
+                      <div class="snapVal" id="anaSysDbPunches">-</div>
+                      <div class="snapMeta">Today</div>
+                    </button>
+                    <button class="snapCard teal" type="button" data-go="sheetDaily">
+                      <div class="snapTop"><div class="snapTitle">Flagged Punches</div><div class="snapGo">↗</div></div>
+                      <div class="snapVal" id="anaSysFlagged">-</div>
+                      <div class="snapMeta">Missing OUT + duplicates</div>
+                    </button>
+                    <button class="snapCard teal" type="button" data-go="sheetDaily">
+                      <div class="snapTop"><div class="snapTitle">Last Punch</div><div class="snapGo">↗</div></div>
+                      <div class="snapVal" id="anaSysLastPunch">-</div>
+                      <div class="snapMeta">Selected day</div>
+                    </button>
+                    <button class="snapCard teal" type="button" data-go="sheetDaily">
+                      <div class="snapTop"><div class="snapTitle">Notification</div><div class="snapGo">↗</div></div>
+                      <div class="snapVal note" id="anaSysNotifVal">-</div>
+                    </button>
                   </div>
                 </div>
-                <div class="anaAlertsWrap">
-                  <div class="hint" style="margin:8px 0 6px">Alerts</div>
-                  <div id="anaAlerts" class="muted"></div>
+
+                <div class="card anaFillCard">
+                  <div class="title">Top Employees</div>
+                  <div id="anaTopEmployees" class="hBars"></div>
                 </div>
               </div>
             </div>
@@ -5525,24 +7210,27 @@ static partial class Program
       <div class="subTabPanel active" data-subtab-group="sheet" id="subtab-sheet-daily">
         <div class="grid">
           <div class="card" style="grid-column:1/-1">
-            <div class="title">Daily</div>
-            <div class="row" style="margin-bottom:8px">
-              <label for="sheetDailyDate">Date</label><input id="sheetDailyDate" type="date" />
-              <button class="btn primary" id="sheetDailyRefresh" type="button">Refresh</button>
-              <button class="btn" id="sheetDailyDownload" type="button" style="display:none">Download CSV</button>
+            <div class="cardHead">
+              <div class="cardHeadTitle">Daily</div>
             </div>
-            <table>
+            <div class="filterBar">
+              <label for="sheetDailyFrom">From</label><input class="dateInput" id="sheetDailyFrom" type="date" lang="en-GB" />
+              <label for="sheetDailyTo">To</label><input class="dateInput" id="sheetDailyTo" type="date" lang="en-GB" />
+              <button class="btn primary" id="sheetDailyRefresh" type="button">Refresh</button>
+              <button class="btn" id="sheetDailyDownload" type="button" style="display:none">Download Table</button>
+            </div>
+            <table class="prettyTable" id="sheetDailyTable">
               <thead>
                 <tr>
-                  <th>Name</th>
-                  <th>Date</th>
-                  <th>Shift</th>
-                  <th>First In</th>
-                  <th>Last Out</th>
-                  <th>Total Hours</th>
-                  <th>OT Hours</th>
-                  <th>Status</th>
-                  <th>Flagged Punch</th>
+                  <th class="sortable" data-sort="name">Name</th>
+                  <th class="sortable" data-sort="date">Date</th>
+                  <th class="sortable" data-sort="shift">Shift</th>
+                  <th class="sortable" data-sort="first_in">First In</th>
+                  <th class="sortable" data-sort="last_out">Last Out</th>
+                  <th class="sortable" data-sort="total_hours">Total Hours</th>
+                  <th class="sortable" data-sort="ot_hours">OT Hours</th>
+                  <th class="sortable" data-sort="status">Status</th>
+                  <th class="sortable" data-sort="flagged_punches">Flagged Punch</th>
                 </tr>
               </thead>
               <tbody id="sheetDailyBody"></tbody>
@@ -5555,23 +7243,26 @@ static partial class Program
       <div class="subTabPanel" data-subtab-group="sheet" id="subtab-sheet-weekly">
         <div class="grid">
           <div class="card" style="grid-column:1/-1">
-            <div class="title">Weekly</div>
-            <div class="row" style="margin-bottom:8px">
-              <label for="sheetWeeklyDate">Week of</label><input id="sheetWeeklyDate" type="date" />
-              <button class="btn primary" id="sheetWeeklyRefresh" type="button">Refresh</button>
-              <button class="btn" id="sheetWeeklyDownload" type="button" style="display:none">Download CSV</button>
+            <div class="cardHead">
+              <div class="cardHeadTitle">Weekly</div>
             </div>
-            <table>
+            <div class="filterBar">
+              <label for="sheetWeeklyFrom">From</label><input class="dateInput" id="sheetWeeklyFrom" type="date" lang="en-GB" />
+              <label for="sheetWeeklyTo">To</label><input class="dateInput" id="sheetWeeklyTo" type="date" lang="en-GB" />
+              <button class="btn primary" id="sheetWeeklyRefresh" type="button">Refresh</button>
+              <button class="btn" id="sheetWeeklyDownload" type="button" style="display:none">Download Table</button>
+            </div>
+            <table class="prettyTable" id="sheetWeeklyTable">
               <thead>
                 <tr>
-                  <th>Name</th>
-                  <th>Week</th>
-                  <th>Flagged Punches</th>
-                  <th>Total Hours</th>
-                  <th>OT Hours</th>
-                  <th>Days Present</th>
-                  <th>Days Absent</th>
-                  <th>Attendance %</th>
+                  <th class="sortable" data-sort="name">Name</th>
+                  <th class="sortable" data-sort="week_start">Week</th>
+                  <th class="sortable" data-sort="flagged_punches">Flagged Punches</th>
+                  <th class="sortable" data-sort="total_hours">Total Hours</th>
+                  <th class="sortable" data-sort="ot_hours">OT Hours</th>
+                  <th class="sortable" data-sort="days_present">Days Present</th>
+                  <th class="sortable" data-sort="days_absent">Days Absent</th>
+                  <th class="sortable" data-sort="attendance_pct">Attendance %</th>
                 </tr>
               </thead>
               <tbody id="sheetWeeklyBody"></tbody>
@@ -5583,25 +7274,28 @@ static partial class Program
       <div class="subTabPanel" data-subtab-group="sheet" id="subtab-sheet-monthly">
         <div class="grid">
           <div class="card" style="grid-column:1/-1">
-            <div class="title">Monthly</div>
-            <div class="row" style="margin-bottom:8px">
-              <label for="sheetMonthlyMonth">Month</label><input id="sheetMonthlyMonth" type="month" />
-              <button class="btn primary" id="sheetMonthlyRefresh" type="button">Refresh</button>
-              <button class="btn" id="sheetMonthlyDownload" type="button" style="display:none">Download CSV</button>
-              <button class="btn" id="sheetMonthlyBulkDownload" type="button" style="display:none">Download Selected Reports</button>
+            <div class="cardHead">
+              <div class="cardHeadTitle">Monthly</div>
             </div>
-            <table>
+            <div class="filterBar">
+              <label for="sheetMonthlyFrom">From</label><input class="dateInput" id="sheetMonthlyFrom" type="month" />
+              <label for="sheetMonthlyTo">To</label><input class="dateInput" id="sheetMonthlyTo" type="month" />
+              <button class="btn primary" id="sheetMonthlyRefresh" type="button">Refresh</button>
+              <button class="btn" id="sheetMonthlyDownload" type="button" style="display:none">Download Table</button>
+              <button class="btn" id="sheetMonthlyBulkDownload" type="button" style="display:none">Download Report</button>
+            </div>
+            <table class="prettyTable" id="sheetMonthlyTable">
               <thead>
                 <tr>
                   <th style="width:44px"><input id="sheetMonthlySelectAll" type="checkbox" style="display:none" /></th>
-                  <th>Name</th>
-                  <th>Month</th>
-                  <th>Flagged Punches</th>
-                  <th>Total Hours</th>
-                  <th>OT Hours</th>
-                  <th>Days Present</th>
-                  <th>Days Absent</th>
-                  <th>Attendance %</th>
+                  <th class="sortable" data-sort="name">Name</th>
+                  <th class="sortable" data-sort="month">Month</th>
+                  <th class="sortable" data-sort="flagged_punches">Flagged Punches</th>
+                  <th class="sortable" data-sort="total_hours">Total Hours</th>
+                  <th class="sortable" data-sort="ot_hours">OT Hours</th>
+                  <th class="sortable" data-sort="days_present">Days Present</th>
+                  <th class="sortable" data-sort="days_absent">Days Absent</th>
+                  <th class="sortable" data-sort="attendance_pct">Attendance %</th>
                   <th style="width:44px"></th>
                 </tr>
               </thead>
@@ -5627,21 +7321,16 @@ static partial class Program
       <div class="subTabPanel active" data-subtab-group="raw" id="subtab-raw-device">
         <div class="grid">
           <div class="card" style="grid-column:1/-1">
-            <div class="title">Device Records</div>
-            <div class="row" style="margin-bottom:8px">
-              <input id="devFilterStaff" placeholder="Filter staff id/name" style="min-width:200px" />
-              <label for="devFilterFrom">From</label><input id="devFilterFrom" type="date" />
-              <label for="devFilterTo">To</label><input id="devFilterTo" type="date" />
-              <input id="devFile" type="file" accept=".dat,.txt" />
-              <button class="btn" id="devLoadFile" type="button">Load From File</button>
-              <button class="btn" id="devCsv" type="button">Download CSV</button>
-              <button class="btn primary" id="devRefresh" type="button">Refresh From Device</button>
+            <div class="cardHead"><div class="cardHeadTitle">Device Records</div></div>
+            <div class="row toolbarRight" style="margin-bottom:8px">
+              <button class="btn" id="devCsv" type="button">Download Table</button>
+              <button class="btn primary" id="devRefresh" type="button">Sync Device</button>
             </div>
             <div id="deviceLoadBox" class="loadRow" style="display:none">
               <div class="ring" id="deviceLoadRing" style="--pct:0%"><div class="ringText" id="deviceLoadPct">0%</div></div>
               <div class="loadText" id="deviceLoadText"><strong>Loading</strong></div>
             </div>
-            <table>
+            <table class="prettyTable">
               <thead>
                 <tr>
                   <th>Staff ID</th>
@@ -5654,7 +7343,7 @@ static partial class Program
               </thead>
               <tbody id="deviceBody"></tbody>
             </table>
-            <div class="hint">Shows records parsed from Reference\1_attlog.dat (same columns and order as the file). Use Refresh From Device to pull the latest logs and rewrite 1_attlog.dat.</div>
+            <div class="hint">Shows records parsed from SHAB Attendance System\Reference\1_attlog.dat (same columns and order as the file). Use Refresh From Device to pull the latest logs and rewrite 1_attlog.dat.</div>
           </div>
         </div>
       </div>
@@ -5662,19 +7351,16 @@ static partial class Program
       <div class="subTabPanel" data-subtab-group="raw" id="subtab-raw-db">
         <div class="grid">
           <div class="card" style="grid-column:1/-1">
-            <div class="title">Database Records (Supabase)</div>
-            <div class="row" style="margin-bottom:8px">
-              <input id="dbFilterStaff" placeholder="Filter staff id/name" style="min-width:200px" />
-              <label for="dbFilterFrom">From</label><input id="dbFilterFrom" type="date" />
-              <label for="dbFilterTo">To</label><input id="dbFilterTo" type="date" />
-              <button class="btn" id="dbCsv" type="button">Download CSV</button>
-              <button class="btn primary" id="dbUpdateSupabase" type="button">Update Supabase</button>
+            <div class="cardHead"><div class="cardHeadTitle">Database Records (Supabase)</div></div>
+            <div class="row toolbarRight" style="margin-bottom:8px">
+              <button class="btn" id="dbCsv" type="button">Download Table</button>
+              <button class="btn primary" id="dbUpdateSupabase" type="button">Sync Database</button>
             </div>
             <div id="dbUpdateBox" class="loadRow" style="display:none">
               <div class="ring" id="dbUpdateRing" style="--pct:0%"><div class="ringText" id="dbUpdatePct">0%</div></div>
               <div class="loadText" id="dbUpdateText"><strong>Updating</strong> -</div>
             </div>
-            <table>
+            <table class="prettyTable">
               <thead>
                 <tr>
                   <th>Staff ID</th>
@@ -5708,32 +7394,30 @@ static partial class Program
       <div class="subTabPanel active" data-subtab-group="staff" id="subtab-staff-staff">
         <div class="grid">
           <div class="card" style="grid-column:1/-1">
-            <div class="title">Employee List</div>
-            <div class="row" style="margin-bottom:8px">
-              <input id="staffFilter" placeholder="Filter by ID / name / department / role / shift" style="min-width:260px" />
-              <input id="staffFile" type="file" accept=".csv" disabled />
-              <button class="btn" id="staffImport" type="button" disabled>Import CSV</button>
-              <button class="btn" id="staffExport" type="button">Download CSV</button>
+            <div class="cardHead"><div class="cardHeadTitle">Employee List</div></div>
+            <div class="row toolbarRight" style="margin-bottom:8px">
+              <button class="btn" id="staffImport" type="button" disabled>Import</button>
+              <button class="btn" id="staffExport" type="button">Download</button>
               <button class="btn" id="staffAdd" type="button">Add</button>
-              <button class="btn" id="staffDelete" type="button" disabled>Delete</button>
+              <button class="btn" id="staffProvisionSelected" type="button" style="display:none" disabled>Update to Device</button>
+              <button class="btn" id="staffDelete" type="button" style="display:none" disabled>Delete</button>
             </div>
-            <table>
+            <table class="prettyTable">
               <thead>
                 <tr>
-                  <th style="width:44px"></th>
-                  <th style="width:90px">User ID</th>
-                  <th style="width:180px">First Name</th>
-                  <th style="width:140px">Role</th>
-                  <th style="width:160px">Department</th>
-                  <th style="width:110px">Status</th>
-                  <th style="width:170px">Date Joined</th>
-                  <th style="width:130px">Shift Pattern</th>
-                  <th style="width:70px"></th>
+                  <th><input id="staffSelectAll" type="checkbox" style="display:none" /></th>
+                  <th data-sort="user_id">User ID</th>
+                  <th data-sort="full_name">First Name</th>
+                  <th data-sort="role">Role</th>
+                  <th data-sort="department">Department</th>
+                  <th data-sort="status">Status</th>
+                  <th data-sort="date_joined">Date Joined</th>
+                  <th data-sort="shift_pattern">Shift Pattern</th>
+                  <th></th>
                 </tr>
               </thead>
               <tbody id="staffBody"></tbody>
             </table>
-            <div class="hint"></div>
           </div>
         </div>
       </div>
@@ -5741,25 +7425,23 @@ static partial class Program
       <div class="subTabPanel" data-subtab-group="staff" id="subtab-staff-shift">
         <div class="grid">
           <div class="card" style="grid-column:1/-1">
-            <div class="title">Shift Pattern</div>
-            <div class="row" style="margin-bottom:8px">
-              <input id="shiftFilter" placeholder="Filter shift pattern" style="min-width:260px" />
-              <input id="shiftFile" type="file" accept=".csv" disabled />
-              <button class="btn" id="shiftImport" type="button" disabled>Import CSV</button>
-              <button class="btn" id="shiftExport" type="button" disabled>Download CSV</button>
+            <div class="cardHead"><div class="cardHeadTitle">Shift Pattern</div></div>
+            <div class="row toolbarRight" style="margin-bottom:8px">
+              <button class="btn" id="shiftImport" type="button" disabled>Import</button>
+              <button class="btn" id="shiftExport" type="button" disabled>Download</button>
               <button class="btn" id="shiftAdd" type="button">Add</button>
               <button class="btn" id="shiftDelete" type="button" disabled>Delete</button>
             </div>
-            <table>
+            <table class="prettyTable">
               <thead>
                 <tr>
-                  <th style="width:44px"></th>
-                  <th style="width:140px">Pattern</th>
-                  <th style="width:160px">Working Days</th>
-                  <th style="width:160px">Working Hours</th>
-                  <th style="width:140px">Break</th>
+                  <th></th>
+                  <th>Pattern</th>
+                  <th>Working Days</th>
+                  <th>Working Hours</th>
+                  <th>Break</th>
                   <th>Notes</th>
-                  <th style="width:70px"></th>
+                  <th></th>
                 </tr>
               </thead>
               <tbody id="shiftBody"></tbody>
@@ -5778,176 +7460,130 @@ static partial class Program
         </div>
       </div>
       <div class="subTabs" role="tablist" aria-label="Settings sub-tabs">
-        <button class="subTabBtn active" type="button" data-subtab-group="settings" data-subtab="connection">Connection Summary</button>
-        <button class="subTabBtn" type="button" data-subtab-group="settings" data-subtab="deviceSync">Device Sync</button>
-        <button class="subTabBtn" type="button" data-subtab-group="settings" data-subtab="databaseSync">Database Sync</button>
+        <button class="subTabBtn active" type="button" data-subtab-group="settings" data-subtab="connection">Connection</button>
         <button class="subTabBtn" type="button" data-subtab-group="settings" data-subtab="logs">Logs</button>
       </div>
 
       <div class="subTabPanel active" data-subtab-group="settings" id="subtab-settings-connection">
         <div class="grid" style="margin:0">
-        <div class="card" style="grid-column:1/-1">
-          <div class="kpis">
-            <div class="kpi">
-              <div class="summaryRow">
-                <div class="kTitle">Connection</div>
-                <div id="reach" class="pill">Checking...</div>
-              </div>
-              <div class="kMeta">IP <strong id="ip"></strong></div>
-              <div class="kMeta">Port <strong id="port"></strong> • Reader <strong id="readerMode"></strong></div>
-            </div>
-            <div class="kpi">
-              <div class="kTitle">Today Device</div>
-              <div class="kVal" id="totalTodayDevice">-</div>
-              <div class="kMeta">Unique staff <strong id="uniqueTodayDevice">-</strong></div>
-            </div>
-            <div class="kpi">
-              <div class="kTitle">Today Database</div>
-              <div class="kVal" id="totalTodayDb">-</div>
-              <div class="kMeta">Unique staff <strong id="uniqueTodayDb">-</strong></div>
-            </div>
-            <div class="kpi">
-              <div class="kTitle">Last Sync</div>
-              <div class="kVal" id="lastSyncKpi">-</div>
-              <div class="kMeta" id="lastSyncDateKpi">Update on -</div>
-              <div class="kMeta">Read <strong id="lastResKpi">-</strong></div>
-            </div>
-          </div>
-        </div>
-
-        <div class="card">
-          <div class="title">Device Sync Summary</div>
-          <div class="subCards">
-            <div class="subCard">
-              <div class="subTitle">Status</div>
-              <div class="subVal" id="deviceSyncStatusWrap"><span id="deviceSyncStatus" class="pill">Unknown</span></div>
-            </div>
-            <div class="subCard">
-              <div class="subTitle">Table</div>
-              <div class="subVal mono" id="deviceSyncTable"></div>
-            </div>
-            <div class="subCard">
-              <div class="subTitle">Auto Sync</div>
-              <div class="subVal" id="auto"></div>
-            </div>
-            <div class="subCard">
-              <div class="subTitle">Next Sync</div>
-              <div class="subVal" id="intervalWithUnit"></div>
-            </div>
-            <div class="subCard">
-              <div class="subTitle">Last Read</div>
-              <div class="subVal" id="lastRes"></div>
-            </div>
-            <div class="subCard">
-              <div class="subTitle">Last Sync</div>
-              <div class="subVal mono" id="lastSyncAt"></div>
-            </div>
-            <div class="subCard">
-              <div class="subTitle">Total Records</div>
-              <div class="subVal" id="runCount"></div>
-            </div>
-            <div class="subCard">
-              <div class="subTitle">Local Database Date</div>
-              <div class="subVal mono" id="localWm"></div>
-            </div>
-          </div>
-          <div style="height:10px"></div>
-          <div class="hint">
-            Last Sync is when the middleware finished its last sync run. Local Database Date is the timestamp of the newest punch saved locally (used for incremental reads), so it is usually the same as or slightly earlier than Last Sync.
-          </div>
-          <div style="height:8px"></div>
-          <div class="muted" id="lastErrBrief"></div>
-          <details id="lastErrBox" style="display:none"><summary>Error details</summary><pre id="lastErr"></pre></details>
-        </div>
-
-        <div class="card">
-          <div class="title">Supabase Sync Summary</div>
-          <div class="subCards">
-            <div class="subCard">
-              <div class="subTitle">Status</div>
-              <div class="subVal" id="supaPillWrap"><span id="supaPill" class="pill">Unknown</span></div>
-            </div>
-            <div class="subCard">
-              <div class="subTitle">Table</div>
-              <div class="subVal mono" id="supaTableState"></div>
-            </div>
-            <div class="subCard">
-              <div class="subTitle">Auto Sync</div>
-              <div class="subVal" id="supaAuto"></div>
-            </div>
-            <div class="subCard">
-              <div class="subTitle">Next Sync</div>
-              <div class="subVal" id="supaInterval"></div>
-            </div>
-            <div class="subCard">
-              <div class="subTitle">Last Upserted</div>
-              <div class="subVal" id="supaLastRes"></div>
-            </div>
-            <div class="subCard">
-              <div class="subTitle">Last Sync</div>
-              <div class="subVal mono" id="supaLastSyncAt"></div>
-            </div>
-            <div class="subCard">
-              <div class="subTitle">Total Records</div>
-              <div class="subVal" id="supaTotalRecords"></div>
-            </div>
-            <div class="subCard">
-              <div class="subTitle">Online Database Date</div>
-              <div class="subVal mono" id="dbWm"></div>
-            </div>
-          </div>
-          <div style="height:10px"></div>
-          <div class="hint">
-            Online Database Date is the newest datetime found in Supabase. When Supabase sync is disabled, this value is shown as disabled.
-          </div>
-          <div class="hint" id="supaUrlState" style="display:none"></div>
-        </div>
-        </div>
-      </div>
-
-      <div class="subTabPanel" data-subtab-group="settings" id="subtab-settings-deviceSync">
-        <div class="grid">
           <div class="card">
-            <div class="title">Device Connection</div>
+            <div class="cardHead"><div class="cardHeadTitle">Device Settings</div></div>
+
+            <div class="kpis kpis1">
+              <div class="kpi">
+                <div class="summaryRow">
+                  <div class="kTitle">Connection Sync</div>
+                  <div id="reach" class="pill">Checking...</div>
+                </div>
+                <div class="kMeta">IP <strong id="ip"></strong></div>
+                <div class="kMeta">Port <strong id="port"></strong> • Reader <strong id="readerMode"></strong></div>
+              </div>
+            </div>
+
+            <div class="kpis kpis2" style="margin-top:14px">
+              <div class="kpi">
+                <div class="kTitle">Today Device</div>
+                <div class="kVal" id="totalTodayDevice">-</div>
+                <div class="kMeta">Unique staff <strong id="uniqueTodayDevice">-</strong></div>
+              </div>
+              <div class="kpi">
+                <div class="kTitle">Last Sync</div>
+                <div class="kVal" id="lastSyncKpi">-</div>
+                <div class="kMeta" id="lastSyncDateKpi">Update on -</div>
+                <div class="kMeta">Read <strong id="lastResKpi">-</strong></div>
+              </div>
+            </div>
+
+            <div class="sectionHead"><div class="sectionHeadTitle">Device Sync Summary</div></div>
+            <div class="subCards">
+              <div class="subCard">
+                <div class="subTitle">Status</div>
+                <div class="subVal" id="deviceSyncStatusWrap"><span id="deviceSyncStatus" class="pill">Unknown</span></div>
+              </div>
+              <div class="subCard">
+                <div class="subTitle">Table</div>
+                <div class="subVal mono" id="deviceSyncTable"></div>
+              </div>
+              <div class="subCard">
+                <div class="subTitle">Auto Sync</div>
+                <div class="subVal" id="auto"></div>
+              </div>
+              <div class="subCard">
+                <div class="subTitle">Next Sync</div>
+                <div class="subVal" id="intervalWithUnit"></div>
+              </div>
+              <div class="subCard">
+                <div class="subTitle">Last Read</div>
+                <div class="subVal" id="lastRes"></div>
+              </div>
+              <div class="subCard">
+                <div class="subTitle">Last Sync</div>
+                <div class="subVal mono" id="lastSyncAt"></div>
+              </div>
+              <div class="subCard">
+                <div class="subTitle">Total Records</div>
+                <div class="subVal" id="runCount"></div>
+              </div>
+              <div class="subCard">
+                <div class="subTitle">Local Database Date</div>
+                <div class="subVal mono" id="localWm"></div>
+              </div>
+            </div>
+            <div style="height:10px"></div>
+            <div class="hint">
+              Last Sync is when the middleware finished its last sync run. Local Database Date is the timestamp of the newest punch saved locally (used for incremental reads), so it is usually the same as or slightly earlier than Last Sync.
+            </div>
+            <div style="height:8px"></div>
+            <div class="muted" id="lastErrBrief"></div>
+            <details id="lastErrBox" style="display:none"><summary>Error details</summary><pre id="lastErr"></pre></details>
+
+            <div class="sectionHead"><div class="sectionHeadTitle">Device Connection</div></div>
             <div class="formGrid">
               <label for="setIp">Device IP</label><input id="setIp" placeholder="Device IP" />
               <label for="setPort">Device Port</label><input id="setPort" placeholder="Port" inputmode="numeric" />
               <label for="setReader">Reader Mode</label>
               <select id="setReader">
-                <option value="native">native</option>
-                <option value="auto">auto</option>
-                <option value="com">com</option>
+                <option value="auto">Auto</option>
+                <option value="native">Native</option>
+                <option value="com">COM</option>
               </select>
             </div>
             <div style="height:10px"></div>
             <div class="row">
-              <button class="btn" id="saveDevice" type="button">Save Device</button>
-              <button class="btn" id="pingNow" type="button">Ping</button>
-              <button class="btn" id="testNow" type="button">Test TCP</button>
               <button class="btn" id="connectNow" type="button">Connect Now</button>
               <button class="btn" id="disconnectNow" type="button">Disconnect</button>
             </div>
             <div style="height:8px"></div>
             <div class="hint" id="actionOut"></div>
             <div style="height:10px"></div>
-            <div class="row"><span class="kv">Connection: <span id="settingsReach" class="pill">Unknown</span></span></div>
-            <div style="height:6px"></div>
-            <div class="hint" id="savedDeviceHint">Saved Device: -</div>
-            <div class="hint" id="pcNetHint"></div>
-          </div>
+            <ul class="bulletList" id="connInfo"></ul>
 
-          <div class="card">
-            <div class="title">Sync &amp; Dashboard</div>
+            <div class="sectionHead"><div class="sectionHeadTitle">Sync &amp; Dashboard</div></div>
+            <div class="hint">Mandatory Sync times are fixed times when a sync run is required.</div>
+            <input id="schedTimes" type="hidden" />
+            <div class="timeRow" style="margin-top:10px">
+              <input class="timeInput" id="schedTimeNew" type="time" step="60" />
+              <button class="btn" id="schedTimeAdd" type="button">Add Time</button>
+            </div>
+            <div style="height:10px"></div>
+            <div class="timeCards" id="schedTimeCards"></div>
+
+            <div class="sectionHead"><div class="sectionHeadTitle">Periodic Sync</div></div>
             <div class="formGrid">
-              <label for="schedTimes">Sync time(s)</label>
-              <input id="schedTimes" placeholder="HH:mm,HH:mm (e.g. 07:00,12:30,18:00)" />
-              <label id="setDashRefreshLabel" for="setDashRefresh">Dashboard refresh (min)</label>
-              <input id="setDashRefresh" placeholder="Dashboard refresh (min)" inputmode="numeric" />
-              <label for="setAuto">Auto sync</label>
+              <label for="setAuto">Periodic Sync</label>
               <select id="setAuto">
                 <option value="true">Enable</option>
                 <option value="false">Disabled</option>
               </select>
+              <input id="setDashRefresh" type="hidden" />
+              <label id="refreshPeriodLabel" for="pollEvery" style="display:none">Refresh Period</label>
+              <div id="refreshPeriodRow" class="row noWrap" style="gap:10px;display:none">
+                <input id="pollEvery" inputmode="numeric" placeholder="1" style="width:120px;flex:0 0 auto" />
+                <select id="pollUnit" style="width:140px;flex:0 0 auto">
+                  <option value="hr">hours</option>
+                  <option value="min">minutes</option>
+                </select>
+              </div>
             </div>
             <div style="height:10px"></div>
             <div class="row">
@@ -5955,47 +7591,131 @@ static partial class Program
               <button class="btn" id="restartDashboard" type="button">Restart Dashboard</button>
             </div>
           </div>
-        </div>
-      </div>
 
-      <div class="subTabPanel" data-subtab-group="settings" id="subtab-settings-databaseSync">
-        <div class="grid">
-          <div class="card" style="grid-column:1/-1">
-            <div class="title">Database Settings</div>
-            <div class="formGrid">
-              <label for="supaUrl">SUPABASE_URL</label><input id="supaUrl" placeholder="https://your-project.supabase.co" />
-              <label for="supaProjectId">SUPABASE_PROJECT_ID</label><input id="supaProjectId" placeholder="project id" />
-              <label for="supaTable">Attendance table</label><input id="supaTable" placeholder="attendance_events" />
-              <label for="supaSyncMode">Sync to Supabase</label>
+          <div class="card">
+            <div class="cardHead"><div class="cardHeadTitle">Database Settings</div></div>
+
+            <div class="kpis kpis1">
+              <div class="kpi">
+                <div class="summaryRow">
+                  <div class="kTitle">Database Sync</div>
+                  <div id="dbSyncKpiPill" class="pill">Unknown</div>
+                </div>
+                <div class="kMeta">Database Clouds <strong>Supabase</strong></div>
+                <div class="kMeta">Table <strong id="dbSyncKpiTable">-</strong></div>
+              </div>
+            </div>
+
+            <div class="kpis kpis2" style="margin-top:14px">
+              <div class="kpi">
+                <div class="kTitle">Today Database</div>
+                <div class="kVal" id="totalTodayDb">-</div>
+                <div class="kMeta">Unique staff <strong id="uniqueTodayDb">-</strong></div>
+              </div>
+              <div class="kpi">
+                <div class="kTitle">Last Sync</div>
+                <div class="kVal" id="supaLastSyncKpi">-</div>
+                <div class="kMeta" id="supaLastSyncDateKpi">Update on -</div>
+                <div class="kMeta">Upserted <strong id="supaLastResKpi">-</strong></div>
+              </div>
+            </div>
+
+            <div class="sectionHead"><div class="sectionHeadTitle">Database Sync Summary</div></div>
+            <div class="subCards">
+              <div class="subCard">
+                <div class="subTitle">Status</div>
+                <div class="subVal" id="supaPillWrap"><span id="supaPill" class="pill">Unknown</span></div>
+              </div>
+              <div class="subCard">
+                <div class="subTitle">Table</div>
+                <div class="subVal mono" id="supaTableState"></div>
+              </div>
+              <div class="subCard">
+                <div class="subTitle">Auto Sync</div>
+                <div class="subVal" id="supaAuto"></div>
+              </div>
+              <div class="subCard">
+                <div class="subTitle">Next Sync</div>
+                <div class="subVal" id="supaInterval"></div>
+              </div>
+              <div class="subCard">
+                <div class="subTitle">Last Upserted</div>
+                <div class="subVal" id="supaLastRes">-</div>
+              </div>
+              <div class="subCard">
+                <div class="subTitle">Last Sync</div>
+                <div class="subVal mono" id="supaLastSyncAt">-</div>
+              </div>
+              <div class="subCard">
+                <div class="subTitle">Total Records</div>
+                <div class="subVal" id="supaTotalRecords"></div>
+              </div>
+              <div class="subCard">
+                <div class="subTitle">Online Database Date</div>
+                <div class="subVal mono" id="dbWm"></div>
+              </div>
+            </div>
+            <div style="height:10px"></div>
+            <div class="hint">
+              Online Database Date is the newest datetime found in Supabase. When Supabase sync is disabled, this value is shown as disabled.
+            </div>
+            <div class="hint" id="supaUrlState" style="display:none"></div>
+
+            <div class="sectionHead"><div class="sectionHeadTitle">Database Connection</div></div>
+            <div class="formGrid compactLabels">
+              <label for="supaUrl">URL</label><input id="supaUrl" placeholder="https://lmssdqnduaahmqmvpuvn.supabase.co" readonly />
+              <label for="supaProjectId">Project ID</label><input id="supaProjectId" placeholder="lmssdqnduaahmqmvpuvn" readonly />
+              <label for="supaTable">Database Table</label><input id="supaTable" placeholder="attendance_events" />
+              <label for="supaSyncMode">Sync to Database</label>
               <select id="supaSyncMode">
               <option value="enabled">enabled</option>
               <option value="disabled">disabled</option>
               </select>
-              <label for="supaPubKey">SUPABASE_PUBLISHABLE_KEY</label><input id="supaPubKey" type="text" placeholder="anon (publishable) key" autocomplete="off" />
-              <label for="supaKey">SUPABASE_SERVICE_ROLE_KEY</label><input id="supaKey" type="text" placeholder="service role key" autocomplete="off" />
-              <label for="supaJwt">SUPABASE_JWT_SECRET</label><input id="supaJwt" type="text" placeholder="JWT secret" autocomplete="off" />
+              <label for="supaPubKey">Publishable Key</label><textarea id="supaPubKey" rows="4" placeholder="sb_publishable_..." autocomplete="off" readonly></textarea>
+              <label for="supaKey">Service Role Key</label><textarea id="supaKey" rows="6" placeholder="service role key" autocomplete="off"></textarea>
+              <label for="supaJwt">JWT Key</label><textarea id="supaJwt" rows="4" placeholder="JWT key" autocomplete="off"></textarea>
             </div>
             <div class="hint">ADMIN ONLY: These secrets grant privileged access. Do not share screenshots, logs, or exports containing these values.</div>
             <div style="height:10px"></div>
             <div class="row">
               <button class="btn" id="saveSupabase" type="button">Save Settings</button>
               <button class="btn primary" id="testSupabase" type="button">Test Connection</button>
-              <button class="btn" id="saveEnv" type="button">Save .env.local</button>
               <span class="muted" id="supaTestResult"></span>
             </div>
             <div style="height:10px"></div>
-            <div class="hint">Keys are stored locally for this dashboard. .env.local will contain publishable values for the web app.</div>
+            <div class="hint">Save Settings also writes .env.local for this PC so the middleware can reconnect on restart.</div>
           </div>
         </div>
       </div>
 
       <div class="subTabPanel" data-subtab-group="settings" id="subtab-settings-logs">
         <div class="grid">
-          <div class="card" style="grid-column:1/-1">
-            <div class="title">Logs</div>
-            <div class="row" style="margin-bottom:10px">
-              <button class="btn" id="logsRefresh" type="button">Refresh Logs</button>
+          <div class="card">
+            <div class="cardHead">
+              <div class="cardHeadTitle">Activity Log</div>
+              <div class="row" style="gap:8px">
+                <button class="btn iconBtn" id="activityDownload" type="button" title="Download activity log">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v10"/><path d="M8 11l4 4 4-4"/><path d="M4 17v4h16v-4"/></svg>
+                </button>
+                <button class="btn" id="activityRefresh" type="button">Refresh</button>
+                <button class="btn" id="activityClear" type="button">Clear</button>
+              </div>
             </div>
+            <div class="hint">Actions you performed in the dashboard (buttons, imports, sync actions). Use this to quickly trace what happened.</div>
+            <pre id="activityLogs"></pre>
+          </div>
+
+          <div class="card">
+            <div class="cardHead">
+              <div class="cardHeadTitle">System Log</div>
+              <div class="row" style="gap:8px">
+                <button class="btn iconBtn" id="systemDownload" type="button" title="Download system log">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v10"/><path d="M8 11l4 4 4-4"/><path d="M4 17v4h16v-4"/></svg>
+                </button>
+                <button class="btn" id="logsRefresh" type="button">Refresh</button>
+              </div>
+            </div>
+            <div class="hint">Middleware output (device connectivity, sync operations, Supabase requests). Use this for deeper troubleshooting.</div>
             <pre id="logs"></pre>
           </div>
         </div>
@@ -6015,6 +7735,14 @@ static partial class Program
         <button class="btn primary" id="modalSave" type="button">Save</button>
       </div>
       <div class="hint" id="modalError" style="margin-top:10px;color:#fca5a5"></div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast" role="status" aria-live="polite" aria-atomic="true">
+    <div class="toastTitle" id="toastTitle"></div>
+    <div class="toastMsg" id="toastMsg"></div>
+  </div>
+
     </div>
   </div>
 
@@ -6106,6 +7834,262 @@ static partial class Program
     let lastSheetWeeklyRows = [];
     let lastSheetMonthlyRows = [];
     let monthlySelectedStaff = new Set();
+    let sheetSort = {
+      daily: { key: 'date', dir: 'asc' },
+      weekly: { key: 'week_start', dir: 'desc' },
+      monthly: { key: 'month', dir: 'desc' },
+    };
+
+    function parseYm(ym) {
+      const m = String(ym || '').trim().match(/^(\d{4})-(\d{2})$/);
+      if (!m) return null;
+      const y = Number(m[1]);
+      const mo = Number(m[2]);
+      if (!Number.isFinite(y) || !Number.isFinite(mo)) return null;
+      return y * 12 + (mo - 1);
+    }
+
+    function sortKeyVal(row, key) {
+      const k = String(key || '').trim();
+      const v = row && (row[k] ?? row[k.toLowerCase()] ?? row[k.toUpperCase()]);
+      if (v === null || v === undefined) return '';
+      const s = String(v).trim();
+      if (!s) return '';
+      if (k === 'month') return parseYm(s) ?? s;
+      if (k === 'week_start' || k === 'week_end' || k === 'date') {
+        const ms = Date.parse(s);
+        return Number.isFinite(ms) ? ms : s;
+      }
+      if (k.endsWith('_hours') || k.endsWith('_pct') || k.includes('days_') || k.includes('flagged')) {
+        const n = Number(String(s).replace('%', ''));
+        return Number.isFinite(n) ? n : s;
+      }
+      return s.toLowerCase();
+    }
+
+    function sortRows(rows, scope) {
+      const sc = String(scope || '').trim();
+      const st = sheetSort && sheetSort[sc] ? sheetSort[sc] : null;
+      if (!st || !st.key) return rows;
+      const dir = (st.dir === 'desc') ? -1 : 1;
+      const key = st.key;
+      return rows.slice().sort((a, b) => {
+        const av = sortKeyVal(a, key);
+        const bv = sortKeyVal(b, key);
+        if (typeof av === 'number' && typeof bv === 'number') return (av - bv) * dir;
+        return String(av).localeCompare(String(bv), undefined, { numeric: true, sensitivity: 'base' }) * dir;
+      });
+    }
+
+    function updateSheetSortUi() {
+      const map = { daily: 'sheetDailyTable', weekly: 'sheetWeeklyTable', monthly: 'sheetMonthlyTable' };
+      const tid = map[activeSheetSubTab] || '';
+      const table = tid ? document.getElementById(tid) : null;
+      if (!table) return;
+      const cfg = sheetSort && sheetSort[activeSheetSubTab] ? sheetSort[activeSheetSubTab] : null;
+      for (const th of table.querySelectorAll('th.sortable')) {
+        const k = th.getAttribute('data-sort') || '';
+        th.classList.toggle('sortedAsc', !!cfg && cfg.key === k && cfg.dir === 'asc');
+        th.classList.toggle('sortedDesc', !!cfg && cfg.key === k && cfg.dir === 'desc');
+      }
+    }
+
+    function updateSheetMonthlyBulkUi() {
+      const btn = el('sheetMonthlyBulkDownload');
+      if (btn) btn.style.display = (isSuperadmin && monthlySelectedStaff && monthlySelectedStaff.size > 0) ? '' : 'none';
+    }
+
+    function renderSheetDailyRows(rows, errorText) {
+      const body = el('sheetDailyBody');
+      if (!body) return;
+      body.innerHTML = '';
+      sheetDailyByKey = new Map();
+      if (errorText) {
+        const tr = document.createElement('tr');
+        tr.innerHTML = '<td colspan="9" class="muted">' + escHtml(errorText) + '</td>';
+        body.appendChild(tr);
+        updateSheetSortUi();
+        return;
+      }
+      if (!rows || !rows.length) {
+        const tr = document.createElement('tr');
+        tr.innerHTML = '<td colspan="9" class="muted">(none)</td>';
+        body.appendChild(tr);
+        updateSheetSortUi();
+        return;
+      }
+      for (const r of rows) {
+        const key = String(r.staff_id || '') + '|' + String(r.date || '');
+        sheetDailyByKey.set(key, r);
+        const tr = document.createElement('tr');
+        tr.style.cursor = 'pointer';
+        tr.dataset.key = key;
+        const flagged = Array.isArray(r.flagged_punches) ? r.flagged_punches.join(', ') : String(r.flagged_punches || '');
+        const flagsText = String(r.flags || '').trim();
+        const flaggedText = String(flagged || '').trim() || '';
+        const shortFlags = compactFlags(flagsText);
+        const parts = [];
+        if (shortFlags) parts.push(shortFlags);
+        if (flaggedText) parts.push(flaggedText);
+        const flaggedHtml = '<span class="mono" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block;max-width:100%">' + escHtml(parts.length ? parts.join(' • ') : '-') + '</span>';
+        tr.innerHTML =
+          '<td>' + escHtml(r.name || r.staff_id || '') + '</td>' +
+          '<td class="mono">' + escHtml(r.date || '') + '</td>' +
+          '<td>' + escHtml(r.shift || '') + '</td>' +
+          '<td class="mono">' + escHtml(r.first_in || '-') + '</td>' +
+          '<td class="mono">' + escHtml(r.last_out || '-') + '</td>' +
+          '<td class="mono">' + escHtml(String(r.total_hours ?? '')) + '</td>' +
+          '<td class="mono">' + escHtml(String(r.ot_hours ?? '')) + '</td>' +
+          '<td>' + escHtml(r.status || '') + '</td>' +
+          '<td>' + flaggedHtml + '</td>';
+        body.appendChild(tr);
+      }
+      updateSheetSortUi();
+    }
+
+    function renderSheetWeeklyRows(rows, errorText) {
+      const body = el('sheetWeeklyBody');
+      if (!body) return;
+      body.innerHTML = '';
+      if (errorText) {
+        const tr = document.createElement('tr');
+        tr.innerHTML = '<td colspan="8" class="muted">' + escHtml(errorText) + '</td>';
+        body.appendChild(tr);
+        updateSheetSortUi();
+        return;
+      }
+      if (!rows || !rows.length) {
+        const tr = document.createElement('tr');
+        tr.innerHTML = '<td colspan="8" class="muted">(none)</td>';
+        body.appendChild(tr);
+        updateSheetSortUi();
+        return;
+      }
+      for (const r of rows) r.week_display = fmtWeekShortRange(r.week_start, r.week_end);
+      for (const r of rows) {
+        const tr = document.createElement('tr');
+        tr.dataset.staff = String(r.staff_id || '');
+        tr.dataset.weekStart = String(r.week_start || '');
+        tr.style.cursor = 'pointer';
+        tr.innerHTML =
+          '<td>' + escHtml(r.name || r.staff_id || '') + '</td>' +
+          '<td class="mono">' + escHtml(r.week_display || r.week || '') + '</td>' +
+          '<td class="mono">' + escHtml(String(r.flagged_punches ?? 0)) + '</td>' +
+          '<td class="mono">' + escHtml(String(r.total_hours ?? '')) + '</td>' +
+          '<td class="mono">' + escHtml(String(r.ot_hours ?? '')) + '</td>' +
+          '<td class="mono">' + escHtml(String(r.days_present ?? '')) + '</td>' +
+          '<td class="mono">' + escHtml(String(r.days_absent ?? '')) + '</td>' +
+          '<td class="mono">' + escHtml(String(r.attendance_pct ?? '')) + '%</td>';
+        body.appendChild(tr);
+      }
+      updateSheetSortUi();
+    }
+
+    function renderSheetMonthlyRows(rows, errorText) {
+      const body = el('sheetMonthlyBody');
+      if (!body) return;
+      body.innerHTML = '';
+      if (errorText) {
+        const tr = document.createElement('tr');
+        tr.innerHTML = '<td colspan="10" class="muted">' + escHtml(errorText) + '</td>';
+        body.appendChild(tr);
+        updateSheetMonthlyBulkUi();
+        updateSheetSortUi();
+        return;
+      }
+      if (!rows || !rows.length) {
+        const tr = document.createElement('tr');
+        tr.innerHTML = '<td colspan="10" class="muted">(none)</td>';
+        body.appendChild(tr);
+        updateSheetMonthlyBulkUi();
+        updateSheetSortUi();
+        return;
+      }
+      for (const r of rows) r.month_display = fmtMonthShort(r.month);
+      for (const r of rows) {
+        const tr = document.createElement('tr');
+        const sid = String(r.staff_id || '').trim();
+        tr.dataset.staff = sid;
+        tr.dataset.month = String(r.month || '');
+        tr.style.cursor = 'pointer';
+        const checked = monthlySelectedStaff.has(sid);
+        const cbHtml = isSuperadmin
+          ? ('<input type="checkbox" class="sheetMonthlyPick" data-staff="' + escHtml(sid) + '"' + (checked ? ' checked' : '') + ' />')
+          : '';
+        const dlHtml = isSuperadmin
+          ? ('<button class="dlIconBtn" type="button" data-sheet-download="' + escHtml(sid) + '" data-sheet-month="' + escHtml(String(r.month || '')) + '" title="Download report" aria-label="Download report"><svg viewBox="0 0 24 24"><path d="M12 3v10"/><path d="M8 11l4 4 4-4"/><path d="M4 17v4h16v-4"/></svg></button>')
+          : '';
+        tr.innerHTML =
+          '<td>' + cbHtml + '</td>' +
+          '<td>' + escHtml(r.name || r.staff_id || '') + '</td>' +
+          '<td class="mono">' + escHtml(r.month_display || r.month || '') + '</td>' +
+          '<td class="mono">' + escHtml(String(r.flagged_punches ?? 0)) + '</td>' +
+          '<td class="mono">' + escHtml(String(r.total_hours ?? '')) + '</td>' +
+          '<td class="mono">' + escHtml(String(r.ot_hours ?? '')) + '</td>' +
+          '<td class="mono">' + escHtml(String(r.days_present ?? '')) + '</td>' +
+          '<td class="mono">' + escHtml(String(r.days_absent ?? '')) + '</td>' +
+          '<td class="mono">' + escHtml(String(r.attendance_pct ?? '')) + '%</td>' +
+          '<td>' + dlHtml + '</td>';
+        body.appendChild(tr);
+      }
+      updateSheetMonthlyBulkUi();
+      updateSheetSortUi();
+    }
+
+    function setSidebarCollapsed(collapsed) {
+      document.body.classList.toggle('sideCollapsed', !!collapsed);
+      try { localStorage.setItem('wl10dash.sidebar.collapsed', collapsed ? '1' : '0'); } catch { }
+    }
+
+    function setOpenNavGroup(groupId) {
+      const g = String(groupId || '').trim();
+      for (const grp of document.querySelectorAll('.navGroup')) {
+        grp.classList.toggle('open', grp.dataset.group === g && !!g);
+      }
+      try { localStorage.setItem('wl10dash.nav.open', g); } catch { }
+    }
+
+    function syncNavUi() {
+      let group = '';
+      let sub = '';
+      if (activeTab === 'attendanceSpreadsheet') { group = 'sheet'; sub = activeSheetSubTab; }
+      else if (activeTab === 'staffRecords') { group = 'staff'; sub = activeStaffSubTab; }
+      else if (activeTab === 'rawData') { group = 'raw'; sub = activeRawSubTab; }
+      else if (activeTab === 'settings') { group = 'settings'; sub = activeSettingsSubTab; }
+      else { group = ''; sub = activeSummarySubTab; }
+
+      setOpenNavGroup(group);
+
+      for (const btn of document.querySelectorAll('.navBtn')) {
+        const tab = btn.dataset.tab || '';
+        const sg = btn.dataset.subtabGroup || '';
+        const st = btn.dataset.subtab || '';
+        const isActive = (tab === activeTab) && (!st || (sg === group && st === sub));
+        btn.classList.toggle('active', isActive);
+      }
+
+      const topTitle = el('topTitle');
+      const topSub = el('topSub');
+      if (topTitle) {
+        topTitle.textContent =
+          activeTab === 'summary' ? 'Summary'
+          : activeTab === 'attendanceSpreadsheet' ? 'Attendance Spreadsheet'
+          : activeTab === 'staffRecords' ? 'Staff Records'
+          : activeTab === 'rawData' ? 'Raw Data'
+          : activeTab === 'settings' ? 'Settings'
+          : 'Dashboard';
+      }
+      if (topSub) {
+        const label =
+          activeTab === 'summary' ? (activeSummarySubTab === 'attendance' ? 'Attendance Analysis' : 'Summary')
+          : activeTab === 'attendanceSpreadsheet' ? (activeSheetSubTab === 'daily' ? 'Daily' : (activeSheetSubTab === 'weekly' ? 'Weekly' : 'Monthly'))
+          : activeTab === 'staffRecords' ? (activeStaffSubTab === 'shift' ? 'Shift Pattern' : 'Employee List')
+          : activeTab === 'rawData' ? (activeRawSubTab === 'db' ? 'Database Records' : 'Device Records')
+          : activeTab === 'settings' ? (activeSettingsSubTab === 'logs' ? 'Logs' : 'Connection')
+          : '';
+        topSub.textContent = label;
+      }
+    }
 
     function setActiveSubTab(group, name) {
       const g = String(group || '').trim();
@@ -6145,12 +8129,284 @@ static partial class Program
       if (g === 'sheet') {
         activeSheetSubTab = n;
         if (activeTab === 'attendanceSpreadsheet') refreshAttendanceSpreadsheet().catch(() => {});
+        updateSheetSortUi();
       }
+      syncNavUi();
     }
 
     function out(msg) {
-      const x = (activeTab === 'settings' && activeSettingsSubTab !== 'logs' ? el('actionOut') : null) || el('logs');
+      const x =
+        (activeTab === 'settings' && activeSettingsSubTab !== 'logs' ? el('actionOut') : null) ||
+        el('logs');
       if (x) x.textContent = String(msg || '');
+    }
+
+    function outAppend(msg) {
+      const x =
+        (activeTab === 'settings' && activeSettingsSubTab !== 'logs' ? el('actionOut') : null) ||
+        el('logs');
+      if (!x) return;
+      const next = String(msg || '');
+      x.textContent = (x.textContent ? (x.textContent + '\n') : '') + next;
+      if (x.textContent.length > 12000) x.textContent = x.textContent.slice(-12000);
+    }
+
+    let toastTimer = 0;
+    function notify(title, msg, kind) {
+      const box = el('toast');
+      const t = el('toastTitle');
+      const m = el('toastMsg');
+      if (!box || !t || !m) return;
+      const k = String(kind || '').toLowerCase();
+      box.className = 'toast show' + (k === 'bad' || k === 'err' || k === 'error' ? ' bad' : (k === 'ok' || k === 'success' ? ' ok' : ''));
+      t.textContent = String(title || 'Update');
+      m.textContent = String(msg || '');
+      if (toastTimer) { try { clearTimeout(toastTimer); } catch { } }
+      toastTimer = setTimeout(() => { box.className = 'toast'; }, 3200);
+    }
+
+    function downloadTextFile(fileName, text) {
+      const name = String(fileName || 'download.txt').trim() || 'download.txt';
+      const content = String(text || '');
+      const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = name;
+      document.body.appendChild(a);
+      a.click();
+      try { a.remove(); } catch { }
+      try { URL.revokeObjectURL(url); } catch { }
+    }
+
+    function normTimeHHmm(raw) {
+      const s = String(raw || '').trim();
+      const m = s.match(/^(\d{1,2}):(\d{2})$/);
+      if (!m) return null;
+      const hh = Number(m[1]);
+      const mm = Number(m[2]);
+      if (!Number.isFinite(hh) || !Number.isFinite(mm)) return null;
+      if (hh < 0 || hh > 23 || mm < 0 || mm > 59) return null;
+      return String(hh).padStart(2, '0') + ':' + String(mm).padStart(2, '0');
+    }
+
+    function setMandatoryTimes(list) {
+      const uniq = new Map();
+      for (const t of (list || [])) {
+        const v = normTimeHHmm(t);
+        if (!v) continue;
+        uniq.set(v, true);
+      }
+      mandatorySyncTimes = Array.from(uniq.keys()).sort((a, b) => a.localeCompare(b));
+      const raw = mandatorySyncTimes.join(',');
+      const x = el('schedTimes');
+      if (x) x.value = raw;
+      renderMandatorySyncTimes();
+    }
+
+    function renderMandatorySyncTimes() {
+      const host = el('schedTimeCards');
+      if (!host) return;
+      host.innerHTML = '';
+      const list = Array.isArray(mandatorySyncTimes) ? mandatorySyncTimes.slice() : [];
+      if (!list.length) {
+        host.innerHTML = '<div class="muted">No mandatory sync times set.</div>';
+        return;
+      }
+      for (const t of list) {
+        const card = document.createElement('div');
+        card.className = 'timeCard';
+        card.innerHTML =
+          '<div class="timeCardVal">' + escHtml(t) + '</div>' +
+          '<div class="timeCardBtns">' +
+            '<button class="btn iconBtn" type="button" data-edit-time="' + escHtml(t) + '" title="Edit time"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/></svg></button>' +
+            '<button class="btn iconBtn" type="button" data-del-time="' + escHtml(t) + '" title="Delete time"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/></svg></button>' +
+          '</div>';
+        host.appendChild(card);
+      }
+    }
+
+    function klDateParts(d) {
+      const dt = d instanceof Date ? d : new Date();
+      const fmt = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Kuala_Lumpur', year: 'numeric', month: '2-digit', day: '2-digit' });
+      const parts = fmt.formatToParts(dt);
+      const y = parts.find(p => p.type === 'year')?.value || '';
+      const m = parts.find(p => p.type === 'month')?.value || '';
+      const da = parts.find(p => p.type === 'day')?.value || '';
+      return { y, m, d: da };
+    }
+
+    function todayKlIso() {
+      const p = klDateParts(new Date());
+      if (!p.y || !p.m || !p.d) return new Date().toISOString().slice(0, 10);
+      return p.y + '-' + p.m + '-' + p.d;
+    }
+
+    function isoToDmy(iso) {
+      const s = String(iso || '').trim().slice(0, 10);
+      const m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+      if (!m) return '';
+      return m[3] + '/' + m[2] + '/' + m[1];
+    }
+
+    function dmyToIso(dmy) {
+      const s = String(dmy || '').trim();
+      const m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+      if (!m) return null;
+      const dd = Number(m[1]);
+      const mm = Number(m[2]);
+      const yy = Number(m[3]);
+      if (!Number.isFinite(dd) || !Number.isFinite(mm) || !Number.isFinite(yy)) return null;
+      if (yy < 1900 || yy > 2100) return null;
+      if (mm < 1 || mm > 12) return null;
+      if (dd < 1 || dd > 31) return null;
+      return String(yy) + '-' + String(mm).padStart(2, '0') + '-' + String(dd).padStart(2, '0');
+    }
+
+    function parseUserDateToIso(raw) {
+      const s = String(raw || '').trim();
+      if (!s) return null;
+      if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+      return dmyToIso(s);
+    }
+
+    function setDmyInputIfEmpty(id, iso) {
+      const x = el(id);
+      if (!x) return;
+      if (String(x.value || '').trim()) return;
+      const dmy = isoToDmy(iso);
+      if (dmy) x.value = dmy;
+    }
+
+    function normalizeDmyInput(id) {
+      const x = el(id);
+      if (!x) return;
+      if (String(x.type || '').toLowerCase() === 'date') return;
+      const iso = parseUserDateToIso(x.value);
+      if (!iso) return;
+      const dmy = isoToDmy(iso);
+      if (dmy) x.value = dmy;
+    }
+
+    function nowKlStamp() {
+      const dt = new Date();
+      const fmt = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Kuala_Lumpur', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' });
+      const parts = fmt.formatToParts(dt);
+      const y = parts.find(p => p.type === 'year')?.value || '';
+      const m = parts.find(p => p.type === 'month')?.value || '';
+      const da = parts.find(p => p.type === 'day')?.value || '';
+      const hh = parts.find(p => p.type === 'hour')?.value || '00';
+      const mm = parts.find(p => p.type === 'minute')?.value || '00';
+      const ss = parts.find(p => p.type === 'second')?.value || '00';
+      if (!y || !m || !da) return new Date().toISOString().replace('T', ' ').slice(0, 19);
+      return y + '-' + m + '-' + da + ' ' + hh + ':' + mm + ':' + ss;
+    }
+
+    function nowKlIsoOffset() {
+      const dt = new Date();
+      const fmt = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Kuala_Lumpur', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' });
+      const parts = fmt.formatToParts(dt);
+      const y = parts.find(p => p.type === 'year')?.value || '';
+      const m = parts.find(p => p.type === 'month')?.value || '';
+      const da = parts.find(p => p.type === 'day')?.value || '';
+      const hh = parts.find(p => p.type === 'hour')?.value || '00';
+      const mm = parts.find(p => p.type === 'minute')?.value || '00';
+      const ss = parts.find(p => p.type === 'second')?.value || '00';
+      if (!y || !m || !da) return new Date().toISOString();
+      return y + '-' + m + '-' + da + 'T' + hh + ':' + mm + ':' + ss + '+08:00';
+    }
+
+    function nowKlFileStamp() {
+      const dt = new Date();
+      const fmt = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Kuala_Lumpur', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+      const parts = fmt.formatToParts(dt);
+      const y = parts.find(p => p.type === 'year')?.value || '';
+      const m = parts.find(p => p.type === 'month')?.value || '';
+      const da = parts.find(p => p.type === 'day')?.value || '';
+      const hh = parts.find(p => p.type === 'hour')?.value || '00';
+      const mm = parts.find(p => p.type === 'minute')?.value || '00';
+      if (!y || !m || !da) return new Date().toISOString().replace(/[:]/g, '').replace('T', '_').slice(0, 15);
+      return y + '-' + m + '-' + da + '_' + hh + mm;
+    }
+
+    function logActivity(scope, msg, level) {
+      const elx = el('activityLogs');
+      if (!elx) return;
+      const s = String(scope || '').trim() || 'System';
+      const m = String(msg || '').trim();
+      if (!m) return;
+      const ts = nowKlStamp();
+      const lvl = String(level || '').trim().toUpperCase();
+      const tag = lvl ? ('[' + lvl + '] ') : '';
+      const line = ts + ' [' + s + '] ' + tag + m;
+      elx.textContent = (elx.textContent ? (elx.textContent + '\n') : '') + line;
+      const max = 2000;
+      const parts = elx.textContent.split('\n');
+      if (parts.length > max) elx.textContent = parts.slice(parts.length - max).join('\n');
+
+      try {
+        fetch('/api/activity/append', {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ ts: nowKlIsoOffset(), scope: s, level: (lvl || 'INFO'), message: m })
+        }).catch(() => {});
+      } catch { }
+    }
+
+    let autoSyncInFlight = false;
+    let lastAutoSyncAtMs = 0;
+
+    async function triggerAutoSync(reason, force) {
+      const now = Date.now();
+      if (autoSyncInFlight) return;
+      if (!force && now - lastAutoSyncAtMs < 60_000) return;
+      autoSyncInFlight = true;
+      lastAutoSyncAtMs = now;
+
+      try {
+        const statusOk = await refreshStatus();
+        if (!statusOk) {
+          logActivity('System', 'Auto sync skipped: dashboard status unavailable.', 'WARN');
+          return;
+        }
+
+        const st = lastStatus || {};
+        const deviceOk = !!(st.device && st.device.reachable);
+        const supaOk = !!(st.supabase && st.supabase.configured && st.supabase.syncEnabled);
+
+        let url = '';
+        let label = '';
+        if (deviceOk && supaOk) { url = '/api/sync?today=1'; label = 'device + supabase'; }
+        else if (deviceOk && !supaOk) { url = '/api/sync?today=1&supabase=0'; label = 'device-only'; }
+        else if (!deviceOk && supaOk) { url = '/api/supabase/update'; label = 'supabase-only'; }
+        else {
+          logActivity('System', 'Auto sync skipped (' + String(reason || 'auto') + '): no device and no supabase.', 'WARN');
+          return;
+        }
+
+        logActivity('System', 'Auto sync started (' + label + ', ' + String(reason || 'auto') + ')...');
+        const res = await fetch(url, { method: 'POST', credentials: 'same-origin' });
+        if (res.status === 401) {
+          logActivity('System', 'Auto sync failed (' + label + '): Unauthorized.', 'ERR');
+        } else if (!res.ok) {
+          logActivity('System', 'Auto sync failed (' + label + '): ' + (await res.text()), 'ERR');
+        } else {
+          logActivity('System', 'Auto sync completed (' + label + ').', 'OK');
+        }
+      } catch (e) {
+        logActivity('System', 'Auto sync failed: ' + String(e), 'ERR');
+      } finally {
+        autoSyncInFlight = false;
+      }
+
+      refreshStatus().catch(() => {});
+      refreshLogs().catch(() => {});
+      refreshDeviceRecords().catch(() => {});
+      refreshDbRecords().catch(() => {});
+      refreshStaffRecords().catch(() => {});
+      refreshShiftPatterns().catch(() => {});
+      refreshAnalytics().catch(() => {});
     }
 
     function setActiveTab(name) {
@@ -6168,7 +8424,7 @@ static partial class Program
       }
       if (name === 'shiftPatterns') {
         name = 'staffRecords';
-        setActiveSubTab('staff', 'shift');
+        setActiveSubTab('staff', 'staff');
       }
       if (name === 'logs') {
         name = 'settings';
@@ -6189,8 +8445,10 @@ static partial class Program
         else refreshDeviceRecords().catch(() => {});
       }
       if (name === 'staffRecords') {
-        refreshStaffRecords().catch(() => {});
-        if (activeStaffSubTab === 'shift') refreshShiftPatterns().catch(() => {});
+        staffSortKey = 'user_id';
+        staffSortDir = 'asc';
+        setActiveSubTab('staff', 'staff');
+        updateStaffSortUi();
       }
       if (name === 'settings') {
         if (activeSettingsSubTab === 'logs') refreshLogs().catch(() => {});
@@ -6198,6 +8456,7 @@ static partial class Program
       if (name === 'attendanceSpreadsheet') {
         refreshAttendanceSpreadsheet().catch(() => {});
       }
+      syncNavUi();
     }
 
     for (const btn of document.querySelectorAll('.tabBtn')) {
@@ -6207,6 +8466,58 @@ static partial class Program
     for (const btn of document.querySelectorAll('.subTabBtn')) {
       btn.addEventListener('click', () => setActiveSubTab(btn.dataset.subtabGroup, btn.dataset.subtab));
     }
+
+    const sideToggle = el('sideToggle');
+    if (sideToggle) sideToggle.addEventListener('click', () => {
+      setSidebarCollapsed(!document.body.classList.contains('sideCollapsed'));
+    });
+
+    for (const btn of document.querySelectorAll('.navBtn')) {
+      if (!btn.title) {
+        const t = String(btn.textContent || '').replace(/\s+/g, ' ').trim();
+        if (t) btn.title = t;
+      }
+      btn.addEventListener('click', () => {
+        const acc = btn.dataset.accordion;
+        if (acc) {
+          if (document.body.classList.contains('sideCollapsed')) {
+            setOpenNavGroup(acc);
+            const next =
+              acc === 'sheet' ? { tab: 'attendanceSpreadsheet', g: 'sheet', st: 'daily' }
+              : acc === 'staff' ? { tab: 'staffRecords', g: 'staff', st: 'staff' }
+              : acc === 'raw' ? { tab: 'rawData', g: 'raw', st: 'device' }
+              : acc === 'settings' ? { tab: 'settings', g: 'settings', st: 'connection' }
+              : null;
+            if (next) {
+              setActiveTab(next.tab);
+              setActiveSubTab(next.g, next.st);
+              return;
+            }
+          }
+          const grp = btn.closest('.navGroup');
+          const isOpen = grp && grp.classList.contains('open');
+          setOpenNavGroup(isOpen ? '' : acc);
+          return;
+        }
+
+        const tab = btn.dataset.tab;
+        if (!tab) return;
+        setActiveTab(tab);
+        const sg = btn.dataset.subtabGroup;
+        const st = btn.dataset.subtab;
+        if (sg && st) setActiveSubTab(sg, st);
+      });
+    }
+
+    try {
+      const collapsed = localStorage.getItem('wl10dash.sidebar.collapsed') === '1';
+      if (collapsed) setSidebarCollapsed(true);
+    } catch { }
+
+    try {
+      const open = localStorage.getItem('wl10dash.nav.open');
+      if (open) setOpenNavGroup(open);
+    } catch { }
 
     try {
       const saved = localStorage.getItem('wl10dash.tab');
@@ -6229,7 +8540,8 @@ static partial class Program
 
     try {
       const savedSettings = localStorage.getItem('wl10dash.subtab.settings');
-      if (savedSettings) setActiveSubTab('settings', savedSettings);
+      if (savedSettings === 'deviceSync' || savedSettings === 'databaseSync') setActiveSubTab('settings', 'connection');
+      else if (savedSettings) setActiveSubTab('settings', savedSettings);
       else setActiveSubTab('settings', 'connection');
     } catch { setActiveSubTab('settings', 'connection'); }
 
@@ -6320,10 +8632,21 @@ static partial class Program
       }
     }
 
+    function autoGrowTextarea(x) {
+      if (!x || !x.tagName) return;
+      if (String(x.tagName).toLowerCase() !== 'textarea') return;
+      try {
+        x.style.height = 'auto';
+        x.style.height = Math.max(40, x.scrollHeight + 2) + 'px';
+      } catch { }
+    }
+
     function setValIfNotFocused(id, value) {
       const x = el(id);
+      if (!x) return;
       if (document.activeElement === x) return;
       x.value = value;
+      autoGrowTextarea(x);
     }
 
     async function getJson(url, withError) {
@@ -6367,12 +8690,29 @@ static partial class Program
       }
     }
 
+    let lastStatus = null;
+    let lastSystemLogLines = [];
+    let mandatorySyncTimes = [];
+    let anaCalendarMonth = '';
+
     async function refreshStatus() {
       const j = await getJson('/api/status');
       if (!j) { setApiOfflineUi(); return false; }
+      lastStatus = j;
       hideQuickFix();
 
       isSuperadmin = !!j.isSuperadmin;
+      const staffImportBtn = el('staffImport');
+      if (staffImportBtn) staffImportBtn.disabled = !isSuperadmin;
+      const staffSelectAll = el('staffSelectAll');
+      if (staffSelectAll) staffSelectAll.style.display = isSuperadmin ? '' : 'none';
+      updateStaffDeleteEnabled();
+      updateStaffSortUi();
+      const shiftImportBtn = el('shiftImport');
+      if (shiftImportBtn) shiftImportBtn.disabled = !isSuperadmin;
+      const shiftExportBtn = el('shiftExport');
+      if (shiftExportBtn) shiftExportBtn.disabled = !isSuperadmin;
+
       const sheetDailyDownloadBtn = el('sheetDailyDownload');
       if (sheetDailyDownloadBtn) sheetDailyDownloadBtn.style.display = isSuperadmin ? '' : 'none';
       const sheetWeeklyDownloadBtn = el('sheetWeeklyDownload');
@@ -6380,7 +8720,7 @@ static partial class Program
       const sheetMonthlyDownloadBtn = el('sheetMonthlyDownload');
       if (sheetMonthlyDownloadBtn) sheetMonthlyDownloadBtn.style.display = isSuperadmin ? '' : 'none';
       const sheetMonthlyBulkDownloadBtn = el('sheetMonthlyBulkDownload');
-      if (sheetMonthlyBulkDownloadBtn) sheetMonthlyBulkDownloadBtn.style.display = isSuperadmin ? '' : 'none';
+      if (sheetMonthlyBulkDownloadBtn) sheetMonthlyBulkDownloadBtn.style.display = (isSuperadmin && monthlySelectedStaff && monthlySelectedStaff.size > 0) ? '' : 'none';
       const sheetMonthlySelectAll = el('sheetMonthlySelectAll');
       if (sheetMonthlySelectAll) sheetMonthlySelectAll.style.display = isSuperadmin ? '' : 'none';
 
@@ -6389,7 +8729,9 @@ static partial class Program
       const deviceIdEl = el('deviceId'); if (deviceIdEl) deviceIdEl.textContent = j.device.deviceId;
       const readerModeEl = el('readerMode'); if (readerModeEl) {
         const raw = String(j.device.readerMode || '').trim();
-        readerModeEl.textContent = raw ? (raw.charAt(0).toUpperCase() + raw.slice(1)) : '-';
+        if (!raw) readerModeEl.textContent = '-';
+        else if (raw.toLowerCase() === 'com') readerModeEl.textContent = 'COM';
+        else readerModeEl.textContent = raw.charAt(0).toUpperCase() + raw.slice(1);
       }
 
       const reach = el('reach');
@@ -6401,6 +8743,18 @@ static partial class Program
           reach.className = 'pill bad';
           reach.textContent = 'Disconnected ' + (j.device.reachError ? ('(' + j.device.reachError + ')') : '');
         }
+      }
+
+      const sumDeviceSyncPill = el('sumDeviceSyncPill');
+      if (sumDeviceSyncPill) {
+        if (j.device.reachable) { sumDeviceSyncPill.className = 'pill ok'; sumDeviceSyncPill.textContent = 'Online'; }
+        else { sumDeviceSyncPill.className = 'pill bad'; sumDeviceSyncPill.textContent = 'Offline'; }
+      }
+      const sumDbSyncPill = el('sumDbSyncPill');
+      if (sumDbSyncPill) {
+        const ok = !!(j.supabase && j.supabase.configured && j.supabase.syncEnabled);
+        if (ok) { sumDbSyncPill.className = 'pill ok'; sumDbSyncPill.textContent = 'Online'; }
+        else { sumDbSyncPill.className = 'pill bad'; sumDbSyncPill.textContent = 'Offline'; }
       }
 
       const autoEl = el('auto'); if (autoEl) autoEl.textContent = normText(j.sync.autoSyncEnabled ? 'on' : 'off');
@@ -6448,61 +8802,90 @@ static partial class Program
       setValIfNotFocused('setReader', j.device.readerMode || 'native');
       setValIfNotFocused('setDashRefresh', String(dashMin || 10));
       setValIfNotFocused('setAuto', j.sync.autoSyncEnabled ? 'true' : 'false');
-      setValIfNotFocused('schedTimes', (j.sync && Array.isArray(j.sync.scheduleLocalTimes)) ? j.sync.scheduleLocalTimes.join(',') : '');
+      const timesRaw = (j.sync && Array.isArray(j.sync.scheduleLocalTimes)) ? j.sync.scheduleLocalTimes.join(',') : '';
+      setValIfNotFocused('schedTimes', timesRaw);
 
-      const dashLabel = el('setDashRefreshLabel');
-      const dashInput = el('setDashRefresh');
-      if (dashLabel && dashInput) {
-        dashLabel.style.display = autoOn ? 'none' : '';
-        dashInput.style.display = autoOn ? 'none' : '';
-      }
+      try {
+        const intervalSec = (j.sync && Number.isFinite(Number(j.sync.pollIntervalSeconds))) ? Number(j.sync.pollIntervalSeconds) : 3600;
+        let unit = 'min';
+        let every = Math.max(1, Math.round(intervalSec / 60));
+        if (intervalSec % 3600 === 0 && intervalSec >= 3600) { unit = 'hr'; every = Math.max(1, Math.round(intervalSec / 3600)); }
+        setValIfNotFocused('pollEvery', String(every));
+        setValIfNotFocused('pollUnit', unit);
+      } catch { }
+
+      try {
+        const pollEvery = el('pollEvery');
+        const pollUnit = el('pollUnit');
+        if (pollEvery) pollEvery.disabled = !autoOn;
+        if (pollUnit) pollUnit.disabled = !autoOn;
+        const refreshPeriodLabel = el('refreshPeriodLabel');
+        const refreshPeriodRow = el('refreshPeriodRow');
+        if (refreshPeriodLabel) refreshPeriodLabel.style.display = autoOn ? '' : 'none';
+        if (refreshPeriodRow) refreshPeriodRow.style.display = autoOn ? '' : 'none';
+      } catch { }
+
+      try {
+        mandatorySyncTimes = (timesRaw ? timesRaw.split(',') : []).map(s => String(s || '').trim()).filter(s => !!s);
+        renderMandatorySyncTimes();
+      } catch { }
       setValIfNotFocused('supaUrl', (j.supabase && j.supabase.url) ? j.supabase.url : '');
       setValIfNotFocused('supaProjectId', (j.supabase && j.supabase.projectId) ? j.supabase.projectId : '');
       setValIfNotFocused('supaTable', (j.supabase && j.supabase.attendanceTable) ? j.supabase.attendanceTable : '');
       setValIfNotFocused('supaSyncMode', (j.supabase && j.supabase.syncEnabled) ? 'enabled' : 'disabled');
       setValIfNotFocused('supaPubKey', (j.supabase && j.supabase.anonKey) ? j.supabase.anonKey : '');
       setValIfNotFocused('supaKey', (j.supabase && j.supabase.serviceRoleKey) ? j.supabase.serviceRoleKey : '');
-      setValIfNotFocused('supaJwt', (j.supabase && j.supabase.jwtSecret) ? j.supabase.jwtSecret : '');
-      const savedDeviceHintEl = el('savedDeviceHint');
-      if (savedDeviceHintEl) savedDeviceHintEl.textContent = 'Saved Device: ' + (j.device.ip || '-') + ':' + (j.device.port || '-') + ' (reader=' + (j.device.readerMode || '-') + ')';
-      const pcNetHint = el('pcNetHint');
-      if (j.pc && Array.isArray(j.pc.ipv4) && j.pc.ipv4.length) {
-        const ips = j.pc.ipv4.map(x => String(x)).join(', ');
-        let msg = 'This PC IPv4: ' + ips;
-        if (j.dashboard && j.dashboard.port) {
-          const best = (j.pc && j.pc.bestIpv4) ? String(j.pc.bestIpv4) : '';
-          const dashHost = best || '127.0.0.1';
-          msg += ' | Dashboard: http://' + dashHost + ':' + String(j.dashboard.port) + '/';
-          if (j.dashboard.bind && String(j.dashboard.bind) !== '0.0.0.0' && String(j.dashboard.bind) !== dashHost) {
-            msg += ' (listening on ' + String(j.dashboard.bind) + ')';
-          }
-          try { if (best) localStorage.setItem('wl10dash.bestIpv4', best); } catch { }
-        }
-        if (!j.device.reachable && j.pc.sameSubnet24 === false) {
-          msg += ' | Device ' + (j.device.ip || '-') + ' is on a different subnet. Connect this PC to the device LAN (e.g. 192.168.1.x) or change the device IP to match.';
-        }
-        pcNetHint.textContent = msg;
-      } else {
-        pcNetHint.textContent = '';
+      setValIfNotFocused('supaJwt', '');
+      const connInfo = el('connInfo');
+      if (connInfo) {
+        const devReaderRaw = String(j.device.readerMode || '').trim();
+        const devReader = !devReaderRaw ? '-' : (devReaderRaw.toLowerCase() === 'com' ? 'COM' : (devReaderRaw.charAt(0).toUpperCase() + devReaderRaw.slice(1)));
+        const devLine = 'Device IP: ' + (j.device.ip || '-') + ':' + (j.device.port || '-') + ' (Reader: ' + devReader + ')';
+
+        let desktopLabel = '';
+        if (j.pc && Array.isArray(j.pc.ipv4) && j.pc.ipv4.length) desktopLabel = String(j.pc.ipv4[0] || '').trim();
+        const best = (j.pc && j.pc.bestIpv4) ? String(j.pc.bestIpv4) : '';
+        if (!desktopLabel && best) desktopLabel = best;
+        const desktopLine = 'Desktop IP: ' + (desktopLabel || '-');
+
+        const dashPort = (j.dashboard && j.dashboard.port) ? String(j.dashboard.port) : (window.location.port || '5099');
+        const dashHost = best || '127.0.0.1';
+        const dashLine = 'Dashboard URL: http://' + dashHost + ':' + dashPort + '/';
+        try { if (best) localStorage.setItem('wl10dash.bestIpv4', best); } catch { }
+
+        connInfo.innerHTML =
+          '<li>' + escHtml(devLine) + '</li>' +
+          '<li>' + escHtml(desktopLine) + '</li>' +
+          '<li>' + escHtml(dashLine) + '</li>';
       }
 
       const supaPill = el('supaPill');
       if (!j.supabase.configured) {
         supaPill.className = 'pill bad';
-        supaPill.textContent = 'Not Configured';
+        supaPill.textContent = 'Offline';
       } else if (j.supabase.syncEnabled) {
         supaPill.className = 'pill ok';
-        supaPill.textContent = 'Enabled';
+        supaPill.textContent = 'Online';
       } else {
         supaPill.className = 'pill bad';
-        supaPill.textContent = 'Disabled';
+        supaPill.textContent = 'Offline';
       }
       el('supaTableState').textContent = normText(j.supabase.attendanceTable);
+      const dbSyncKpiPill = el('dbSyncKpiPill');
+      if (dbSyncKpiPill) {
+        if (!j.supabase.configured) { dbSyncKpiPill.className = 'pill bad'; dbSyncKpiPill.textContent = 'Offline'; }
+        else if (j.supabase.syncEnabled) { dbSyncKpiPill.className = 'pill ok'; dbSyncKpiPill.textContent = 'Online'; }
+        else { dbSyncKpiPill.className = 'pill bad'; dbSyncKpiPill.textContent = 'Offline'; }
+      }
+      const dbSyncKpiTable = el('dbSyncKpiTable'); if (dbSyncKpiTable) dbSyncKpiTable.textContent = normText(j.supabase.attendanceTable);
       const supaAutoEl = el('supaAuto'); if (supaAutoEl) supaAutoEl.textContent = normText(j.supabase.syncEnabled ? 'on' : 'off');
       const supaIntervalEl = el('supaInterval'); if (supaIntervalEl) supaIntervalEl.textContent = (j.sync && j.sync.nextSyncAtUtc) ? fmt(j.sync.nextSyncAtUtc) : '-';
       const supaLastResEl = el('supaLastRes'); if (supaLastResEl) supaLastResEl.textContent = String(j.sync.lastSupabaseUpsertedCount ?? 0);
       const supaLastSyncAt = j.sync.lastSupabaseSyncFinishedAtUtc || j.sync.lastSupabaseSyncStartedAtUtc || '';
       const supaLastSyncAtEl = el('supaLastSyncAt'); if (supaLastSyncAtEl) supaLastSyncAtEl.textContent = fmt(supaLastSyncAt);
+      const supaLastSyncKpiEl = el('supaLastSyncKpi'); if (supaLastSyncKpiEl) supaLastSyncKpiEl.textContent = fmtShort(supaLastSyncAt);
+      const supaLastSyncDateKpiEl = el('supaLastSyncDateKpi'); if (supaLastSyncDateKpiEl) supaLastSyncDateKpiEl.innerHTML = 'Update on <strong>' + escHtml(fmtDateOnly(supaLastSyncAt)) + '</strong>';
+      const supaLastResKpiEl = el('supaLastResKpi'); if (supaLastResKpiEl) supaLastResKpiEl.textContent = String(j.sync.lastSupabaseUpsertedCount ?? 0);
       const supaTotalRecordsEl = el('supaTotalRecords'); if (supaTotalRecordsEl) supaTotalRecordsEl.textContent = String(j.sync.dbRecordsTotal ?? 0);
       const supaUrlState = el('supaUrlState');
       if (supaUrlState) supaUrlState.textContent = '';
@@ -6513,7 +8896,7 @@ static partial class Program
       setValIfNotFocused('supaSyncMode', j.supabase.syncEnabled ? 'enabled' : 'disabled');
       setValIfNotFocused('supaPubKey', j.supabase.anonKey || '');
       setValIfNotFocused('supaKey', j.supabase.serviceRoleKey || '');
-      setValIfNotFocused('supaJwt', j.supabase.jwtSecret || '');
+      setValIfNotFocused('supaJwt', '');
 
       const settingsReach = el('settingsReach');
       if (settingsReach) {
@@ -6525,6 +8908,15 @@ static partial class Program
           settingsReach.textContent = 'Disconnected ' + (j.device.reachError ? ('(' + j.device.reachError + ')') : '');
         }
       }
+
+      try {
+        const did = sessionStorage.getItem('wl10dash.autosync.login');
+        const can = !!(j.device && j.device.reachable) || !!(j.supabase && j.supabase.configured && j.supabase.syncEnabled);
+        if (!did && can) {
+          sessionStorage.setItem('wl10dash.autosync.login', '1');
+          triggerAutoSync('login', true);
+        }
+      } catch { }
 
       return true;
     }
@@ -6680,10 +9072,12 @@ static partial class Program
       const titleEl = el('modalTitle');
       const err = el('modalError');
       if (!back || !body || !titleEl || !err) return;
+      const card = back.querySelector('.modalCard');
       titleEl.textContent = title || '';
       err.textContent = '';
       body.className = 'modalBody' + ((options && options.bodyClass) ? (' ' + String(options.bodyClass)) : '');
       body.innerHTML = html || '';
+      if (card) card.className = 'modalCard' + ((options && options.cardClass) ? (' ' + String(options.cardClass)) : '');
 
       const saveBtn = el('modalSave');
       const cancelBtn = el('modalCancel');
@@ -6694,12 +9088,170 @@ static partial class Program
       back.style.display = 'flex';
     }
 
+    function staffInitials(name) {
+      const s = String(name || '').trim();
+      if (!s) return '?';
+      const parts = s.split(/\s+/).filter(Boolean);
+      const a = parts[0] ? parts[0][0] : s[0];
+      const b = parts.length > 1 ? parts[parts.length - 1][0] : '';
+      return (String(a || '') + String(b || '')).toUpperCase();
+    }
+
+    function fmtMinToHrs(min) {
+      const m = Number(min) || 0;
+      if (m <= 0) return '-';
+      const h = Math.floor(m / 60);
+      const r = m % 60;
+      if (h <= 0) return r + 'm';
+      return h + 'h ' + String(r).padStart(2, '0') + 'm';
+    }
+
+    function renderStaffMonthModal(data, staffId, month) {
+      const ok = !!(data && data.ok);
+      if (!ok) {
+        openModalHtml('Attendance Details', '<div class="muted">' + escHtml((data && data.error) ? data.error : 'Failed to load.') + '</div>', { hideSave: true, cancelText: 'Close', cardClass: 'wide' });
+        return;
+      }
+      const st = data.staff || {};
+      const stats = data.stats || {};
+      const sched = data.schedule || {};
+      const days = Array.isArray(data.days) ? data.days : [];
+
+      const header =
+        '<div class="staffHead">' +
+          '<div class="staffLeft">' +
+            '<div class="staffAvatar">' + escHtml(staffInitials(st.name || staffId)) + '</div>' +
+            '<div style="min-width:0">' +
+              '<div class="staffName">' + escHtml(st.name || staffId) + '</div>' +
+              '<div class="staffMeta">' + escHtml([st.id || staffId, st.department || '', st.shiftPattern || ''].filter(Boolean).join(' • ')) + '</div>' +
+            '</div>' +
+          '</div>' +
+          '<div class="row" style="gap:8px">' +
+            '<input id="staffMonthPicker" class="monthInput" type="month" value="' + escHtml(month || '') + '"/>' +
+          '</div>' +
+        '</div>';
+
+      const statHtml =
+        '<div class="staffStats">' +
+          '<div class="staffStat"><div class="staffStatT">Present</div><div class="staffStatV">' + escHtml(String(stats.presentDays ?? '-')) + '</div></div>' +
+          '<div class="staffStat"><div class="staffStatT">Absent</div><div class="staffStatV">' + escHtml(String(stats.absentDays ?? '-')) + '</div></div>' +
+          '<div class="staffStat"><div class="staffStatT">Late</div><div class="staffStatV">' + escHtml(String(stats.lateDays ?? '-')) + '</div></div>' +
+          '<div class="staffStat"><div class="staffStatT">Missing OUT</div><div class="staffStatV">' + escHtml(String(stats.missingOutDays ?? '-')) + '</div></div>' +
+          '<div class="staffStat"><div class="staffStatT">Duplicates</div><div class="staffStatV">' + escHtml(String(stats.duplicatePunches ?? '-')) + '</div></div>' +
+        '</div>';
+
+      const axis =
+        '<div class="axis">' +
+          '<span>00:00</span><span>06:00</span><span>12:00</span><span>18:00</span><span>24:00</span>' +
+        '</div>';
+
+      function minToHm(m) {
+        const mm = Math.max(0, Math.min(1440, Number(m) || 0));
+        const h = Math.floor(mm / 60);
+        const r = mm % 60;
+        return String(h).padStart(2, '0') + ':' + String(r).padStart(2, '0');
+      }
+
+      const cutoffIso = todayKlIso();
+      const cutoffMonth = cutoffIso.slice(0, 7);
+      const list = days
+        .slice()
+        .filter(d => {
+          const iso = String(d && d.date ? d.date : '').slice(0, 10);
+          if (!iso) return false;
+          if (String(month || '').trim() !== cutoffMonth) return true;
+          return iso <= cutoffIso;
+        })
+        .sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')))
+        .map(d => {
+        const segs = Array.isArray(d.segments) ? d.segments : [];
+        const segHtml = segs.map(s => {
+          const a = Math.max(0, Math.min(1440, Number(s.start) || 0));
+          const b = Math.max(0, Math.min(1440, Number(s.end) || 0));
+          if (b <= a) return '';
+          const left = (a / 1440) * 100;
+          const width = ((b - a) / 1440) * 100;
+        const kind = String(s.kind || 'work');
+        const label = kind === 'extra' ? 'Extra time' : (kind === 'break' ? 'Break' : 'Working time');
+          const tip = label + '\n' + minToHm(a) + '–' + minToHm(b) + ' (' + fmtMinToHrs(b - a) + ')';
+          return '<div class="seg ' + escHtml(kind) + '" style="left:' + left.toFixed(3) + '%;width:' + width.toFixed(3) + '%"><div class="segTip">' + escHtml(tip).replace(/\n/g, '<br/>') + '</div></div>';
+        }).join('');
+        const dateIso = String(d.date || '').slice(0, 10);
+        const title = isoToDmy(dateIso) + ' (' + String(d.dow || '').slice(0, 3) + ')';
+        const times = (d.clockIn || '-') + ' → ' + (d.clockOut || '-');
+        const dur = fmtMinToHrs(d.durationMin || 0);
+        const hint = (sched && sched.start && sched.end) ? ('Shift ' + String(sched.start) + '–' + String(sched.end)) : '';
+        const wd = !!d.workingDay;
+        const pCount = Array.isArray(d.punches) ? d.punches.length : 0;
+        let badge = '';
+        let badgeCls = 'dayBadge';
+        if (!wd) { badge = 'Off day'; badgeCls += ' off'; }
+        else if (pCount >= 1) { badge = 'Present'; if (pCount % 2 === 1) badgeCls += ' warn'; }
+        else { badge = 'Absent'; badgeCls += ' bad'; }
+        const missAt = Number(d.missingOutAtMin) || 0;
+        const missDot = (wd && pCount % 2 === 1 && missAt > 0) ? ('<div class="missDot" style="left:' + ((Math.max(0, Math.min(1440, missAt)) / 1440) * 100).toFixed(3) + '%" title="No clock-out"></div>') : '';
+        return (
+          '<div class="dayCard">' +
+            '<div class="dayTop">' +
+              '<div style="min-width:0">' +
+                '<div class="dayTitle">' + escHtml(title) + '</div>' +
+                '<div class="staffMeta">' + escHtml(hint) + '</div>' +
+              '</div>' +
+              '<div style="text-align:right">' +
+                '<div class="' + escHtml(badgeCls) + '">' + escHtml(badge) + '</div>' +
+                '<div class="dayTimes">' + escHtml(times) + '</div>' +
+                '<div class="staffMeta">' + escHtml(dur) + '</div>' +
+              '</div>' +
+            '</div>' +
+            '<div class="tl">' + axis + '<div class="track">' + segHtml + missDot + '</div></div>' +
+          '</div>'
+        );
+      }).join('');
+
+      const legend =
+        '<div class="tlLegend">' +
+          '<span class="tlLeg"><span class="tlDot work"></span>Working time</span>' +
+          '<span class="tlLeg"><span class="tlDot break"></span>Break time</span>' +
+          '<span class="tlLeg"><span class="tlDot extra"></span>Extra time</span>' +
+          '<span class="tlLeg"><span class="tlDot miss"></span>No clock-out</span>' +
+        '</div>';
+
+      const body =
+        header +
+        statHtml +
+        legend +
+        '<div class="dayList">' + list + '</div>';
+
+      openModalHtml('Attendance Details', body, { hideSave: true, cancelText: 'Close', cardClass: 'wide' });
+
+      const picker = el('staffMonthPicker');
+      if (picker) picker.addEventListener('change', async () => {
+        const v = String(picker.value || '').trim();
+        if (!/^\d{4}-\d{2}$/.test(v)) return;
+        try {
+          const j = await getJson('/api/staff/attendance/month?staffId=' + encodeURIComponent(staffId) + '&month=' + encodeURIComponent(v));
+          renderStaffMonthModal(j, staffId, v);
+        } catch { }
+      });
+    }
+
+    async function openStaffAttendanceModal(staffId, dateIso) {
+      const sid = String(staffId || '').trim();
+      const d = String(dateIso || '').slice(0, 10);
+      const m = (d && d.length >= 7) ? d.slice(0, 7) : todayKlIso().slice(0, 7);
+      openModalHtml('Attendance Details', '<div class="muted">Loading…</div>', { hideSave: true, cancelText: 'Close', cardClass: 'wide' });
+      const j = await getJson('/api/staff/attendance/month?staffId=' + encodeURIComponent(sid) + '&month=' + encodeURIComponent(m));
+      renderStaffMonthModal(j, sid, m);
+    }
+
     async function refreshLogs() {
       const j = await getJson('/api/logs');
       if (!j) return;
       const logsEl = el('logs');
       if (!logsEl) return;
-      logsEl.innerHTML = (j.lines || []).slice(-50).map(escHtml).join('<br><br>');
+      const lines = Array.isArray(j.lines) ? j.lines.slice() : [];
+      lastSystemLogLines = lines.slice(-500);
+      logsEl.textContent = lastSystemLogLines.join('\n');
     }
 
     async function renderTable(tbodyId, rows, emptyText) {
@@ -6847,7 +9399,21 @@ static partial class Program
     }
 
     function toStaffCsv(rows) {
-      const header = ['User ID', 'Full Name', 'Role', 'Department', 'Status', 'Date Joined', 'Shift Pattern'];
+      function isoToMdY(raw) {
+        const s = String(raw ?? '').trim();
+        if (!s) return '';
+        const iso = s.length >= 10 ? s.slice(0, 10) : s;
+        const m = iso.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+        if (m) {
+          const y = Number(m[1]);
+          const mo = Number(m[2]);
+          const d = Number(m[3]);
+          if (Number.isFinite(y) && Number.isFinite(mo) && Number.isFinite(d)) return String(mo) + '/' + String(d) + '/' + String(y);
+        }
+        return s;
+      }
+
+      const header = ['User ID', 'First Name', 'Role', 'Department', 'Status', 'Date Joined', 'Shift Pattern'];
       const out = [header.join(',')];
       for (const r of (rows || [])) {
         const vals = [
@@ -6856,8 +9422,27 @@ static partial class Program
           r.role ?? '',
           r.department ?? '',
           r.status ?? '',
-          r.date_joined ?? '',
-          r.shift_pattern ?? '',
+          isoToMdY(r.date_joined ?? ''),
+          (String(r.shift_pattern ?? '').trim() || 'Normal'),
+        ].map(v => {
+          const s = String(v ?? '');
+          return '"' + s.replace(/"/g, '""') + '"';
+        });
+        out.push(vals.join(','));
+      }
+      return out.join('\r\n');
+    }
+
+    function toShiftCsv(rows) {
+      const header = ['Pattern', 'Working Days', 'Working Hours', 'Break', 'Notes'];
+      const out = [header.join(',')];
+      for (const r of (rows || [])) {
+        const vals = [
+          r.pattern ?? '',
+          r.workingDays ?? '',
+          r.workingHours ?? '',
+          r.break ?? '',
+          r.notes ?? '',
         ].map(v => {
           const s = String(v ?? '');
           return '"' + s.replace(/"/g, '""') + '"';
@@ -6906,26 +9491,114 @@ static partial class Program
       setTimeout(() => URL.revokeObjectURL(url), 5000);
     }
 
+    function downloadShiftCsv(filename, rows) {
+      const csv = toShiftCsv(rows);
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+    }
+
+    function parseCsv(text) {
+      const s = String(text ?? '');
+      const rows = [];
+      let row = [];
+      let field = '';
+      let inQuotes = false;
+      for (let i = 0; i < s.length; i++) {
+        const ch = s[i];
+        if (inQuotes) {
+          if (ch === '"') {
+            const next = s[i + 1];
+            if (next === '"') { field += '"'; i++; continue; }
+            inQuotes = false;
+            continue;
+          }
+          field += ch;
+          continue;
+        }
+        if (ch === '"') { inQuotes = true; continue; }
+        if (ch === ',') { row.push(field); field = ''; continue; }
+        if (ch === '\r') continue;
+        if (ch === '\n') {
+          row.push(field);
+          field = '';
+          const nonEmpty = row.some(v => String(v ?? '').trim().length > 0);
+          if (nonEmpty) rows.push(row);
+          row = [];
+          continue;
+        }
+        field += ch;
+      }
+      row.push(field);
+      if (row.some(v => String(v ?? '').trim().length > 0)) rows.push(row);
+      return rows;
+    }
+
+    function normalizeDateToIso(raw) {
+      const s = String(raw ?? '').trim();
+      if (!s) return '';
+      const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+      if (iso) return iso[1] + '-' + iso[2] + '-' + iso[3];
+      const mdy = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+      if (mdy) {
+        const mm = String(Number(mdy[1]));
+        const dd = String(Number(mdy[2]));
+        const yyyy = String(Number(mdy[3]));
+        const m2 = String(mm).padStart(2, '0');
+        const d2 = String(dd).padStart(2, '0');
+        return yyyy + '-' + m2 + '-' + d2;
+      }
+      return s;
+    }
+
+    function normalizeStaffRow(raw) {
+      const userId = String(raw.user_id ?? '').trim();
+      if (!userId) return null;
+      const role = String(raw.role ?? '').trim();
+      const department = String(raw.department ?? '').trim();
+      const statusRaw = String(raw.status ?? '').trim();
+      const status = statusRaw ? (statusRaw.charAt(0).toUpperCase() + statusRaw.slice(1).toLowerCase()) : 'Active';
+      const dateJoined = normalizeDateToIso(raw.date_joined ?? '');
+      const shiftPattern = String(raw.shift_pattern ?? '').trim() || 'Normal';
+      return {
+        user_id: userId,
+        full_name: String(raw.full_name ?? '').trim(),
+        role,
+        department,
+        status,
+        date_joined: dateJoined,
+        shift_pattern: shiftPattern,
+      };
+    }
+
     let lastDeviceRows = [];
     let lastDbRows = [];
     let lastStaffRows = [];
     let lastShiftRows = [];
+    let staffSelectedIds = new Set();
+    let shiftSelectedKeys = new Set();
     const fallbackShiftRows = [
       { pattern: 'Normal', workingDays: 'Mon–Fri', workingHours: '09:00–18:00', break: '13:00–14:00', notes: 'Default' },
-      { pattern: 'Shift 1', workingDays: 'Mon–Sat', workingHours: '08:00–16:00', break: '12:00–13:00', notes: 'Default' },
-      { pattern: 'Shift 2', workingDays: 'Mon–Sat', workingHours: '16:00–00:00', break: '20:00–20:30', notes: 'Default' },
-      { pattern: 'Shift 3', workingDays: 'Mon–Sat', workingHours: '00:00–08:00', break: '04:00–04:30', notes: 'Default' },
+      { pattern: 'Shift 1', workingDays: 'Mon–Fri', workingHours: '08:00–16:00', break: '12:00–13:00', notes: 'Default' },
+      { pattern: 'Shift 2', workingDays: 'Mon–Fri', workingHours: '16:00–00:00', break: '20:00–20:30', notes: 'Default' },
+      { pattern: 'Shift 3', workingDays: 'Mon–Fri', workingHours: '00:00–08:00', break: '04:00–04:30', notes: 'Default' },
     ];
 
     async function refreshDeviceRecords() {
       const j = await getJson('/api/records/file');
       lastDeviceRows = j ? (j.rows || []) : [];
       const err = (j && j.error) ? String(j.error || '') : '';
-      const filtered = applyAttlogFilters(lastDeviceRows, el('devFilterStaff').value, el('devFilterFrom').value, el('devFilterTo').value)
+      const rows = (lastDeviceRows || [])
         .slice()
         .sort((a, b) => String(b.datetime ?? '').localeCompare(String(a.datetime ?? '')));
-      const msg = err ? ('No device records. ' + err) : 'No device records. Import a file or refresh from device.';
-      await renderAttlogTable(filtered, msg);
+      const msg = err ? ('No device records. ' + err) : 'No device records. Use Refresh From Device.';
+      await renderAttlogTable(rows, msg);
     }
 
     async function refreshDbRecords() {
@@ -6937,7 +9610,9 @@ static partial class Program
       }
       lastDbRows = (j && j.ok !== false) ? (j.rows || []) : [];
       const err = (j && j.ok === false && j.error) ? String(j.error || '') : (j && j.error) ? String(j.error || '') : '';
-      const filtered = applyFilters(lastDbRows, el('dbFilterStaff').value, el('dbFilterFrom').value, el('dbFilterTo').value);
+      const filtered = (lastDbRows || [])
+        .slice()
+        .sort((a, b) => String(b.datetime ?? '').localeCompare(String(a.datetime ?? '')));
       const msg = err ? ('No database records. ' + err) : 'No database records.';
       await renderTable('dbBody', filtered, msg);
       return { ok: !err, total: lastDbRows.length, shown: filtered.length };
@@ -6960,15 +9635,121 @@ static partial class Program
       });
     }
 
+    let staffSortKey = 'user_id';
+    let staffSortDir = 'asc';
+
+    function parseIsoDate(raw) {
+      const s = String(raw ?? '').trim();
+      const iso = s.length >= 10 ? s.slice(0, 10) : s;
+      const m = iso.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+      if (!m) return null;
+      const y = Number(m[1]);
+      const mo = Number(m[2]);
+      const d = Number(m[3]);
+      if (!Number.isFinite(y) || !Number.isFinite(mo) || !Number.isFinite(d)) return null;
+      return { y, mo, d, key: y * 10000 + mo * 100 + d };
+    }
+
+    function toSortText(raw) {
+      return String(raw ?? '').trim().toLowerCase();
+    }
+
+    function sortStaffRows(rows) {
+      const key = String(staffSortKey || '').trim();
+      const dir = staffSortDir === 'desc' ? -1 : 1;
+      const copy = (rows || []).slice();
+      copy.sort((a, b) => {
+        if (key === 'user_id') {
+          const an = Number(String(a.user_id ?? '').trim());
+          const bn = Number(String(b.user_id ?? '').trim());
+          if (Number.isFinite(an) && Number.isFinite(bn) && an !== bn) return (an < bn ? -1 : 1) * dir;
+          const as = toSortText(a.user_id);
+          const bs = toSortText(b.user_id);
+          if (as !== bs) return (as < bs ? -1 : 1) * dir;
+          return 0;
+        }
+        if (key === 'date_joined') {
+          const ad = parseIsoDate(a.date_joined);
+          const bd = parseIsoDate(b.date_joined);
+          const ak = ad ? ad.key : null;
+          const bk = bd ? bd.key : null;
+          if (ak !== null && bk !== null && ak !== bk) return (ak < bk ? -1 : 1) * dir;
+          if (ak !== null && bk === null) return -1 * dir;
+          if (ak === null && bk !== null) return 1 * dir;
+          const as = toSortText(a.date_joined);
+          const bs = toSortText(b.date_joined);
+          if (as !== bs) return (as < bs ? -1 : 1) * dir;
+          return 0;
+        }
+        const as = toSortText(a[key]);
+        const bs = toSortText(b[key]);
+        if (as !== bs) return (as < bs ? -1 : 1) * dir;
+        const aid = toSortText(a.user_id);
+        const bid = toSortText(b.user_id);
+        if (aid !== bid) return (aid < bid ? -1 : 1) * dir;
+        return 0;
+      });
+      return copy;
+    }
+
+    function currentStaffViewRows() {
+      return sortStaffRows(applyStaffFilters(lastStaffRows, ''));
+    }
+
+    function updateStaffSortUi() {
+      const heads = document.querySelectorAll('#subtab-staff-staff thead th[data-sort]');
+      for (const th of heads) {
+        const k = String(th.getAttribute('data-sort') || '').trim();
+        if (!k) continue;
+        th.classList.toggle('sortable', !!isSuperadmin);
+        const base = th.getAttribute('data-label') || th.textContent || '';
+        if (!th.getAttribute('data-label')) th.setAttribute('data-label', base);
+        if (!isSuperadmin) {
+          th.textContent = base;
+          continue;
+        }
+        const active = k === staffSortKey;
+        th.textContent = active ? (base + (staffSortDir === 'desc' ? ' ▼' : ' ▲')) : base;
+      }
+    }
+
     function updateStaffDeleteEnabled() {
       const btn = el('staffDelete');
-      if (!btn) return;
+      const prov = el('staffProvisionSelected');
       const body = el('staffBody');
-      const has = !!body && !!body.querySelector('input.staffChk[type="checkbox"]:checked');
-      btn.disabled = !has;
+      const has = staffSelectedIds.size > 0;
+      if (btn) {
+        btn.disabled = !has || !isSuperadmin;
+        btn.style.display = (has && isSuperadmin) ? '' : 'none';
+      }
+      if (prov) {
+        prov.disabled = !has || !isSuperadmin;
+        prov.style.display = (has && isSuperadmin) ? '' : 'none';
+      }
+
+      const selectAll = el('staffSelectAll');
+      if (selectAll) {
+        const all = !!body && !!body.querySelectorAll('input.staffChk[type="checkbox"]').length;
+        const checked = !!body && !!body.querySelectorAll('input.staffChk[type="checkbox"]:checked').length;
+        selectAll.checked = all && checked && body.querySelectorAll('input.staffChk[type="checkbox"]').length === checked;
+      }
     }
 
     async function renderStaffTable(rows, emptyText) {
+      function isoToMdY(raw) {
+        const s = String(raw ?? '').trim();
+        if (!s) return '';
+        const iso = s.length >= 10 ? s.slice(0, 10) : s;
+        const m = iso.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+        if (m) {
+          const y = Number(m[1]);
+          const mo = Number(m[2]);
+          const d = Number(m[3]);
+          if (Number.isFinite(y) && Number.isFinite(mo) && Number.isFinite(d)) return String(mo) + '/' + String(d) + '/' + String(y);
+        }
+        return s;
+      }
+
       const body = el('staffBody');
       if (!body) return;
       body.innerHTML = '';
@@ -6982,19 +9763,28 @@ static partial class Program
       for (let i = 0; i < rows.length; i++) {
         const r = rows[i];
         const staffId = String(r.user_id ?? '');
+        const shiftPattern = (String(r.shift_pattern ?? '').trim() || 'Normal');
+        const checked = staffSelectedIds.has(staffId) ? ' checked' : '';
         const tr = document.createElement('tr');
         tr.innerHTML =
-          '<td><input class="staffChk" type="checkbox" data-id="' + escHtml(staffId) + '"/></td>' +
+          '<td><input class="staffChk" type="checkbox" data-id="' + escHtml(staffId) + '"' + checked + '/></td>' +
           '<td>' + escHtml(staffId) + '</td>' +
           '<td>' + escHtml(r.full_name ?? '') + '</td>' +
           '<td>' + escHtml(r.role ?? '') + '</td>' +
           '<td>' + escHtml(r.department ?? '') + '</td>' +
           '<td>' + escHtml(r.status ?? '') + '</td>' +
-          '<td>' + escHtml(r.date_joined ?? '') + '</td>' +
-          '<td>' + escHtml(r.shift_pattern ?? '') + '</td>' +
+          '<td>' + escHtml(isoToMdY(r.date_joined ?? '')) + '</td>' +
+          '<td>' + escHtml(shiftPattern) + '</td>' +
           '<td>' +
-            '<button class="iconBtn staffProvisionRow" type="button" data-id="' + escHtml(staffId) + '" title="Create on device">↥</button>' +
-            '<button class="iconBtn staffEditRow" type="button" data-id="' + escHtml(staffId) + '" title="Edit">✎</button>' +
+            '<div class="actionIcons">' +
+              '<button class="iconBtn staffProvisionRow" type="button" data-id="' + escHtml(staffId) + '" title="Create/Update on device" aria-label="Create/Update on device">' +
+                '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21V9"/><path d="m17 14-5-5-5 5"/><path d="M5 3h14"/></svg>' +
+              '</button>' +
+              '<span class="actionSep" aria-hidden="true"></span>' +
+              '<button class="iconBtn staffEditRow" type="button" data-id="' + escHtml(staffId) + '" title="Edit" aria-label="Edit">' +
+                '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>' +
+              '</button>' +
+            '</div>' +
           '</td>';
         body.appendChild(tr);
       }
@@ -7005,30 +9795,39 @@ static partial class Program
       const j = await getJson('/api/staff/file');
       lastStaffRows = j ? (j.rows || []) : [];
       const err = (j && j.error) ? String(j.error || '') : '';
-      const filtered = applyStaffFilters(lastStaffRows, el('staffFilter')?.value || '');
+      const valid = new Set((lastStaffRows || []).map(r => String(r.user_id ?? '').trim()).filter(s => !!s));
+      for (const id of Array.from(staffSelectedIds)) if (!valid.has(id)) staffSelectedIds.delete(id);
+
+      const filtered = sortStaffRows(applyStaffFilters(lastStaffRows, ''));
       const msg = err ? ('No staff records. ' + err) : 'No staff records.';
       await renderStaffTable(filtered, msg);
+      updateStaffSortUi();
     }
 
-    async function provisionStaffToDevice(row) {
+    async function provisionStaffToDevice(row, triggerEl) {
       const id = String(row && row.user_id ? row.user_id : '').trim();
-      if (!id) { out('Missing user id.'); return; }
+      if (!id) { logActivity('Staff Records / Employee List', 'Missing user id.', 'ERR'); return; }
       const firstName = String(row && row.full_name ? row.full_name : '').trim();
-      out('Provisioning to device: user_id=' + id + ' first_name=' + firstName + ' ...');
-      const r = await postJson('/api/device/user/create', { user_id: id, first_name: firstName });
+      const role = String(row && row.role ? row.role : '').trim();
+      logActivity('Staff Records / Employee List', 'Provisioning to device: user_id=' + id + ' first_name=' + firstName + ' ...');
+      if (triggerEl && triggerEl.setAttribute) { try { triggerEl.setAttribute('disabled', 'disabled'); } catch { } }
+      const r = await postJson('/api/device/user/create', { user_id: id, first_name: firstName, full_name: firstName, role });
+      if (triggerEl && triggerEl.removeAttribute) { try { triggerEl.removeAttribute('disabled'); } catch { } }
       if (r && Array.isArray(r.trace)) {
-        for (const line of r.trace) out('[provision] ' + String(line));
+        for (const line of r.trace) logActivity('Staff Records / Employee List', String(line), 'TRACE');
       }
       if (r && r.ok) {
-        if (r.already_exists) out('Device already has user ' + id + '.');
-        else if (r.created && r.verified === false) out('Created user ' + id + ' on device, but could not verify. Check device screen.');
-        else out('Created user ' + id + ' on device.');
+        if (r.already_exists && r.updated) logActivity('Staff Records / Employee List', 'Updated user ' + id + ' on device.', 'OK');
+        else if (r.already_exists) logActivity('Staff Records / Employee List', 'Device already has user ' + id + '.', 'OK');
+        else if (r.created && r.verified === false) logActivity('Staff Records / Employee List', 'Created user ' + id + ' on device, but could not verify. Check device screen.', 'OK');
+        else logActivity('Staff Records / Employee List', 'Created user ' + id + ' on device.', 'OK');
       } else {
         const base = String((r && r.error) ? r.error : 'unknown error');
         const le = (r && (r.last_error ?? null) !== null) ? (' last_error=' + String(r.last_error)) : '';
         const dev = (r && r.device_ip) ? (' device=' + String(r.device_ip) + ':' + String(r.device_port || '')) : '';
         const mn = (r && (r.machine_number ?? null) !== null) ? (' machine=' + String(r.machine_number)) : '';
-        out('Device provision failed: ' + base + le + dev + mn);
+        logActivity('Staff Records / Employee List', 'Device provision failed: ' + base + le + dev + mn, 'ERR');
+        if (r && r.hint) logActivity('Staff Records / Employee List', String(r.hint), 'ERR');
       }
     }
 
@@ -7044,8 +9843,7 @@ static partial class Program
     function updateShiftDeleteEnabled() {
       const btn = el('shiftDelete');
       if (!btn) return;
-      const body = el('shiftBody');
-      const has = !!body && !!body.querySelector('input.shiftChk[type="checkbox"]:checked');
+      const has = shiftSelectedKeys.size > 0;
       btn.disabled = !has;
     }
 
@@ -7061,18 +9859,79 @@ static partial class Program
         updateShiftDeleteEnabled();
         return;
       }
+      function parseWd(raw) {
+        const s0 = String(raw || '').trim();
+        const set = new Set();
+        const order = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+        function normDayToken(x) {
+          const k = String(x || '').trim().slice(0, 3).toLowerCase();
+          if (k === 'mon') return 'Mon';
+          if (k === 'tue') return 'Tue';
+          if (k === 'wed') return 'Wed';
+          if (k === 'thu') return 'Thu';
+          if (k === 'fri') return 'Fri';
+          if (k === 'sat') return 'Sat';
+          if (k === 'sun') return 'Sun';
+          return '';
+        }
+        function addRange(aRaw, bRaw) {
+          const a = normDayToken(aRaw);
+          const b = normDayToken(bRaw);
+          const ai = order.indexOf(a);
+          const bi = order.indexOf(b);
+          if (ai < 0 || bi < 0) return false;
+          let cur = ai;
+          while (true) {
+            set.add(order[cur]);
+            if (cur === bi) break;
+            cur = (cur + 1) % 7;
+          }
+          return true;
+        }
+        if (!s0) { for (const d of ['Mon','Tue','Wed','Thu','Fri']) set.add(d); return set; }
+        const s = s0.replace(/to/ig, '–').replace(/-/g, '–');
+        const parts = s.split(',').map(x => String(x || '').trim()).filter(Boolean);
+        for (const p of parts) {
+          if (p.includes('–')) {
+            const rr = p.split('–').map(x => String(x || '').trim()).filter(Boolean);
+            if (rr.length === 2 && addRange(rr[0], rr[1])) continue;
+          }
+          const d = normDayToken(p);
+          if (d) set.add(d);
+        }
+        if (!set.size && s.includes('–')) {
+          const rr = s.split('–').map(x => String(x || '').trim()).filter(Boolean);
+          if (rr.length === 2) addRange(rr[0], rr[1]);
+        }
+        if (!set.size) { for (const d of ['Mon','Tue','Wed','Thu','Fri']) set.add(d); }
+        return set;
+      }
+
+      function wdToStr(set) {
+        const ordered = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].filter(d => set.has(d));
+        if (!ordered.length) return 'Mon–Fri';
+        const monFri = ['Mon','Tue','Wed','Thu','Fri'];
+        const monSun = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+        if (ordered.length === monFri.length && monFri.every(x => set.has(x))) return 'Mon–Fri';
+        if (ordered.length === monSun.length) return 'Mon–Sun';
+        return ordered.join(', ');
+      }
+
       for (let i = 0; i < list.length; i++) {
         const r = list[i];
         const key = String(r.pattern ?? '');
+        const checked = shiftSelectedKeys.has(key) ? ' checked' : '';
+        const wdSet = parseWd(r.workingDays ?? '');
+        const wdText = wdToStr(wdSet).replace('–', '-');
         const tr = document.createElement('tr');
         tr.innerHTML =
-          '<td><input class="shiftChk" type="checkbox" data-id="' + escHtml(key) + '"/></td>' +
+          '<td><input class="shiftChk" type="checkbox" data-id="' + escHtml(key) + '"' + checked + '/></td>' +
           '<td>' + escHtml(key) + '</td>' +
-          '<td>' + escHtml(r.workingDays ?? '') + '</td>' +
+          '<td>' + escHtml(wdText) + '</td>' +
           '<td>' + escHtml(r.workingHours ?? '') + '</td>' +
           '<td>' + escHtml(r.break ?? '') + '</td>' +
           '<td>' + escHtml(r.notes ?? '') + '</td>' +
-          '<td><button class="iconBtn shiftEditRow" type="button" data-id="' + escHtml(key) + '" title="Edit">✎</button></td>';
+          '<td><button class="iconBtn shiftEditRow" type="button" data-id="' + escHtml(key) + '" title="Edit" aria-label="Edit"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg></button></td>';
         body.appendChild(tr);
       }
       updateShiftDeleteEnabled();
@@ -7082,7 +9941,10 @@ static partial class Program
       const j = await getJson('/api/shifts');
       lastShiftRows = j ? (j.rows || []) : [];
       if (!lastShiftRows.length) lastShiftRows = fallbackShiftRows.slice();
-      const filtered = applyShiftFilters(lastShiftRows, el('shiftFilter')?.value || '');
+      const valid = new Set((lastShiftRows || []).map(r => String(r.pattern ?? '').trim()).filter(s => !!s));
+      for (const id of Array.from(shiftSelectedKeys)) if (!valid.has(id)) shiftSelectedKeys.delete(id);
+
+      const filtered = applyShiftFilters(lastShiftRows, '');
       await renderShiftTable(filtered);
     }
 
@@ -7317,6 +10179,35 @@ static partial class Program
       }
     }
 
+    function renderTopEmployees(hostId, items) {
+      const host = el(hostId);
+      if (!host) return;
+      host.innerHTML = '';
+      const arr = Array.isArray(items) ? items.slice() : [];
+      if (!arr.length) { host.innerHTML = '<div class="muted">No data.</div>'; return; }
+      const wrap = document.createElement('div');
+      wrap.className = 'empList';
+      for (const x of arr.slice(0, 8)) {
+        const name = String(x.full_name || x.staff_id || '').trim();
+        const dept = String(x.department || '').trim();
+        const pct = Math.max(0, Math.min(100, Number(x.attendancePct) || 0));
+        const card = document.createElement('div');
+        card.className = 'empCard';
+        const left = document.createElement('div');
+        left.innerHTML =
+          '<div class="empName">' + escHtml(name || '-') + '</div>' +
+          '<div class="empDept">' + escHtml(dept || '') + '</div>' +
+          '<div class="empTrack"><div class="empFill" style="width:' + pct.toFixed(1) + '%"></div></div>';
+        const right = document.createElement('div');
+        right.className = 'empPct';
+        right.textContent = pct.toFixed(1) + '%';
+        card.appendChild(left);
+        card.appendChild(right);
+        wrap.appendChild(card);
+      }
+      host.appendChild(wrap);
+    }
+
     function renderDonut(donutId, centerId, legendId, parts, centerText) {
       const donut = el(donutId);
       const center = el(centerId);
@@ -7345,7 +10236,7 @@ static partial class Program
         const from = acc;
         const to = acc + deg;
         acc = to;
-        const color = (x.color || '').trim() || 'rgba(37,99,235,.85)';
+        const color = (x.color || '').trim() || 'rgba(22,58,112,.85)';
         segs.push(color + ' ' + from.toFixed(2) + 'deg ' + to.toFixed(2) + 'deg');
 
         const row = document.createElement('div');
@@ -7373,107 +10264,46 @@ static partial class Program
     function renderGauge(hostId, value, maxValue, paletteName, minLabel, maxLabel) {
       const host = el(hostId);
       if (!host) return;
-      if (!host.querySelector('.gaugeArc')) {
-        host.innerHTML = '';
-        const arc = document.createElement('div');
-        arc.className = 'gaugeArc';
-        const needle = document.createElement('div');
-        needle.className = 'gaugeNeedle';
-        const hub = document.createElement('div');
-        hub.className = 'gaugeHub';
-        const min = document.createElement('div');
-        min.className = 'gaugeMin';
-        const max = document.createElement('div');
-        max.className = 'gaugeMax';
-        host.appendChild(arc);
-        host.appendChild(needle);
-        host.appendChild(hub);
-        host.appendChild(min);
-        host.appendChild(max);
-      }
 
       const palettes = {
-        traffic: [
-          { deg: 0, color: '#ef4444' },
-          { deg: 60, color: '#f97316' },
-          { deg: 120, color: '#f59e0b' },
-          { deg: 180, color: '#22c55e' },
-        ],
-        ocean: [
-          { deg: 0, color: '#0ea5e9' },
-          { deg: 90, color: '#14b8a6' },
-          { deg: 180, color: '#2563eb' },
-        ],
-        violet: [
-          { deg: 0, color: '#a855f7' },
-          { deg: 90, color: '#3b82f6' },
-          { deg: 180, color: '#14b8a6' },
-        ],
+        traffic: ['#ef4444', '#f97316', '#f59e0b', '#22c55e'],
+        ocean: ['#0ea5e9', '#14b8a6', '#2563eb'],
+        violet: ['#a855f7', '#3b82f6', '#14b8a6'],
       };
-
-      function hexToRgb(hex) {
-        const h = String(hex || '').trim().replace('#', '');
-        if (h.length !== 6) return { r: 0, g: 0, b: 0 };
-        const n = parseInt(h, 16);
-        return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
-      }
-
-      function lerp(a, b, t) { return a + (b - a) * t; }
-
-      function lerpColorHex(aHex, bHex, t) {
-        const a = hexToRgb(aHex);
-        const b = hexToRgb(bHex);
-        const r = Math.round(lerp(a.r, b.r, t));
-        const g = Math.round(lerp(a.g, b.g, t));
-        const b2 = Math.round(lerp(a.b, b.b, t));
-        return 'rgb(' + r + ',' + g + ',' + b2 + ')';
-      }
 
       const v = Number(value);
       const mx = Math.max(1e-9, Number(maxValue) || 0);
       const pct = Number.isFinite(v) ? Math.max(0, Math.min(1, v / mx)) : 0;
-      const deg = pct * 180;
-      host.style.setProperty('--gNeedle', (-90 + deg).toFixed(2) + 'deg');
-      const arc = host.querySelector('.gaugeArc');
-      const pal = palettes[String(paletteName || '').trim()] || palettes.ocean;
-      const d = Math.max(0, Math.min(180, deg));
-      let endColor = '#0ea5e9';
+      const colors = palettes[String(paletteName || '').trim()] || palettes.ocean;
+      const endColor = colors[colors.length - 1] || '#2563eb';
 
-      if (arc) {
-        const pts = pal.slice().sort((a, b) => a.deg - b.deg);
-        const steps = pts.filter(p => p.deg <= d);
-        const last = steps.length ? steps[steps.length - 1] : pts[0];
-        const next = pts.find(p => p.deg >= d) || pts[pts.length - 1];
-        endColor = String(next.color || '').trim() || '#0ea5e9';
-        if (d <= pts[0].deg) endColor = String(pts[0].color || '').trim() || endColor;
-        else if (d >= pts[pts.length - 1].deg) endColor = String(pts[pts.length - 1].color || '').trim() || endColor;
-        else {
-          for (let i = 0; i < pts.length - 1; i++) {
-            const a = pts[i];
-            const b = pts[i + 1];
-            if (d >= a.deg && d <= b.deg) {
-              const t = (d - a.deg) / Math.max(1e-9, (b.deg - a.deg));
-              endColor = lerpColorHex(a.color, b.color, t);
-              break;
-            }
-          }
-        }
+      const w = 180;
+      const h = 124;
+      const cx = 90;
+      const cy = 104;
+      const r = 78;
+      const strokeW = 12;
+      const arcLen = Math.PI * r;
+      const filled = Math.max(0, Math.min(arcLen, arcLen * pct));
 
-        const fillStops = [];
-        const baseStart = String(pts[0].color || '').trim() || '#0ea5e9';
-        fillStops.push(baseStart + ' 0deg');
-        for (const p of pts) {
-          if (p.deg > 0 && p.deg < d) fillStops.push(String(p.color || '').trim() + ' ' + p.deg.toFixed(2) + 'deg');
-        }
-        fillStops.push(endColor + ' ' + d.toFixed(2) + 'deg');
-        arc.style.background = 'conic-gradient(from 180deg,' + fillStops.join(',') + ',#e5e7eb ' + d.toFixed(2) + 'deg 180deg,transparent 180deg 360deg)';
-      }
+      const angle = Math.PI * (1 - pct);
+      const nx = cx + (r - 14) * Math.cos(angle);
+      const ny = cy - (r - 14) * Math.sin(angle);
 
-      const minEl = host.querySelector('.gaugeMin');
-      const maxEl = host.querySelector('.gaugeMax');
-      if (minEl) minEl.textContent = String(minLabel ?? '0');
-      if (maxEl) maxEl.textContent = String(maxLabel ?? (Number.isFinite(mx) ? Math.round(mx) : ''));
-      host.dataset.endColor = String(endColor || '').trim() || '#0ea5e9';
+      const isPct = (Math.abs(mx - 100) < 1e-6) && (String(paletteName || '').trim() === 'traffic');
+      const valueText = isPct ? Math.round(pct * 100) + '%' : (Number.isFinite(v) ? String(Math.round(v)) : '-');
+      const lx = Math.max(16, Math.min(w - 16, nx + 8));
+      const ly = Math.max(20, Math.min(h - 14, ny - 10));
+
+      host.innerHTML =
+        '<svg viewBox="0 0 ' + w + ' ' + h + '" width="' + w + '" height="' + h + '" aria-hidden="true">' +
+          '<path d="M ' + (cx - r) + ' ' + cy + ' A ' + r + ' ' + r + ' 0 0 1 ' + (cx + r) + ' ' + cy + '" fill="none" stroke="rgba(226,232,240,.95)" stroke-width="' + strokeW + '" stroke-linecap="round"/>' +
+          '<path d="M ' + (cx - r) + ' ' + cy + ' A ' + r + ' ' + r + ' 0 0 1 ' + (cx + r) + ' ' + cy + '" fill="none" stroke="' + endColor + '" stroke-width="' + strokeW + '" stroke-linecap="round" stroke-dasharray="' + filled.toFixed(1) + ' ' + (arcLen - filled).toFixed(1) + '"/>' +
+          '<line x1="' + cx + '" y1="' + cy + '" x2="' + nx.toFixed(1) + '" y2="' + ny.toFixed(1) + '" stroke="' + endColor + '" stroke-width="3" stroke-linecap="round"/>' +
+          '<circle cx="' + cx + '" cy="' + cy + '" r="6" fill="' + endColor + '"/>' +
+        '</svg>';
+
+      host.dataset.endColor = String(endColor || '').trim() || '#2563eb';
       return host.dataset.endColor;
     }
 
@@ -7517,7 +10347,7 @@ static partial class Program
         const area = document.createElementNS('http://www.w3.org/2000/svg', 'path');
         const baseY = h - pad;
         area.setAttribute('d', pathD + ' L' + pts[pts.length - 1].x.toFixed(2) + ',' + baseY.toFixed(2) + ' L' + pts[0].x.toFixed(2) + ',' + baseY.toFixed(2) + ' Z');
-        area.setAttribute('fill', 'rgba(37,99,235,.18)');
+        area.setAttribute('fill', 'rgba(43,183,169,.18)');
         area.setAttribute('stroke', 'none');
         svg.appendChild(area);
       }
@@ -7525,7 +10355,7 @@ static partial class Program
       const line = document.createElementNS('http://www.w3.org/2000/svg', 'path');
       line.setAttribute('d', pathD);
       line.setAttribute('fill', 'none');
-      line.setAttribute('stroke', 'rgba(37,99,235,.92)');
+      line.setAttribute('stroke', 'rgba(22,58,112,.92)');
       line.setAttribute('stroke-width', '3');
       line.setAttribute('stroke-linecap', 'round');
       line.setAttribute('stroke-linejoin', 'round');
@@ -7537,7 +10367,7 @@ static partial class Program
         c.setAttribute('cy', String(p.y));
         c.setAttribute('r', '4');
         c.setAttribute('fill', '#ffffff');
-        c.setAttribute('stroke', 'rgba(37,99,235,.92)');
+        c.setAttribute('stroke', 'rgba(22,58,112,.92)');
         c.setAttribute('stroke-width', '2');
         svg.appendChild(c);
       }
@@ -7604,13 +10434,17 @@ static partial class Program
 
         const aVal = av ? (Number(getValueA ? getValueA(av) : 0) || 0) : 0;
         const bVal = bv ? (Number(getValueB ? getValueB(bv) : 0) || 0) : 0;
-        const pctA = (max > 0 ? Math.max(2, Math.round((aVal / max) * 100)) : 2);
-        const pctB = (max > 0 ? Math.max(2, Math.round((bVal / max) * 100)) : 2);
+        const pctA = (max > 0 ? Math.max(6, Math.round((aVal / max) * 100)) : 6);
+        const pctB = (max > 0 ? Math.max(6, Math.round((bVal / max) * 100)) : 6);
 
         const b1 = document.createElement('div');
         b1.className = 'gBar ' + (kindA || 'device');
         b1.style.height = pctA + '%';
         b1.title = (kindA || 'A') + ': ' + aVal;
+        const n1 = document.createElement('div');
+        n1.className = 'gNum';
+        n1.textContent = aVal ? String(aVal) : '';
+        col.appendChild(n1);
         bars.appendChild(b1);
 
         if (bb.length) {
@@ -7638,6 +10472,51 @@ static partial class Program
       host.appendChild(wrap);
     }
 
+    function renderCalendarHeatmap(cal) {
+      const monthEl = el('anaCalMonth');
+      const subEl = el('anaCalSub');
+      const grid = el('anaCalGrid');
+      if (!grid) return;
+      grid.innerHTML = '';
+      const month = cal && cal.month ? String(cal.month) : '';
+      const label = cal && cal.label ? String(cal.label) : '';
+      const days = cal && Array.isArray(cal.days) ? cal.days : [];
+      const max = cal && Number.isFinite(Number(cal.maxPresent)) ? Number(cal.maxPresent) : Math.max(0, ...days.map(d => Number(d.present) || 0));
+
+      if (monthEl && month) monthEl.value = month;
+      if (subEl) subEl.textContent = 'Count of staff present for each day';
+      if (month) anaCalendarMonth = month;
+
+      if (!month || !days.length) return;
+      const startIso = month + '-01';
+      const start = new Date(startIso + 'T00:00:00');
+      const startDow = Number.isFinite(start.getTime()) ? start.getDay() : 0;
+
+      for (let i = 0; i < startDow; i++) {
+        const x = document.createElement('div');
+        x.className = 'calCell off';
+        grid.appendChild(x);
+      }
+
+      for (const d of days) {
+        const iso = String(d.date || '').slice(0, 10);
+        const dayNum = Number(d.day) || 0;
+        const present = Number(d.present) || 0;
+
+        let z = 0;
+        if (present > 0 && max > 0) {
+          z = Math.min(5, Math.max(1, Math.ceil((present / max) * 5)));
+        }
+
+        const cell = document.createElement('div');
+        cell.className = 'calCell z' + String(z);
+        cell.title = isoToDmy(iso) + ': ' + String(present) + ' present';
+        const countText = (present > 0) ? String(present) : '';
+        cell.innerHTML = '<div class="d">' + String(dayNum || '') + '</div><div class="v">' + escHtml(countText) + '</div>';
+        grid.appendChild(cell);
+      }
+    }
+
     async function refreshAttendance() {
       const dateEl = el('anaDate');
       const deptEl = el('anaDept');
@@ -7647,6 +10526,7 @@ static partial class Program
       const q = new URLSearchParams();
       if (date) q.set('date', date);
       if (dept) q.set('department', dept);
+      if (anaCalendarMonth) q.set('calendarMonth', anaCalendarMonth);
 
       const j = await getJson('/api/attendance/insights?' + q.toString());
       if (!j) return;
@@ -7656,24 +10536,23 @@ static partial class Program
       }
 
       const r = j.roster || {};
-      setText('anaTotal', Number.isFinite(Number(r.totalEmployees)) ? Number(r.totalEmployees) : '-');
-      setText('anaScope', (j.department || 'All') + ' • DB • ' + (j.date || ''));
-      setText('anaPresent', Number.isFinite(Number(r.present)) ? Number(r.present) : '-');
-      setText('anaAbsent', Number.isFinite(Number(r.absent)) ? Number(r.absent) : '-');
-      setText('anaLate', Number.isFinite(Number(r.lateComers)) ? Number(r.lateComers) : '-');
-      setText('anaAttendancePct', 'Attendance: ' + fmtPct(r.attendanceRatePct));
-      setText('anaAbsenteePct', 'Absenteeism: ' + fmtPct(r.absenteeRatePct));
-      setText('anaAttRateVal', fmtPct(r.attendanceRatePct));
-      setText('anaAbsRateVal', fmtPct(r.absenteeRatePct));
+      const totalEmp = Number.isFinite(Number(r.totalEmployees)) ? Number(r.totalEmployees) : 0;
+      const present = Number.isFinite(Number(r.present)) ? Number(r.present) : 0;
+      const absent = Number.isFinite(Number(r.absent)) ? Number(r.absent) : 0;
+      const late = Number.isFinite(Number(r.lateComers)) ? Number(r.lateComers) : 0;
+      setText('anaSnapTotal', totalEmp ? String(totalEmp) : '-');
+      setText('anaSnapScope', (j.department || 'All') + ' • ' + (j.date || ''));
+      setText('anaSnapPresent', totalEmp ? String(present) : '-');
+      setText('anaSnapAbsent', totalEmp ? String(absent) : '-');
+      setText('anaSnapLate', totalEmp ? String(late) : '-');
+      setText('anaSnapAttPct', fmtPct(r.attendanceRatePct));
+      setText('anaSnapAbsPct', fmtPct(r.absenteeRatePct));
       const avgWork = Number(r.avgWorkingHours);
-      const avgBreak = Number(r.avgBreakHours);
-      const avgOt = Number(r.avgOtHours);
-      setText('anaAvgWork', Number.isFinite(avgWork) ? avgWork.toFixed(2) : '-');
-      setText('anaAvgBreak', Number.isFinite(avgBreak) ? avgBreak.toFixed(2) : '-');
-      setText('anaAvgOt', Number.isFinite(avgOt) ? avgOt.toFixed(2) : '-');
-      const bH = Number(r.avgBreakHours) || 0;
-      const oH = Number(r.avgOtHours) || 0;
-      setText('anaBreakVsOt', (bH + oH) > 0 ? (Math.round((oH / Math.max(1e-9, bH + oH)) * 1000) / 10).toFixed(1) + '% OT' : '-');
+      setText('anaSnapAvgWork', Number.isFinite(avgWork) ? avgWork.toFixed(2) : '-');
+      const expPerEmp = 8;
+      const expPresent = present * expPerEmp;
+      const expFull = totalEmp * expPerEmp;
+      setText('anaSnapExpHours', (totalEmp > 0) ? (String(Math.round(expPresent)) + ' / ' + String(Math.round(expFull))) : '-');
 
       const note = el('anaNote');
       if (note) {
@@ -7682,6 +10561,8 @@ static partial class Program
         else { note.style.display = 'none'; note.textContent = ''; }
       }
 
+      renderCalendarHeatmap(j.calendar || null);
+
       const attRate = Number(r.attendanceRatePct);
       const attC = renderGauge('anaGaugeAttendance', Number.isFinite(attRate) ? attRate : 0, 100, 'traffic', '0', '100');
       setText('anaGaugeAttendanceVal', fmtPct(attRate));
@@ -7689,8 +10570,10 @@ static partial class Program
       if (attVal && attC) attVal.style.color = attC;
 
       const maxAvg = Math.max(6, Math.ceil((Number.isFinite(avgWork) ? avgWork : 0) + 2));
-      renderGauge('anaGaugeAvgHours', Number.isFinite(avgWork) ? avgWork : 0, maxAvg, 'ocean', '0', String(maxAvg));
+      const avgC = renderGauge('anaGaugeAvgHours', Number.isFinite(avgWork) ? avgWork : 0, maxAvg, 'ocean', '0', String(maxAvg));
       setText('anaGaugeAvgHoursVal', Number.isFinite(avgWork) ? (avgWork.toFixed(2) + ' hrs') : '-');
+      const avgVal = el('anaGaugeAvgHoursVal');
+      if (avgVal && avgC) avgVal.style.color = String(avgC);
 
       const monthWorked = Number(r.monthWorkingHours);
       const monthExpected = Number(r.monthExpectedHours);
@@ -7801,7 +10684,7 @@ static partial class Program
       const absentMParts = months.map((m, i) => ({
         label: String(m.label || m.month || ('M' + (i + 1))),
         value: Math.round((Number(m.absenteePct) || 0) * 10) / 10,
-        color: ['rgba(37,99,235,.86)','rgba(14,165,233,.80)','rgba(100,116,139,.70)','rgba(220,38,38,.66)','rgba(22,163,74,.60)','rgba(245,158,11,.64)'][i % 6],
+        color: ['rgba(22,58,112,.86)','rgba(43,183,169,.80)','rgba(100,116,139,.70)','rgba(220,38,38,.66)','rgba(22,163,74,.60)','rgba(245,158,11,.64)'][i % 6],
       }));
       const avgAbsM = months.length ? (months.reduce((m, x) => m + (Number(x.absenteePct) || 0), 0) / months.length) : 0;
       renderDonut('anaDonutAbsentM', 'anaDonutAbsentMCenter', 'anaDonutAbsentMLegend', absentMParts, fmtPct(avgAbsM));
@@ -7810,7 +10693,7 @@ static partial class Program
       renderLineSvg('anaAreaAbsentee', months, 'absenteePct', 'label', 'area');
 
       const top = Array.isArray(j.topEmployees) ? j.topEmployees.slice() : [];
-      renderHBars('anaTopEmployees', top, x => (x.full_name ? (x.full_name + (x.department ? (' • ' + x.department) : '')) : (x.staff_id || '')), x => Math.round((Number(x.attendancePct) || 0) * 10) / 10, '%');
+      renderTopEmployees('anaTopEmployees', top);
 
       const anaIntLastSync = el('anaIntLastSync');
       if (anaIntLastSync) {
@@ -7826,22 +10709,19 @@ static partial class Program
       const a = await getJson('/api/analytics');
       if (a && a.ok !== false) {
         const db = a.db || {};
-        setText('anaIntDbToday', db.ok ? String(db.totalPunches ?? 0) : '-');
+        setText('anaSysDbPunches', db.ok ? String(db.totalPunches ?? 0) : '-');
       }
-      setText('anaIntMissingOut', Number.isFinite(Number(r.missingOutCount)) ? Number(r.missingOutCount) : '-');
-      setText('anaIntDuplicates', Number.isFinite(Number(r.duplicatePunches)) ? Number(r.duplicatePunches) : '-');
-
-      const alerts = [];
       const missingOut = Number(r.missingOutCount) || 0;
       const duplicates = Number(r.duplicatePunches) || 0;
+      setText('anaSysFlagged', String(missingOut + duplicates));
+      setText('anaSysLastPunch', (j.lastPunchLocalTime && String(j.lastPunchLocalTime).trim()) ? String(j.lastPunchLocalTime).trim() : '-');
+
       const att = Number(r.attendanceRatePct) || 0;
       const abs = Number(r.absenteeRatePct) || 0;
-      if (att > 0 && att < 85) alerts.push('Attendance rate below 85%.');
-      if (abs > 10) alerts.push('Absenteeism above 10%.');
-      if (missingOut > 0) alerts.push(missingOut + ' employee(s) with missing OUT punch.');
-      if (duplicates > 0) alerts.push(duplicates + ' potential duplicate punch(es) detected.');
-      const alertsEl = el('anaAlerts');
-      if (alertsEl) alertsEl.innerHTML = alerts.length ? ('<div class="flagWrap">' + alerts.map(x => escHtml(x)).join('<br/>') + '</div>') : '<span class="muted">No alerts.</span>';
+      const notif = [];
+      if (att > 0 && att < 85) notif.push('Attendance rate below 85%.');
+      if (abs > 10) notif.push('Absenteeism above 10%.');
+      setText('anaSysNotifVal', notif.length ? notif.join(' • ') : 'No notifications.');
     }
 
     function openReadOnlyModal(title, fields, values) {
@@ -8006,195 +10886,248 @@ static partial class Program
     }
 
     async function refreshAttendanceSpreadsheet() {
+      function isoDate(d) { return d.toISOString().slice(0, 10); }
+      function dateFromIso(iso) { return new Date(String(iso || '').slice(0, 10) + 'T00:00:00Z'); }
+      function addDaysIso(iso, days) { const d = dateFromIso(iso); d.setUTCDate(d.getUTCDate() + days); return isoDate(d); }
+      function clampRange(fromIso, toIso, maxDays) {
+        let f = String(fromIso || '').slice(0, 10);
+        let t = String(toIso || '').slice(0, 10);
+        if (!f) f = todayKlIso();
+        if (!t) t = f;
+        if (f > t) { const tmp = f; f = t; t = tmp; }
+        const out = [];
+        for (let i = 0; i < maxDays; i++) {
+          const cur = addDaysIso(f, i);
+          out.push(cur);
+          if (cur === t) break;
+        }
+        return out;
+      }
+      function startOfWeekIso(iso) {
+        const d = dateFromIso(iso);
+        const dow = (d.getUTCDay() + 6) % 7;
+        d.setUTCDate(d.getUTCDate() - dow);
+        return isoDate(d);
+      }
+      function clampWeeks(fromIso, toIso, maxWeeks) {
+        let f = startOfWeekIso(fromIso);
+        let t = startOfWeekIso(toIso);
+        if (f > t) { const tmp = f; f = t; t = tmp; }
+        const out = [];
+        for (let i = 0; i < maxWeeks; i++) {
+          const cur = addDaysIso(f, i * 7);
+          out.push(cur);
+          if (cur === t) break;
+        }
+        return out;
+      }
+      function monthKey(d) { return d.getUTCFullYear() * 12 + d.getUTCMonth(); }
+      function monthFromYm(ym) {
+        const s = String(ym || '').trim();
+        const m = s.match(/^(\d{4})-(\d{2})$/);
+        if (!m) return null;
+        return new Date(m[1] + '-' + m[2] + '-01T00:00:00Z');
+      }
+      function clampMonths(fromYm, toYm, maxMonths) {
+        const a = monthFromYm(fromYm) || new Date();
+        const b = monthFromYm(toYm) || a;
+        let f = a;
+        let t = b;
+        if (monthKey(f) > monthKey(t)) { const tmp = f; f = t; t = tmp; }
+        const out = [];
+        const startKey = monthKey(f);
+        const endKey = monthKey(t);
+        for (let k = 0; k < maxMonths; k++) {
+          const curKey = startKey + k;
+          const y = Math.floor(curKey / 12);
+          const mo = (curKey % 12) + 1;
+          out.push(String(y) + '-' + String(mo).padStart(2, '0'));
+          if (curKey === endKey) break;
+        }
+        return out;
+      }
+
       if (activeSheetSubTab === 'daily') {
-        const dateEl = el('sheetDailyDate');
-        if (dateEl && !dateEl.value) {
-          try { dateEl.value = new Date().toISOString().slice(0, 10); } catch { }
-        }
-        const q = new URLSearchParams();
-        if (dateEl && dateEl.value) q.set('date', dateEl.value);
-        const j = await getJson('/api/spreadsheet/daily?' + q.toString());
-        const body = el('sheetDailyBody');
-        if (!body) return;
-        body.innerHTML = '';
-        sheetDailyByKey = new Map();
-        if (!j || j.ok === false) {
-          const tr = document.createElement('tr');
-          tr.innerHTML = '<td colspan="9" class="muted">' + escHtml((j && j.error) ? j.error : 'Failed to load daily spreadsheet') + '</td>';
-          body.appendChild(tr);
+        const fromEl = el('sheetDailyFrom');
+        const toEl = el('sheetDailyTo');
+        const todayIso = todayKlIso();
+        if (fromEl && !String(fromEl.value || '').trim()) { try { fromEl.value = todayIso; } catch { } }
+        if (toEl && !String(toEl.value || '').trim() && fromEl && fromEl.value) { try { toEl.value = fromEl.value; } catch { } }
+        normalizeDmyInput('sheetDailyFrom');
+        normalizeDmyInput('sheetDailyTo');
+        const fromIso = parseUserDateToIso(fromEl && fromEl.value ? fromEl.value : '') || todayIso;
+        const toIso = parseUserDateToIso(toEl && toEl.value ? toEl.value : '') || fromIso;
+        const dates = clampRange(fromIso, toIso, 62);
+        if (dates.length >= 62 && dates[dates.length - 1] !== String(toIso).slice(0, 10)) {
+          renderSheetDailyRows([], 'Daily range too large. Please select a smaller range.');
           return;
         }
-        const rows = Array.isArray(j.rows) ? j.rows : [];
+        logActivity('Attendance Spreadsheet / Daily', 'Refreshing daily report: ' + isoToDmy(dates[0]) + ' to ' + isoToDmy(dates[dates.length - 1]));
+
+        let j = null;
+        let allRows = [];
+        for (const d of dates) {
+          const q = new URLSearchParams();
+          q.set('date', d);
+          const rr = await getJson('/api/spreadsheet/daily?' + q.toString());
+          if (!rr || rr.ok === false) { j = rr; break; }
+          const rows = Array.isArray(rr.rows) ? rr.rows : [];
+          allRows = allRows.concat(rows);
+        }
+
+        if (j && j.ok === false) {
+          lastSheetDailyRows = [];
+          renderSheetDailyRows([], (j && j.error) ? j.error : 'Failed to load daily spreadsheet');
+          return;
+        }
+        const rows = sortRows(allRows, 'daily');
         lastSheetDailyRows = rows.slice();
-        if (!rows.length) {
-          const tr = document.createElement('tr');
-          tr.innerHTML = '<td colspan="9" class="muted">(none)</td>';
-          body.appendChild(tr);
-          return;
-        }
-        for (const r of rows) {
-          const key = String(r.staff_id || '') + '|' + String(r.date || '');
-          sheetDailyByKey.set(key, r);
-          const tr = document.createElement('tr');
-          tr.style.cursor = 'pointer';
-          tr.dataset.key = key;
-          const flagged = Array.isArray(r.flagged_punches) ? r.flagged_punches.join(', ') : String(r.flagged_punches || '');
-          const flagsText = String(r.flags || '').trim();
-          const flaggedText = String(flagged || '').trim() || '-';
-          let flaggedHtml = '-';
-          if (flagsText || flaggedText !== '-') {
-            const shortFlags = compactFlags(flagsText);
-            const top = shortFlags ? escHtml(shortFlags) : '<span class="muted">-</span>';
-            flaggedHtml = '<div class="flagWrap">' + top + '</div><div class="mono">' + escHtml(flaggedText) + '</div>';
-          }
-          tr.innerHTML =
-            '<td>' + escHtml(r.name || r.staff_id || '') + '</td>' +
-            '<td class="mono">' + escHtml(r.date || '') + '</td>' +
-            '<td>' + escHtml(r.shift || '') + '</td>' +
-            '<td class="mono">' + escHtml(r.first_in || '-') + '</td>' +
-            '<td class="mono">' + escHtml(r.last_out || '-') + '</td>' +
-            '<td class="mono">' + escHtml(String(r.total_hours ?? '')) + '</td>' +
-            '<td class="mono">' + escHtml(String(r.ot_hours ?? '')) + '</td>' +
-            '<td>' + escHtml(r.status || '') + '</td>' +
-            '<td>' + flaggedHtml + '</td>';
-          body.appendChild(tr);
-        }
+        renderSheetDailyRows(rows, null);
         return;
       }
 
       if (activeSheetSubTab === 'weekly') {
-        const dateEl = el('sheetWeeklyDate');
-        if (dateEl && !dateEl.value) {
-          try { dateEl.value = mondayIso(new Date()); } catch { }
-        }
-        const q = new URLSearchParams();
-        if (dateEl && dateEl.value) q.set('date', dateEl.value);
-        const j = await getJson('/api/spreadsheet/weekly?' + q.toString());
-        const body = el('sheetWeeklyBody');
-        if (!body) return;
-        body.innerHTML = '';
-        if (!j || j.ok === false) {
-          const tr = document.createElement('tr');
-          tr.innerHTML = '<td colspan="8" class="muted">' + escHtml((j && j.error) ? j.error : 'Failed to load weekly spreadsheet') + '</td>';
-          body.appendChild(tr);
+        const fromEl = el('sheetWeeklyFrom');
+        const toEl = el('sheetWeeklyTo');
+        const todayIso = todayKlIso();
+        if (fromEl && !String(fromEl.value || '').trim()) { try { fromEl.value = todayIso; } catch { } }
+        if (toEl && !String(toEl.value || '').trim() && fromEl && fromEl.value) { try { toEl.value = fromEl.value; } catch { } }
+        normalizeDmyInput('sheetWeeklyFrom');
+        normalizeDmyInput('sheetWeeklyTo');
+        const fromIso = parseUserDateToIso(fromEl && fromEl.value ? fromEl.value : '') || todayIso;
+        const toIso = parseUserDateToIso(toEl && toEl.value ? toEl.value : '') || fromIso;
+        const weeks = clampWeeks(fromIso, toIso, 26);
+        if (weeks.length >= 26 && startOfWeekIso(toIso) !== weeks[weeks.length - 1]) {
+          renderSheetWeeklyRows([], 'Weekly range too large. Please select a smaller range.');
           return;
         }
-        const rows = Array.isArray(j.rows) ? j.rows : [];
-        for (const r of rows) r.week_display = fmtWeekShortRange(r.week_start, r.week_end);
+        logActivity('Attendance Spreadsheet / Weekly', 'Refreshing weekly report: ' + isoToDmy(weeks[0]) + ' to ' + isoToDmy(weeks[weeks.length - 1]));
+
+        let j = null;
+        let allRows = [];
+        for (const w of weeks) {
+          const q = new URLSearchParams();
+          q.set('date', w);
+          const rr = await getJson('/api/spreadsheet/weekly?' + q.toString());
+          if (!rr || rr.ok === false) { j = rr; break; }
+          const rows = Array.isArray(rr.rows) ? rr.rows : [];
+          allRows = allRows.concat(rows);
+        }
+
+        if (j && j.ok === false) {
+          lastSheetWeeklyRows = [];
+          renderSheetWeeklyRows([], (j && j.error) ? j.error : 'Failed to load weekly spreadsheet');
+          return;
+        }
+        const rows = sortRows(allRows, 'weekly');
         lastSheetWeeklyRows = rows.slice();
-        if (!rows.length) {
-          const tr = document.createElement('tr');
-          tr.innerHTML = '<td colspan="8" class="muted">(none)</td>';
-          body.appendChild(tr);
-          return;
-        }
-        for (const r of rows) {
-          const tr = document.createElement('tr');
-          tr.innerHTML =
-            '<td>' + escHtml(r.name || r.staff_id || '') + '</td>' +
-            '<td class="mono">' + escHtml(r.week_display || r.week || '') + '</td>' +
-            '<td class="mono">' + escHtml(String(r.flagged_punches ?? 0)) + '</td>' +
-            '<td class="mono">' + escHtml(String(r.total_hours ?? '')) + '</td>' +
-            '<td class="mono">' + escHtml(String(r.ot_hours ?? '')) + '</td>' +
-            '<td class="mono">' + escHtml(String(r.days_present ?? '')) + '</td>' +
-            '<td class="mono">' + escHtml(String(r.days_absent ?? '')) + '</td>' +
-            '<td class="mono">' + escHtml(String(r.attendance_pct ?? '')) + '%</td>';
-          body.appendChild(tr);
-        }
+        renderSheetWeeklyRows(rows, null);
         return;
       }
 
       if (activeSheetSubTab === 'monthly') {
-        const monthEl = el('sheetMonthlyMonth');
-        if (monthEl && !monthEl.value) {
-          try { monthEl.value = new Date().toISOString().slice(0, 7); } catch { }
+        const fromEl = el('sheetMonthlyFrom');
+        const toEl = el('sheetMonthlyTo');
+        if (fromEl && !fromEl.value) { try { fromEl.value = todayKlIso().slice(0, 7); } catch { } }
+        if (toEl && !toEl.value && fromEl && fromEl.value) { try { toEl.value = fromEl.value; } catch { } }
+        const from = fromEl && fromEl.value ? fromEl.value : todayKlIso().slice(0, 7);
+        const to = toEl && toEl.value ? toEl.value : from;
+        const months = clampMonths(from, to, 24);
+        logActivity('Attendance Spreadsheet / Monthly', 'Refreshing monthly report: ' + months[0] + ' to ' + months[months.length - 1]);
+
+        let j = null;
+        let allRows = [];
+        for (const m of months) {
+          const q = new URLSearchParams();
+          q.set('month', m);
+          const rr = await getJson('/api/spreadsheet/monthly?' + q.toString());
+          if (!rr || rr.ok === false) { j = rr; break; }
+          const rows = Array.isArray(rr.rows) ? rr.rows : [];
+          allRows = allRows.concat(rows);
         }
-        const q = new URLSearchParams();
-        if (monthEl && monthEl.value) q.set('month', monthEl.value);
-        const j = await getJson('/api/spreadsheet/monthly?' + q.toString());
-        const body = el('sheetMonthlyBody');
-        if (!body) return;
-        body.innerHTML = '';
-        if (!j || j.ok === false) {
-          const tr = document.createElement('tr');
-          tr.innerHTML = '<td colspan="10" class="muted">' + escHtml((j && j.error) ? j.error : 'Failed to load monthly spreadsheet') + '</td>';
-          body.appendChild(tr);
+
+        if (j && j.ok === false) {
+          lastSheetMonthlyRows = [];
+          renderSheetMonthlyRows([], (j && j.error) ? j.error : 'Failed to load monthly spreadsheet');
           return;
         }
-        const rows = Array.isArray(j.rows) ? j.rows : [];
-        for (const r of rows) r.month_display = fmtMonthShort(r.month);
+        const rows = sortRows(allRows, 'monthly');
         lastSheetMonthlyRows = rows.slice();
-        if (!rows.length) {
-          const tr = document.createElement('tr');
-          tr.innerHTML = '<td colspan="10" class="muted">(none)</td>';
-          body.appendChild(tr);
-          return;
-        }
-        for (const r of rows) {
-          const tr = document.createElement('tr');
-          const sid = String(r.staff_id || '').trim();
-          const checked = monthlySelectedStaff.has(sid);
-          const cbHtml = isSuperadmin
-            ? ('<input type="checkbox" class="sheetMonthlyPick" data-staff="' + escHtml(sid) + '"' + (checked ? ' checked' : '') + ' />')
-            : '';
-          const dlHtml = isSuperadmin
-            ? ('<button class="dlIconBtn" type="button" data-sheet-download="' + escHtml(sid) + '" title="Download report" aria-label="Download report"><svg viewBox="0 0 24 24"><path d="M12 3v10"/><path d="M8 11l4 4 4-4"/><path d="M4 17v4h16v-4"/></svg></button>')
-            : '';
-          tr.innerHTML =
-            '<td>' + cbHtml + '</td>' +
-            '<td>' + escHtml(r.name || r.staff_id || '') + '</td>' +
-            '<td class="mono">' + escHtml(r.month_display || r.month || '') + '</td>' +
-            '<td class="mono">' + escHtml(String(r.flagged_punches ?? 0)) + '</td>' +
-            '<td class="mono">' + escHtml(String(r.total_hours ?? '')) + '</td>' +
-            '<td class="mono">' + escHtml(String(r.ot_hours ?? '')) + '</td>' +
-            '<td class="mono">' + escHtml(String(r.days_present ?? '')) + '</td>' +
-            '<td class="mono">' + escHtml(String(r.days_absent ?? '')) + '</td>' +
-            '<td class="mono">' + escHtml(String(r.attendance_pct ?? '')) + '%</td>' +
-            '<td>' + dlHtml + '</td>';
-          body.appendChild(tr);
-        }
+        renderSheetMonthlyRows(rows, null);
       }
     }
 
     const sheetDailyRefreshBtn = el('sheetDailyRefresh');
-    if (sheetDailyRefreshBtn) sheetDailyRefreshBtn.addEventListener('click', async () => refreshAttendanceSpreadsheet());
+    if (sheetDailyRefreshBtn) sheetDailyRefreshBtn.addEventListener('click', async () => {
+      await refreshAttendanceSpreadsheet();
+      notify('Success', 'Table refreshed.', 'ok');
+    });
     const sheetWeeklyRefreshBtn = el('sheetWeeklyRefresh');
-    if (sheetWeeklyRefreshBtn) sheetWeeklyRefreshBtn.addEventListener('click', async () => refreshAttendanceSpreadsheet());
+    if (sheetWeeklyRefreshBtn) sheetWeeklyRefreshBtn.addEventListener('click', async () => {
+      await refreshAttendanceSpreadsheet();
+      notify('Success', 'Table refreshed.', 'ok');
+    });
     const sheetMonthlyRefreshBtn = el('sheetMonthlyRefresh');
-    if (sheetMonthlyRefreshBtn) sheetMonthlyRefreshBtn.addEventListener('click', async () => refreshAttendanceSpreadsheet());
+    if (sheetMonthlyRefreshBtn) sheetMonthlyRefreshBtn.addEventListener('click', async () => {
+      await refreshAttendanceSpreadsheet();
+      notify('Success', 'Table refreshed.', 'ok');
+    });
 
-    const sheetDailyDateEl = el('sheetDailyDate');
-    if (sheetDailyDateEl && !sheetDailyDateEl.value) { try { sheetDailyDateEl.value = new Date().toISOString().slice(0, 10); } catch { } }
-    const sheetWeeklyDateEl = el('sheetWeeklyDate');
-    if (sheetWeeklyDateEl && !sheetWeeklyDateEl.value) { try { sheetWeeklyDateEl.value = mondayIso(new Date()); } catch { } }
-    const sheetMonthlyMonthEl = el('sheetMonthlyMonth');
-    if (sheetMonthlyMonthEl && !sheetMonthlyMonthEl.value) { try { sheetMonthlyMonthEl.value = new Date().toISOString().slice(0, 7); } catch { } }
+    const sheetDailyFromEl = el('sheetDailyFrom');
+    if (sheetDailyFromEl && !sheetDailyFromEl.value) { try { sheetDailyFromEl.value = todayKlIso(); } catch { } }
+    const sheetDailyToEl = el('sheetDailyTo');
+    if (sheetDailyToEl && !sheetDailyToEl.value && sheetDailyFromEl && sheetDailyFromEl.value) { try { sheetDailyToEl.value = sheetDailyFromEl.value; } catch { } }
+    const sheetWeeklyFromEl = el('sheetWeeklyFrom');
+    if (sheetWeeklyFromEl && !sheetWeeklyFromEl.value) { try { sheetWeeklyFromEl.value = todayKlIso(); } catch { } }
+    const sheetWeeklyToEl = el('sheetWeeklyTo');
+    if (sheetWeeklyToEl && !sheetWeeklyToEl.value && sheetWeeklyFromEl && sheetWeeklyFromEl.value) { try { sheetWeeklyToEl.value = sheetWeeklyFromEl.value; } catch { } }
+    const sheetMonthlyFromEl = el('sheetMonthlyFrom');
+    if (sheetMonthlyFromEl && !sheetMonthlyFromEl.value) { try { sheetMonthlyFromEl.value = todayKlIso().slice(0, 7); } catch { } }
+    const sheetMonthlyToEl = el('sheetMonthlyTo');
+    if (sheetMonthlyToEl && !sheetMonthlyToEl.value && sheetMonthlyFromEl && sheetMonthlyFromEl.value) { try { sheetMonthlyToEl.value = sheetMonthlyFromEl.value; } catch { } }
+
+    if (sheetDailyFromEl) sheetDailyFromEl.addEventListener('blur', () => normalizeDmyInput('sheetDailyFrom'));
+    if (sheetDailyToEl) sheetDailyToEl.addEventListener('blur', () => normalizeDmyInput('sheetDailyTo'));
+    if (sheetWeeklyFromEl) sheetWeeklyFromEl.addEventListener('blur', () => normalizeDmyInput('sheetWeeklyFrom'));
+    if (sheetWeeklyToEl) sheetWeeklyToEl.addEventListener('blur', () => normalizeDmyInput('sheetWeeklyTo'));
+    for (const d of [sheetDailyFromEl, sheetDailyToEl, sheetWeeklyFromEl, sheetWeeklyToEl]) {
+      if (!d) continue;
+      if (String(d.type || '').toLowerCase() !== 'date') continue;
+      d.addEventListener('focus', () => { try { if (d.showPicker) d.showPicker(); } catch { } });
+    }
 
     const sheetDailyDownloadBtn = el('sheetDailyDownload');
     if (sheetDailyDownloadBtn) sheetDailyDownloadBtn.addEventListener('click', async () => {
       if (!isSuperadmin) return;
       if (!lastSheetDailyRows.length) await refreshAttendanceSpreadsheet();
-      const dateEl = el('sheetDailyDate');
-      const d = dateEl && dateEl.value ? dateEl.value : '';
-      downloadTextCsv('attendance_daily_' + (d || 'date') + '.csv', toSheetDailyCsv(lastSheetDailyRows || []));
+      const fromRaw = el('sheetDailyFrom')?.value || '';
+      const toRaw = el('sheetDailyTo')?.value || fromRaw;
+      const from = parseUserDateToIso(fromRaw) || '';
+      const to = parseUserDateToIso(toRaw) || from;
+      const tag = (from && to && from !== to) ? (from + '_to_' + to) : (from || 'date');
+      downloadTextCsv('attendance_daily_' + tag + '.csv', toSheetDailyCsv(lastSheetDailyRows || []));
     });
 
     const sheetWeeklyDownloadBtn = el('sheetWeeklyDownload');
     if (sheetWeeklyDownloadBtn) sheetWeeklyDownloadBtn.addEventListener('click', async () => {
       if (!isSuperadmin) return;
       if (!lastSheetWeeklyRows.length) await refreshAttendanceSpreadsheet();
-      const dateEl = el('sheetWeeklyDate');
-      const d = dateEl && dateEl.value ? dateEl.value : '';
-      downloadTextCsv('attendance_weekly_' + (d || 'week') + '.csv', toSheetWeeklyCsv(lastSheetWeeklyRows || []));
+      const fromRaw = el('sheetWeeklyFrom')?.value || '';
+      const toRaw = el('sheetWeeklyTo')?.value || fromRaw;
+      const from = parseUserDateToIso(fromRaw) || '';
+      const to = parseUserDateToIso(toRaw) || from;
+      const tag = (from && to && from !== to) ? (from + '_to_' + to) : (from || 'week');
+      downloadTextCsv('attendance_weekly_' + tag + '.csv', toSheetWeeklyCsv(lastSheetWeeklyRows || []));
     });
 
     const sheetMonthlyDownloadBtn = el('sheetMonthlyDownload');
     if (sheetMonthlyDownloadBtn) sheetMonthlyDownloadBtn.addEventListener('click', async () => {
       if (!isSuperadmin) return;
       if (!lastSheetMonthlyRows.length) await refreshAttendanceSpreadsheet();
-      const monthEl = el('sheetMonthlyMonth');
-      const m = monthEl && monthEl.value ? monthEl.value : '';
-      downloadTextCsv('attendance_monthly_' + (m || 'month') + '.csv', toSheetMonthlyCsv(lastSheetMonthlyRows || []));
+      const from = el('sheetMonthlyFrom')?.value || '';
+      const to = el('sheetMonthlyTo')?.value || from;
+      const tag = (from && to && from !== to) ? (from + '_to_' + to) : (from || 'month');
+      downloadTextCsv('attendance_monthly_' + tag + '.csv', toSheetMonthlyCsv(lastSheetMonthlyRows || []));
     });
 
     const sheetMonthlyBodyEl = el('sheetMonthlyBody');
@@ -8202,11 +11135,20 @@ static partial class Program
       const t = e && e.target ? e.target : null;
       if (!t) return;
       const btn = t.closest ? t.closest('button[data-sheet-download]') : null;
-      if (!btn || !isSuperadmin) return;
-      const sid = String(btn.getAttribute('data-sheet-download') || '').trim();
-      const monthEl = el('sheetMonthlyMonth');
-      const m = monthEl && monthEl.value ? monthEl.value : '';
-      await downloadCombinedReport(sid, m);
+      if (btn && isSuperadmin) {
+        const sid = String(btn.getAttribute('data-sheet-download') || '').trim();
+        const m = String(btn.getAttribute('data-sheet-month') || '').trim() || (el('sheetMonthlyFrom')?.value || '');
+        await downloadCombinedReport(sid, m);
+        return;
+      }
+      const pick = t.closest ? t.closest('input.sheetMonthlyPick') : null;
+      if (pick) return;
+      const tr = t.closest ? t.closest('tr') : null;
+      if (!tr || !tr.dataset) return;
+      const sid2 = String(tr.dataset.staff || '').trim();
+      const mo = String(tr.dataset.month || '').trim();
+      if (!sid2 || !/^\d{4}-\d{2}$/.test(mo)) return;
+      openStaffAttendanceModal(sid2, mo + '-01');
     });
 
     const sheetMonthlySelectAll = el('sheetMonthlySelectAll');
@@ -8219,6 +11161,7 @@ static partial class Program
         if (on) monthlySelectedStaff.add(sid);
         else monthlySelectedStaff.delete(sid);
       }
+      updateSheetMonthlyBulkUi();
       await refreshAttendanceSpreadsheet();
     });
 
@@ -8231,18 +11174,43 @@ static partial class Program
       if (!sid) return;
       if (t.checked) monthlySelectedStaff.add(sid);
       else monthlySelectedStaff.delete(sid);
+      updateSheetMonthlyBulkUi();
     });
 
     const sheetMonthlyBulkDownloadBtn = el('sheetMonthlyBulkDownload');
     if (sheetMonthlyBulkDownloadBtn) sheetMonthlyBulkDownloadBtn.addEventListener('click', async () => {
       if (!isSuperadmin) return;
-      const monthEl = el('sheetMonthlyMonth');
-      const m = monthEl && monthEl.value ? monthEl.value : '';
+      if (!monthlySelectedStaff || monthlySelectedStaff.size === 0) return;
+      const from = el('sheetMonthlyFrom')?.value || todayKlIso().slice(0, 7);
+      const to = el('sheetMonthlyTo')?.value || from;
+      function monthKey(ym) { const m = String(ym || '').trim().match(/^(\d{4})-(\d{2})$/); if (!m) return null; return Number(m[1]) * 12 + (Number(m[2]) - 1); }
+      function ymFromKey(k) { const y = Math.floor(k / 12); const mo = (k % 12) + 1; return String(y) + '-' + String(mo).padStart(2, '0'); }
+      const fk = monthKey(from);
+      const tk = monthKey(to);
+      if (fk === null || tk === null) return;
+      const a = Math.min(fk, tk);
+      const b = Math.max(fk, tk);
+      const months = [];
+      for (let k = a; k <= b && months.length < 24; k++) months.push(ymFromKey(k));
       const ids = Array.from(monthlySelectedStaff.values());
       for (const sid of ids) {
-        await downloadCombinedReport(sid, m);
-        await new Promise(r => setTimeout(r, 180));
+        for (const m of months) {
+          await downloadCombinedReport(sid, m);
+          await new Promise(r => setTimeout(r, 180));
+        }
       }
+    });
+
+    const sheetWeeklyBodyEl = el('sheetWeeklyBody');
+    if (sheetWeeklyBodyEl) sheetWeeklyBodyEl.addEventListener('click', (e) => {
+      const t = e && e.target ? e.target : null;
+      if (!t) return;
+      const tr = t.closest ? t.closest('tr') : null;
+      if (!tr || !tr.dataset) return;
+      const sid = String(tr.dataset.staff || '').trim();
+      const ws = String(tr.dataset.weekStart || '').trim();
+      if (!sid || !/^\d{4}-\d{2}-\d{2}$/.test(ws)) return;
+      openStaffAttendanceModal(sid, ws);
     });
 
     const sheetDailyBodyEl = el('sheetDailyBody');
@@ -8252,6 +11220,8 @@ static partial class Program
       if (!key) return;
       const row = sheetDailyByKey.get(key);
       if (!row) return;
+      openStaffAttendanceModal(String(row.staff_id || ''), String(row.date || ''));
+      return;
       const d = row.details || {};
       const allPunches = Array.isArray(d.punches) ? d.punches.join(', ') : String(d.punches || '');
       const usedPunches = Array.isArray(d.used_punches) ? d.used_punches.join(', ') : String(d.used_punches || '');
@@ -8353,19 +11323,104 @@ static partial class Program
       }
     });
 
+    document.addEventListener('click', (e) => {
+      const th = e && e.target ? e.target.closest('th.sortable[data-sort]') : null;
+      if (!th) return;
+      const table = th.closest('table');
+      if (!table) return;
+      const scope =
+        table.id === 'sheetDailyTable' ? 'daily'
+        : table.id === 'sheetWeeklyTable' ? 'weekly'
+        : table.id === 'sheetMonthlyTable' ? 'monthly'
+        : '';
+      if (!scope) return;
+
+      const key = String(th.getAttribute('data-sort') || '').trim();
+      if (!key) return;
+
+      const cfg = sheetSort[scope] || { key: 'date', dir: 'asc' };
+      if (cfg.key === key) cfg.dir = (cfg.dir === 'asc') ? 'desc' : 'asc';
+      else { cfg.key = key; cfg.dir = 'asc'; }
+      sheetSort[scope] = cfg;
+
+      if (scope === 'daily') {
+        const rows = sortRows(lastSheetDailyRows || [], 'daily');
+        lastSheetDailyRows = rows.slice();
+        renderSheetDailyRows(rows, null);
+      }
+      if (scope === 'weekly') {
+        const rows = sortRows(lastSheetWeeklyRows || [], 'weekly');
+        lastSheetWeeklyRows = rows.slice();
+        renderSheetWeeklyRows(rows, null);
+      }
+      if (scope === 'monthly') {
+        const rows = sortRows(lastSheetMonthlyRows || [], 'monthly');
+        lastSheetMonthlyRows = rows.slice();
+        renderSheetMonthlyRows(rows, null);
+      }
+    }, true);
+
     const anaRefresh = el('anaRefresh');
     if (anaRefresh) anaRefresh.addEventListener('click', async () => refreshAttendance());
 
+    const anaCalMonth = el('anaCalMonth');
+    if (anaCalMonth) {
+      anaCalMonth.addEventListener('change', async () => {
+        const v = String(anaCalMonth.value || '').trim();
+        if (!/^\d{4}-\d{2}$/.test(v)) return;
+        anaCalendarMonth = v;
+        await refreshAttendance();
+      });
+    }
+
     const anaDate = el('anaDate');
     if (anaDate && !anaDate.value) {
-      try { anaDate.value = new Date().toISOString().slice(0, 10); } catch { }
+      try { anaDate.value = todayKlIso(); } catch { }
+    }
+
+    const anaSnapGrid = el('anaSnapGrid');
+    if (anaSnapGrid && !anaSnapGrid.__wired) {
+      anaSnapGrid.__wired = true;
+      anaSnapGrid.addEventListener('click', (ev) => {
+        const btn = ev && ev.target && ev.target.closest ? ev.target.closest('button[data-go]') : null;
+        if (!btn) return;
+        const go = String(btn.getAttribute('data-go') || '').trim();
+        if (go === 'sheetDaily') {
+          setActiveTab('attendanceSpreadsheet');
+          setActiveSubTab('sheet', 'daily');
+        }
+      });
+    }
+
+    if (!document.body.__snapGoWired) {
+      document.body.__snapGoWired = true;
+      document.body.addEventListener('click', (ev) => {
+        const btn = ev && ev.target && ev.target.closest ? ev.target.closest('button.snapCard[data-go]') : null;
+        if (!btn) return;
+        const go = String(btn.getAttribute('data-go') || '').trim();
+        if (go === 'sheetDaily') {
+          setActiveTab('attendanceSpreadsheet');
+          setActiveSubTab('sheet', 'daily');
+        }
+      });
     }
 
     const devRefreshBtn = el('devRefresh');
     if (devRefreshBtn) devRefreshBtn.addEventListener('click', async () => {
       devRefreshBtn.disabled = true;
       try {
-        await fetch('/api/sync?today=1', { method: 'POST', credentials: 'same-origin' });
+        logActivity('Raw Data / Device Records', 'Refreshing from device...');
+        const res = await fetch('/api/sync?today=1&supabase=0', { method: 'POST', credentials: 'same-origin' });
+        if (res.status === 401) {
+          logActivity('Raw Data / Device Records', 'Unauthorized. Please reload and login again.', 'ERR');
+          notify('Error', 'Unauthorized (please login again).', 'bad');
+        } else if (!res.ok) {
+          logActivity('Raw Data / Device Records', 'Refresh failed: ' + (await res.text()), 'ERR');
+          notify('Error', 'Sync Device failed (see Activity Log).', 'bad');
+        } else {
+          logActivity('Raw Data / Device Records', 'Refresh complete.', 'OK');
+          notify('Success', 'Device synced.', 'ok');
+        }
       } finally {
         devRefreshBtn.disabled = false;
       }
@@ -8399,8 +11454,9 @@ static partial class Program
       try {
         const r = await postJson('/api/supabase/update', {});
         if (r && r.ok === false) {
-          out(r.error || 'Update Supabase failed');
+          logActivity('Raw Data / Database Records', String(r.error || 'Update Supabase failed'), 'ERR');
           setLoad(Math.min(100, pct), 'Failed. ' + String(r.error || ''));
+          notify('Error', 'Sync Database failed (see Activity Log).', 'bad');
         } else {
           const upserted = Number.isFinite(Number(r.upserted)) ? Number(r.upserted) : 0;
           const expected = Number.isFinite(Number(r.distinct)) ? Number(r.distinct) : upserted;
@@ -8408,14 +11464,10 @@ static partial class Program
           const to = (r.rangeTo || '').trim();
 
           setLoad(Math.max(pct, 92), 'Refreshing table...');
-          const staffEl = el('dbFilterStaff'); if (staffEl) staffEl.value = '';
-          const fromEl = el('dbFilterFrom'); if (fromEl) fromEl.value = '';
-          const toEl = el('dbFilterTo'); if (toEl) toEl.value = '';
-
           const dbRes = await refreshDbRecords();
           if (!dbRes || dbRes.ok !== true) {
             setLoad(99, 'Could not load Database Records.');
-            out('Supabase update OK. Rows upserted: ' + String(upserted ?? 0) + '. Could not load Database Records (API offline or blocked).');
+            logActivity('Raw Data / Database Records', 'Supabase update OK. Rows upserted: ' + String(upserted ?? 0) + '. Could not load Database Records (API offline or blocked).', 'ERR');
             return;
           }
 
@@ -8426,25 +11478,29 @@ static partial class Program
             if (v && v.ok === true) {
               validated = true;
               setLoad(100, 'Validated. Rows upserted: ' + String(upserted));
-              out('Supabase update OK. Rows upserted: ' + String(upserted) + '. Validated.');
+              logActivity('Raw Data / Database Records', 'Supabase update OK. Rows upserted: ' + String(upserted) + '. Validated.', 'OK');
+              notify('Success', 'Database synced and validated.', 'ok');
             } else {
               const found = (v && Number.isFinite(Number(v.found))) ? Number(v.found) : 0;
               const disc = (v && Number.isFinite(Number(v.discrepancy))) ? Number(v.discrepancy) : null;
               const err = (v && v.error) ? String(v.error || '') : '';
               setLoad(99, 'Validation failed.');
-              if (err) out('Validation failed: ' + err);
-              else if (disc !== null) out('Validation failed: expected at least ' + String(expected) + ' rows in Supabase (range ' + from + ' to ' + to + '), but found ' + String(found) + '. Missing: ' + String(disc));
-              else out('Validation failed.');
+              if (err) logActivity('Raw Data / Database Records', 'Validation failed: ' + err, 'ERR');
+              else if (disc !== null) logActivity('Raw Data / Database Records', 'Validation failed: expected at least ' + String(expected) + ' rows in Supabase (range ' + from + ' to ' + to + '), but found ' + String(found) + '. Missing: ' + String(disc), 'ERR');
+              else logActivity('Raw Data / Database Records', 'Validation failed.', 'ERR');
+              notify('Warning', 'Database synced, but validation failed (see Activity Log).', 'bad');
             }
           }
           if (!validated && (!from || !to)) {
             setLoad(99, 'Done. (Could not validate)');
-            out('Supabase update OK. Rows upserted: ' + String(upserted) + '. (Could not validate)');
+            logActivity('Raw Data / Database Records', 'Supabase update OK. Rows upserted: ' + String(upserted) + '. (Could not validate)', 'OK');
+            notify('Success', 'Database synced (validation unavailable).', 'ok');
           }
         }
       } catch (e) {
-        out('Update Supabase failed');
+        logActivity('Raw Data / Database Records', 'Update Supabase failed', 'ERR');
         setLoad(Math.min(100, pct), 'Failed.');
+        notify('Error', 'Sync Database failed (see Activity Log).', 'bad');
       } finally {
         clearInterval(t);
         dbUpdateSupabaseBtn.disabled = false;
@@ -8456,7 +11512,50 @@ static partial class Program
     });
 
     const logsRefreshBtn = el('logsRefresh');
-    if (logsRefreshBtn) logsRefreshBtn.addEventListener('click', async () => refreshLogs());
+    if (logsRefreshBtn) logsRefreshBtn.addEventListener('click', async () => {
+      try {
+        const r = await postJson('/api/logs/sync', {});
+        if (r && r.ok) notify('Success', 'System log synced (' + String(r.inserted ?? 0) + ' row(s)).', 'ok');
+        else notify('Warning', 'System log sync failed: ' + String((r && r.error) ? r.error : 'error'), 'bad');
+      } catch {
+        notify('Warning', 'System log sync failed.', 'bad');
+      }
+      await refreshLogs();
+    });
+
+    const activityRefreshBtn = el('activityRefresh');
+    if (activityRefreshBtn) activityRefreshBtn.addEventListener('click', async () => {
+      try {
+        const r = await postJson('/api/activity/sync', {});
+        if (r && r.ok) notify('Success', 'Activity log synced (' + String(r.inserted ?? 0) + ' row(s)).', 'ok');
+        else notify('Warning', 'Activity log sync failed: ' + String((r && r.error) ? r.error : 'error'), 'bad');
+      } catch {
+        notify('Warning', 'Activity log sync failed.', 'bad');
+      }
+    });
+
+    const activityDownloadBtn = el('activityDownload');
+    if (activityDownloadBtn) activityDownloadBtn.addEventListener('click', () => {
+      const text = el('activityLogs')?.textContent || '';
+      const ts = nowKlFileStamp();
+      downloadTextFile('activity_log_' + ts + '.txt', text);
+      notify('Success', 'Activity log downloaded.', 'ok');
+    });
+
+    const systemDownloadBtn = el('systemDownload');
+    if (systemDownloadBtn) systemDownloadBtn.addEventListener('click', () => {
+      const text = (lastSystemLogLines || []).join('\n');
+      const ts = nowKlFileStamp();
+      downloadTextFile('system_log_' + ts + '.txt', text);
+      notify('Success', 'System log downloaded.', 'ok');
+    });
+
+    const activityClearBtn = el('activityClear');
+    if (activityClearBtn) activityClearBtn.addEventListener('click', () => {
+      const x = el('activityLogs');
+      if (x) x.textContent = '';
+      notify('Success', 'Activity log cleared.', 'ok');
+    });
 
     const restartDashboardBtn = el('restartDashboard');
     if (restartDashboardBtn) restartDashboardBtn.addEventListener('click', async () => {
@@ -8464,6 +11563,7 @@ static partial class Program
       if (!ok) return;
       restartDashboardBtn.disabled = true;
       out('Restarting dashboard...');
+      notify('Success', 'Restart requested. The page will reload.', 'ok');
       await postJson('/api/restart', {});
 
       let tries = 0;
@@ -8482,6 +11582,55 @@ static partial class Program
         }
       }, 1000);
     });
+
+    const schedTimeAddBtn = el('schedTimeAdd');
+    if (schedTimeAddBtn) schedTimeAddBtn.addEventListener('click', () => {
+      const raw = el('schedTimeNew')?.value || '';
+      const t = normTimeHHmm(raw);
+      if (!t) { notify('Error', 'Please select a valid time.', 'bad'); return; }
+      setMandatoryTimes((mandatorySyncTimes || []).concat([t]));
+      notify('Success', 'Mandatory sync time added.', 'ok');
+    });
+
+    const schedCards = el('schedTimeCards');
+    if (schedCards) schedCards.addEventListener('click', (e) => {
+      const btn = e && e.target ? e.target.closest('button[data-edit-time],button[data-del-time]') : null;
+      if (!btn) return;
+      const edit = btn.getAttribute('data-edit-time');
+      const del = btn.getAttribute('data-del-time');
+      if (del) {
+        const t = String(del || '').trim();
+        if (!t) return;
+        if (!confirm('Delete mandatory sync time ' + t + '?')) return;
+        setMandatoryTimes((mandatorySyncTimes || []).filter(x => String(x) !== t));
+        notify('Success', 'Mandatory sync time deleted.', 'ok');
+        return;
+      }
+      if (edit) {
+        const oldT = String(edit || '').trim();
+        openModalHtml('Edit Mandatory Sync Time', '' +
+          '<div class="formGrid compactLabels">' +
+            '<label>Time</label>' +
+            '<input id="editSyncTime" type="time" step="60" class="timeInput" value="' + escHtml(oldT) + '" />' +
+          '</div>'
+        , {
+          onSaveAsync: async () => {
+            const v = normTimeHHmm(el('editSyncTime')?.value || '');
+            if (!v) throw new Error('Please select a valid time.');
+            const next = (mandatorySyncTimes || []).map(x => (String(x) === oldT ? v : x));
+            setMandatoryTimes(next);
+            notify('Success', 'Mandatory sync time updated.', 'ok');
+          }
+        });
+      }
+    });
+
+    const supaPubTa = el('supaPubKey'); if (supaPubTa) supaPubTa.addEventListener('input', () => autoGrowTextarea(supaPubTa));
+    const supaKeyTa = el('supaKey'); if (supaKeyTa) supaKeyTa.addEventListener('input', () => autoGrowTextarea(supaKeyTa));
+    const supaJwtTa = el('supaJwt'); if (supaJwtTa) supaJwtTa.addEventListener('input', () => autoGrowTextarea(supaJwtTa));
+    try { if (supaPubTa) autoGrowTextarea(supaPubTa); } catch { }
+    try { if (supaKeyTa) autoGrowTextarea(supaKeyTa); } catch { }
+    try { if (supaJwtTa) autoGrowTextarea(supaJwtTa); } catch { }
 
     const saveDeviceBtn = el('saveDevice');
     if (saveDeviceBtn) saveDeviceBtn.addEventListener('click', async () => {
@@ -8537,30 +11686,96 @@ static partial class Program
     const connectNowBtn = el('connectNow');
     if (connectNowBtn) connectNowBtn.addEventListener('click', async () => {
       connectNowBtn.disabled = true;
-      const t = getDeviceTarget();
+      let ok = false;
       try {
+        out('');
+        const t = getDeviceTarget();
         const readerMode = (el('setReader')?.value || '').trim();
-        const body = { deviceIp: (t.ip || '').trim(), devicePort: (t.port ?? null), readerMode };
-        const r = await postJson('/api/device/connect', body);
-        const ip = (r && r.deviceIp) ? r.deviceIp : (t.ip || '-');
-        const port = (r && (r.devicePort ?? null) !== null) ? r.devicePort : (t.port ?? '-');
-        const target = ip + ':' + port;
+        const ip = (t.ip || '').trim();
+        const port = (t.port ?? null);
+        const target = (ip || '-') + ':' + (port ?? '-');
+
+        logActivity('Settings / Device', 'Connect Now started: saving device settings...', 'TRACE');
+        outAppend('Saving device settings...');
+        const saveRes = await postJson('/api/settings', { deviceIp: ip, devicePort: port, readerMode });
+        if (saveRes && saveRes.ok === false) {
+          outAppend('Save device failed: ' + String(saveRes.error || 'error'));
+          logActivity('Settings / Device', 'Save device failed: ' + String(saveRes.error || 'error'), 'ERR');
+          notify('Error', 'Save Device failed (see Activity Log).', 'bad');
+          return;
+        }
+        outAppend('Saved device.');
+
+        logActivity('Settings / Device', 'Pinging device ' + target + '...', 'TRACE');
+        outAppend('Pinging device...');
+        const pingRes = await postJson('/api/device/ping', {});
+        if (!pingRes || pingRes.ok !== true) {
+          const e = pingRes && pingRes.error ? String(pingRes.error) : 'ping failed';
+          outAppend('Ping failed: ' + e);
+          logActivity('Settings / Device', 'Ping failed: ' + e, 'ERR');
+          notify('Error', 'Ping failed (see Activity Log).', 'bad');
+          return;
+        }
+        outAppend('Ping OK ' + (pingRes.rttMs ? (pingRes.rttMs + 'ms') : ''));
+
+        logActivity('Settings / Device', 'Testing TCP to ' + target + '...', 'TRACE');
+        outAppend('Testing TCP...');
+        const testRes = await postJson('/api/device/test', {});
+        if (!testRes || testRes.ok !== true) {
+          const e = testRes && testRes.error ? String(testRes.error) : 'tcp test failed';
+          outAppend('TCP failed: ' + e);
+          logActivity('Settings / Device', 'TCP failed: ' + e, 'ERR');
+          notify('Error', 'TCP test failed (see Activity Log).', 'bad');
+          return;
+        }
+        outAppend('TCP OK ' + (testRes.rttMs ? (testRes.rttMs + 'ms') : ''));
+
+        logActivity('Settings / Device', 'Connecting (TCP) to ' + target + '...', 'TRACE');
+        outAppend('Connecting...');
+        const r = await postJson('/api/device/connect', { deviceIp: ip, devicePort: port, readerMode });
         if (r && r.ok) {
+          ok = true;
           let msg = 'Connected (TCP) to ' + target + ' ' + (r.rttMs ? (r.rttMs + 'ms') : '');
           if (r.verifyOk === true) msg += ' | Verified (read OK)';
           else if (r.verifyOk === false) msg += ' | Verify failed: ' + String(r.verifyError || 'error');
-          out(msg);
+          outAppend(msg);
+          logActivity('Settings / Device', msg, 'OK');
+          notify('Success', 'Connected to device.', 'ok');
+        } else {
+          const msg = (r && r.ok === false) ? String(r.error || 'error') : 'Connect failed';
+          outAppend('Connect failed: ' + msg);
+          logActivity('Settings / Device', 'Connect failed: ' + msg, 'ERR');
+          notify('Error', 'Connect failed (see Activity Log).', 'bad');
         }
-        else if (r && r.ok === false) {
-          const hint = String(r.error || 'error') === 'timeout' ? ' (device not reachable from this PC)' : '';
-          out('Connect failed to ' + target + ': ' + String(r.error || 'error') + hint);
-        }
-        else out('Connect failed');
       } finally {
         connectNowBtn.disabled = false;
       }
       await refreshStatus();
       await refreshPresets();
+      if (ok) triggerAutoSync('device-connect', true);
+    });
+
+    const grantAdminBtn = el('grantAdminBtn');
+    if (grantAdminBtn) grantAdminBtn.addEventListener('click', async () => {
+      const uid = (el('grantAdminUserId')?.value || '').trim();
+      if (!uid) { out('Please enter a User ID.'); return; }
+      grantAdminBtn.disabled = true;
+      try {
+        logActivity('Settings / Device', 'Granting admin to User ID ' + uid + '...');
+        const r = await postJson('/api/device/user/grant-admin', { user_id: uid });
+        if (r && r.ok) {
+          out('Admin granted for User ID ' + uid + '.');
+          logActivity('Settings / Device', 'Admin granted for User ID ' + uid + '.', 'OK');
+        } else {
+          const msg = (r && r.error) ? String(r.error) : 'Grant admin failed';
+          out('Grant admin failed: ' + msg);
+          logActivity('Settings / Device', 'Grant admin failed: ' + msg, 'ERR');
+        }
+      } finally {
+        grantAdminBtn.disabled = false;
+      }
+      await refreshStatus();
+      await refreshLogs();
     });
 
     const disconnectNowBtn = el('disconnectNow');
@@ -8570,69 +11785,255 @@ static partial class Program
         const r = await postJson('/api/device/disconnect', {});
         if (r && r.ok === false) out(r.error || 'Disconnect failed');
         else out('Disconnected.');
+        if (r && r.ok === false) notify('Error', 'Disconnect failed (see Activity Log).', 'bad');
+        else notify('Success', 'Disconnected from device.', 'ok');
       } finally {
         disconnectNowBtn.disabled = false;
       }
       await refreshStatus();
     });
 
-    async function uploadDeviceFile() {
-      const f = el('devFile').files && el('devFile').files[0];
-      if (!f) return;
-      const fd = new FormData();
-      fd.append('file', f, f.name);
-      try {
-        const res = await fetch('/api/records/upload', { method: 'POST', body: fd, credentials: 'same-origin' });
-        if (res.status === 401) { out('Unauthorized. Please reload and login again.'); return; }
-        if (!res.ok) { out('Load file failed: ' + (await res.text())); return; }
-        const j = await res.json();
-        lastDeviceRows = j ? (j.rows || []) : [];
-        const filtered = applyAttlogFilters(lastDeviceRows, el('devFilterStaff').value, el('devFilterFrom').value, el('devFilterTo').value);
-        await renderAttlogTable(filtered, 'No device records. Import a file or refresh from device.');
-        await refreshStatus();
-      } catch (e) {
-        out('Load file failed: ' + String(e));
-      }
-    }
-
-    const devLoadFileBtn = el('devLoadFile');
-    if (devLoadFileBtn) devLoadFileBtn.addEventListener('click', uploadDeviceFile);
-    for (const id of ['devFilterStaff','devFilterFrom','devFilterTo']) {
-      const x = el(id);
-      if (!x) continue;
-      x.addEventListener('input', () => renderAttlogTable(applyAttlogFilters(lastDeviceRows, el('devFilterStaff').value, el('devFilterFrom').value, el('devFilterTo').value), 'No device records. Import a file or run Sync Now.'));
-      x.addEventListener('change', () => renderAttlogTable(applyAttlogFilters(lastDeviceRows, el('devFilterStaff').value, el('devFilterFrom').value, el('devFilterTo').value), 'No device records. Import a file or run Sync Now.'));
-    }
-    for (const id of ['dbFilterStaff','dbFilterFrom','dbFilterTo']) {
-      const x = el(id);
-      if (!x) continue;
-      x.addEventListener('input', () => renderTable('dbBody', applyFilters(lastDbRows, el('dbFilterStaff').value, el('dbFilterFrom').value, el('dbFilterTo').value), 'No database records or Supabase not configured.'));
-      x.addEventListener('change', () => renderTable('dbBody', applyFilters(lastDbRows, el('dbFilterStaff').value, el('dbFilterFrom').value, el('dbFilterTo').value), 'No database records or Supabase not configured.'));
-    }
-    const staffFilterEl = el('staffFilter');
-    if (staffFilterEl) {
-      staffFilterEl.addEventListener('input', () => renderStaffTable(applyStaffFilters(lastStaffRows, staffFilterEl.value), 'No staff records.'));
-      staffFilterEl.addEventListener('change', () => renderStaffTable(applyStaffFilters(lastStaffRows, staffFilterEl.value), 'No staff records.'));
-    }
-    const shiftFilterEl = el('shiftFilter');
-    if (shiftFilterEl) {
-      shiftFilterEl.addEventListener('input', () => refreshShiftPatterns());
-      shiftFilterEl.addEventListener('change', () => refreshShiftPatterns());
-    }
     const devCsvBtn = el('devCsv');
     if (devCsvBtn) devCsvBtn.addEventListener('click', () => {
-      const filtered = applyAttlogFilters(lastDeviceRows, el('devFilterStaff').value, el('devFilterFrom').value, el('devFilterTo').value);
-      downloadAttlogCsv('1_attlog.csv', filtered);
+      const rows = (lastDeviceRows || [])
+        .slice()
+        .sort((a, b) => String(b.datetime ?? '').localeCompare(String(a.datetime ?? '')));
+      downloadAttlogCsv('1_attlog.csv', rows);
     });
     const dbCsvBtn = el('dbCsv');
     if (dbCsvBtn) dbCsvBtn.addEventListener('click', () => {
-      const filtered = applyFilters(lastDbRows, el('dbFilterStaff').value, el('dbFilterFrom').value, el('dbFilterTo').value);
-      downloadCsv('db_records.csv', filtered);
+      const rows = (lastDbRows || [])
+        .slice()
+        .sort((a, b) => String(b.datetime ?? '').localeCompare(String(a.datetime ?? '')));
+      downloadCsv('db_records.csv', rows);
     });
     const staffExportBtn = el('staffExport');
     if (staffExportBtn) staffExportBtn.addEventListener('click', () => {
-      const filtered = applyStaffFilters(lastStaffRows, el('staffFilter')?.value || '');
-      downloadStaffCsv('staff_records.csv', filtered);
+      downloadStaffCsv('staff_records.csv', currentStaffViewRows());
+      notify('Success', 'Download started.', 'ok');
+    });
+
+    const staffImportBtn = el('staffImport');
+    if (staffImportBtn) staffImportBtn.addEventListener('click', () => {
+      if (!isSuperadmin) return;
+      openModalHtml('Import Staff CSV', '' +
+        '<div class="formGrid">' +
+          '<label>CSV File</label>' +
+          '<input id="staffImportFile" type="file" accept=".csv" />' +
+          '<label>Mode</label>' +
+          '<div class="pill ok">Merge/Upsert by User ID</div>' +
+        '</div>' +
+        '<div class="hint" style="margin-top:10px">Use "Download CSV" as the template format.</div>'
+      , {
+        onSaveAsync: async () => {
+          const fileEl = el('staffImportFile');
+          const file = fileEl && fileEl.files && fileEl.files.length ? fileEl.files[0] : null;
+          if (!file) throw new Error('Please choose a CSV file.');
+
+          const text = await file.text();
+          const parsed = parseCsv(text);
+          if (!parsed.length) throw new Error('CSV is empty.');
+          const header = parsed[0].map(x => String(x ?? '').trim().toLowerCase());
+          const idx = (name) => {
+            const n = String(name).trim().toLowerCase();
+            return header.findIndex(h => h.replace(/\s+/g, ' ') === n || h.replace(/\s+/g, '') === n.replace(/\s+/g, ''));
+          };
+
+          const iUser = idx('user id');
+          const iFirst = idx('first name');
+          const iFull = idx('full name');
+          const iRole = idx('role');
+          const iDept = idx('department');
+          const iStatus = idx('status');
+          const iJoined = idx('date joined');
+          const iShift = idx('shift pattern');
+          if (iUser === -1) throw new Error('Missing required column "User ID".');
+
+          const imported = [];
+          for (let r = 1; r < parsed.length; r++) {
+            const row = parsed[r];
+            const raw = {
+              user_id: row[iUser] ?? '',
+              full_name: (iFirst !== -1 ? row[iFirst] : '') || (iFull !== -1 ? row[iFull] : ''),
+              role: iRole !== -1 ? row[iRole] : '',
+              department: iDept !== -1 ? row[iDept] : '',
+              status: iStatus !== -1 ? row[iStatus] : '',
+              date_joined: iJoined !== -1 ? row[iJoined] : '',
+              shift_pattern: iShift !== -1 ? row[iShift] : '',
+            };
+            const normalized = normalizeStaffRow(raw);
+            if (normalized) imported.push(normalized);
+          }
+          if (!imported.length) throw new Error('No valid rows found.');
+
+          const existingMap = new Map();
+          for (const r of (lastStaffRows || [])) {
+            const id = String(r.user_id ?? '').trim();
+            if (!id) continue;
+            existingMap.set(id, r);
+          }
+
+          const importMap = new Map();
+          for (const r of imported) {
+            const id = String(r.user_id ?? '').trim();
+            if (!id) continue;
+            importMap.set(id, r);
+          }
+
+          let added = 0;
+          let updated = 0;
+          for (const [id, r] of importMap.entries()) {
+            if (existingMap.has(id)) updated++;
+            else added++;
+            existingMap.set(id, r);
+          }
+
+          lastStaffRows = Array.from(existingMap.values()).sort((a, b) => {
+            const an = Number(String(a.user_id ?? '').trim());
+            const bn = Number(String(b.user_id ?? '').trim());
+            if (Number.isFinite(an) && Number.isFinite(bn) && an !== bn) return an - bn;
+            return String(a.user_id ?? '').localeCompare(String(b.user_id ?? ''));
+          });
+
+          logActivity('Staff Records / Employee List', 'Importing (upsert) ' + importMap.size + ' row(s) to Supabase... added=' + added + ' updated=' + updated + ' total=' + lastStaffRows.length);
+          await saveStaffRows(lastStaffRows);
+          await renderStaffTable(currentStaffViewRows(), 'No staff records.');
+          refreshStaffRecords();
+          logActivity('Staff Records / Employee List', 'Import complete.', 'OK');
+        }
+      });
+    });
+
+    const shiftExportBtn = el('shiftExport');
+    if (shiftExportBtn) shiftExportBtn.addEventListener('click', () => {
+      downloadShiftCsv('shift_patterns.csv', (lastShiftRows && lastShiftRows.length ? lastShiftRows : fallbackShiftRows));
+    });
+
+    const shiftImportBtn = el('shiftImport');
+    if (shiftImportBtn) shiftImportBtn.addEventListener('click', () => {
+      if (!isSuperadmin) return;
+      openModalHtml('Import Shift Pattern CSV', '' +
+        '<div class="formGrid">' +
+          '<label>CSV File</label>' +
+          '<input id="shiftImportFile" type="file" accept=".csv" />' +
+          '<label>Mode</label>' +
+          '<div class="pill ok">Merge/Upsert by Pattern</div>' +
+        '</div>' +
+        '<div class="hint" style="margin-top:10px">Use "Download CSV" as the template format.</div>'
+      , {
+        onSaveAsync: async () => {
+          const fileEl = el('shiftImportFile');
+          const file = fileEl && fileEl.files && fileEl.files.length ? fileEl.files[0] : null;
+          if (!file) throw new Error('Please choose a CSV file.');
+
+          const text = await file.text();
+          const parsed = parseCsv(text);
+          if (!parsed.length) throw new Error('CSV is empty.');
+          const header = parsed[0].map(x => String(x ?? '').trim().toLowerCase());
+          const idx = (name) => {
+            const n = String(name).trim().toLowerCase();
+            return header.findIndex(h => h.replace(/\s+/g, ' ') === n || h.replace(/\s+/g, '') === n.replace(/\s+/g, ''));
+          };
+
+          const iPattern = idx('pattern');
+          const iDays = idx('working days');
+          const iHours = idx('working hours');
+          const iBreak = idx('break');
+          const iNotes = idx('notes');
+          if (iPattern === -1) throw new Error('Missing required column "Pattern".');
+
+          const imported = [];
+          for (let r = 1; r < parsed.length; r++) {
+            const row = parsed[r];
+            const pattern = String(row[iPattern] ?? '').trim();
+            if (!pattern) continue;
+            imported.push({
+              pattern,
+              workingDays: iDays !== -1 ? String(row[iDays] ?? '').trim() : '',
+              workingHours: iHours !== -1 ? String(row[iHours] ?? '').trim() : '',
+              break: iBreak !== -1 ? String(row[iBreak] ?? '').trim() : '',
+              notes: iNotes !== -1 ? String(row[iNotes] ?? '').trim() : '',
+            });
+          }
+          if (!imported.length) throw new Error('No valid rows found.');
+
+          const existingMap = new Map();
+          for (const r of (lastShiftRows || [])) {
+            const id = String(r.pattern ?? '').trim();
+            if (!id) continue;
+            existingMap.set(id, r);
+          }
+
+          const importMap = new Map();
+          for (const r of imported) {
+            const id = String(r.pattern ?? '').trim();
+            if (!id) continue;
+            importMap.set(id, r);
+          }
+
+          let added = 0;
+          let updated = 0;
+          for (const [id, r] of importMap.entries()) {
+            if (existingMap.has(id)) updated++;
+            else added++;
+            existingMap.set(id, r);
+          }
+
+          lastShiftRows = Array.from(existingMap.values()).sort((a, b) => String(a.pattern ?? '').localeCompare(String(b.pattern ?? '')));
+          logActivity('Staff Records / Shift Pattern', 'Importing (upsert) ' + importMap.size + ' shift pattern(s)... added=' + added + ' updated=' + updated + ' total=' + lastShiftRows.length);
+          await saveShiftRows(lastShiftRows);
+          await renderShiftTable(applyShiftFilters(lastShiftRows, ''));
+          refreshShiftPatterns();
+          logActivity('Staff Records / Shift Pattern', 'Import complete.', 'OK');
+        }
+      });
+    });
+
+    const staffSelectAll = el('staffSelectAll');
+    if (staffSelectAll) staffSelectAll.addEventListener('change', () => {
+      const body = el('staffBody');
+      if (!body) return;
+      const checked = !!staffSelectAll.checked;
+      for (const cb of body.querySelectorAll('input.staffChk[type="checkbox"]')) {
+        const id = String(cb.getAttribute('data-id') || '').trim();
+        if (checked) staffSelectedIds.add(id);
+        else staffSelectedIds.delete(id);
+        cb.checked = checked;
+      }
+      updateStaffDeleteEnabled();
+    });
+
+    const staffHead = document.querySelector('#subtab-staff-staff thead');
+    if (staffHead) staffHead.addEventListener('click', (e) => {
+      const t = e && e.target;
+      const th = (t && t.closest) ? t.closest('th[data-sort]') : null;
+      if (!th || !isSuperadmin) return;
+      const key = String(th.getAttribute('data-sort') || '').trim();
+      if (!key) return;
+      if (staffSortKey === key) staffSortDir = (staffSortDir === 'asc' ? 'desc' : 'asc');
+      else { staffSortKey = key; staffSortDir = 'asc'; }
+      updateStaffSortUi();
+      renderStaffTable(currentStaffViewRows(), 'No staff records.');
+    });
+
+    const staffProvisionSelectedBtn = el('staffProvisionSelected');
+    if (staffProvisionSelectedBtn) staffProvisionSelectedBtn.addEventListener('click', async () => {
+      if (!isSuperadmin) return;
+      const ids = Array.from(staffSelectedIds);
+      if (!ids.length) return;
+      staffProvisionSelectedBtn.disabled = true;
+      try {
+        out('');
+        for (const id of ids) {
+          const row = lastStaffRows.find(r => String(r.user_id ?? '').trim() === id);
+          if (!row) continue;
+          await provisionStaffToDevice(row, null);
+        }
+        notify('Success', 'Device updated for selected staff.', 'ok');
+      } finally {
+        staffProvisionSelectedBtn.disabled = false;
+        updateStaffDeleteEnabled();
+      }
     });
 
     const modalCloseBtn = el('modalClose');
@@ -8652,7 +12053,7 @@ static partial class Program
         const userId = String(vals.user_id || '').trim();
         if (!userId) throw new Error('User ID is required');
         if (lastStaffRows.some(r => String(r.user_id ?? '').trim() === userId)) throw new Error('User ID already exists');
-        const row = {
+        const normalized = normalizeStaffRow({
           user_id: userId,
           full_name: String(vals.full_name || '').trim(),
           role: String(vals.role || '').trim(),
@@ -8660,11 +12061,13 @@ static partial class Program
           status: String(vals.status || '').trim(),
           date_joined: String(vals.date_joined || '').trim(),
           shift_pattern: String(vals.shift_pattern || '').trim(),
-        };
-        lastStaffRows = lastStaffRows.concat([row]).sort((a, b) => String(a.user_id ?? '').localeCompare(String(b.user_id ?? '')));
+        });
+        if (!normalized) throw new Error('Invalid staff row');
+        lastStaffRows = lastStaffRows.concat([normalized]).sort((a, b) => String(a.user_id ?? '').localeCompare(String(b.user_id ?? '')));
         await saveStaffRows(lastStaffRows);
-        await refreshStaffRecords();
-        if (vals.provision_to_device) await provisionStaffToDevice(row);
+        await renderStaffTable(currentStaffViewRows(), 'No staff records.');
+        refreshStaffRecords();
+        if (vals.provision_to_device) await provisionStaffToDevice(normalized, null);
       });
     });
 
@@ -8672,27 +12075,33 @@ static partial class Program
     if (staffBodyEl) {
       staffBodyEl.addEventListener('change', (e) => {
         const t = e && e.target;
-        if (t && t.classList && t.classList.contains('staffChk')) updateStaffDeleteEnabled();
+        if (!t || !t.classList || !t.classList.contains('staffChk')) return;
+        const id = String(t.getAttribute('data-id') || '').trim();
+        if (t.checked) staffSelectedIds.add(id);
+        else staffSelectedIds.delete(id);
+        updateStaffDeleteEnabled();
       });
       staffBodyEl.addEventListener('click', (e) => {
         const t = e && e.target;
-        if (t && t.classList && t.classList.contains('staffProvisionRow')) {
-          const id = String(t.getAttribute('data-id') || '').trim();
+        const target = (t && t.closest) ? t.closest('button.staffProvisionRow,button.staffEditRow') : null;
+        if (!target || !target.classList) return;
+        if (target.classList.contains('staffProvisionRow')) {
+          const id = String(target.getAttribute('data-id') || '').trim();
           if (!id) return;
           const existing = lastStaffRows.find(r => String(r.user_id ?? '').trim() === id);
           if (!existing) return;
-          provisionStaffToDevice(existing);
+          provisionStaffToDevice(existing, target);
           return;
         }
-        if (!t || !t.classList || !t.classList.contains('staffEditRow')) return;
-        const id = String(t.getAttribute('data-id') || '').trim();
+        if (!target.classList.contains('staffEditRow')) return;
+        const id = String(target.getAttribute('data-id') || '').trim();
         if (!id) return;
         const existing = lastStaffRows.find(r => String(r.user_id ?? '').trim() === id);
         if (!existing) return;
         refreshShiftPatterns().then(() => openModal('Edit Staff', staffFields('edit'), existing, async (vals) => {
           lastStaffRows = lastStaffRows.map(r => {
             if (String(r.user_id ?? '').trim() !== id) return r;
-            return {
+            return normalizeStaffRow({
               user_id: id,
               full_name: String(vals.full_name || '').trim(),
               role: String(vals.role || '').trim(),
@@ -8700,78 +12109,216 @@ static partial class Program
               status: String(vals.status || '').trim(),
               date_joined: String(vals.date_joined || '').trim(),
               shift_pattern: String(vals.shift_pattern || '').trim(),
-            };
+            }) || r;
           });
           await saveStaffRows(lastStaffRows);
-          await refreshStaffRecords();
+          await renderStaffTable(currentStaffViewRows(), 'No staff records.');
+          refreshStaffRecords();
         }));
       });
     }
 
     const staffDeleteBtn = el('staffDelete');
     if (staffDeleteBtn) staffDeleteBtn.addEventListener('click', async () => {
-      const ids = getCheckedDataIds('staffBody', 'staffChk');
+      const ids = Array.from(staffSelectedIds);
       if (!ids.length) return;
       if (!confirm('Delete ' + ids.length + ' staff record(s)?')) return;
+      for (const id of ids) staffSelectedIds.delete(id);
       lastStaffRows = (lastStaffRows || []).filter(r => !ids.includes(String(r.user_id ?? '').trim()));
       await saveStaffRows(lastStaffRows);
       await refreshStaffRecords();
+      notify('Success', 'Staff records deleted.', 'ok');
     });
 
     const shiftAddBtn = el('shiftAdd');
-    if (shiftAddBtn) shiftAddBtn.addEventListener('click', () => {
-      openModal('Add Shift Pattern', shiftFields('add'), {}, async (vals) => {
-        const pattern = String(vals.pattern || '').trim();
-        if (!pattern) throw new Error('Pattern is required');
-        if (lastShiftRows.some(r => String(r.pattern ?? '').trim() === pattern)) throw new Error('Pattern already exists');
-        const row = {
-          pattern,
-          workingDays: String(vals.workingDays || '').trim(),
-          workingHours: String(vals.workingHours || '').trim(),
-          break: String(vals.break || '').trim(),
-          notes: String(vals.notes || '').trim(),
-        };
-        lastShiftRows = lastShiftRows.concat([row]).sort((a, b) => String(a.pattern ?? '').localeCompare(String(b.pattern ?? '')));
-        await saveShiftRows(lastShiftRows);
-        await refreshShiftPatterns();
+    function parseTimeRangeText(raw) {
+      const s = String(raw || '').trim();
+      if (!s) return { start: '', end: '' };
+      const sep = s.includes('–') ? '–' : (s.includes('-') ? '-' : null);
+      if (!sep) return { start: '', end: '' };
+      const p = s.split(sep).map(x => String(x || '').trim()).filter(Boolean);
+      if (p.length !== 2) return { start: '', end: '' };
+      return { start: p[0].slice(0, 5), end: p[1].slice(0, 5) };
+    }
+
+    function normalizeHm(raw) {
+      const s = String(raw || '').trim();
+      const m = s.match(/^(\d{1,2}):(\d{2})$/);
+      if (!m) return '';
+      const hh = Number(m[1]);
+      const mm = Number(m[2]);
+      if (hh < 0 || hh > 23 || mm < 0 || mm > 59) return '';
+      return String(hh).padStart(2, '0') + ':' + String(mm).padStart(2, '0');
+    }
+
+    function openShiftPatternModal(mode, existing) {
+      const isEdit = mode === 'edit';
+      const row = existing || {};
+      const pattern = String(row.pattern || '').trim();
+      const wdRaw = String(row.workingDays || '').trim() || 'Mon–Fri';
+      const wh = parseTimeRangeText(row.workingHours || '');
+      const br = parseTimeRangeText(row.break || '');
+      const notes = String(row.notes || '').trim();
+
+      function parseWdSet(raw) {
+        const s0 = String(raw || '').trim();
+        const set = new Set();
+        const order = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+        function normDayToken(x) {
+          const k = String(x || '').trim().slice(0, 3).toLowerCase();
+          if (k === 'mon') return 'Mon';
+          if (k === 'tue') return 'Tue';
+          if (k === 'wed') return 'Wed';
+          if (k === 'thu') return 'Thu';
+          if (k === 'fri') return 'Fri';
+          if (k === 'sat') return 'Sat';
+          if (k === 'sun') return 'Sun';
+          return '';
+        }
+        function addRange(aRaw, bRaw) {
+          const a = normDayToken(aRaw);
+          const b = normDayToken(bRaw);
+          const ai = order.indexOf(a);
+          const bi = order.indexOf(b);
+          if (ai < 0 || bi < 0) return false;
+          let cur = ai;
+          while (true) {
+            set.add(order[cur]);
+            if (cur === bi) break;
+            cur = (cur + 1) % 7;
+          }
+          return true;
+        }
+        if (!s0) { for (const d of ['Mon','Tue','Wed','Thu','Fri']) set.add(d); return set; }
+        const s = s0.replace(/to/ig, '–').replace(/-/g, '–');
+        const parts = s.split(',').map(x => String(x || '').trim()).filter(Boolean);
+        for (const p of parts) {
+          if (p.includes('–')) {
+            const rr = p.split('–').map(x => String(x || '').trim()).filter(Boolean);
+            if (rr.length === 2 && addRange(rr[0], rr[1])) continue;
+          }
+          const d = normDayToken(p);
+          if (d) set.add(d);
+        }
+        if (!set.size && s.includes('–')) {
+          const rr = s.split('–').map(x => String(x || '').trim()).filter(Boolean);
+          if (rr.length === 2) addRange(rr[0], rr[1]);
+        }
+        if (!set.size) { for (const d of ['Mon','Tue','Wed','Thu','Fri']) set.add(d); }
+        return set;
+      }
+
+      const wdSet = parseWdSet(wdRaw);
+      const wdDays = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+      const wdHtml = '<div class="wdBox">' + wdDays.map(d =>
+        '<label class="wdItem"><input class="wdPick" type="checkbox" data-day="' + escHtml(d) + '"' + (wdSet.has(d) ? ' checked' : '') + '/><span>' + escHtml(d) + '</span></label>'
+      ).join('') + '</div>';
+
+      const html =
+        '<div class="modalGrid" style="grid-template-columns:160px minmax(0,1fr)">' +
+          '<label>Pattern</label>' +
+          '<input id="spPattern" ' + (isEdit ? 'disabled' : '') + ' value="' + escHtml(pattern) + '" placeholder="e.g. Normal" />' +
+          '<label>Working Days</label>' +
+          '<div>' + wdHtml + '</div>' +
+          '<label>Working Hours</label>' +
+          '<div class="row" style="gap:10px;flex-wrap:wrap">' +
+            '<input id="spWorkStart" class="timeInput" type="time" step="60" value="' + escHtml(wh.start || '09:00') + '" />' +
+            '<span class="muted">to</span>' +
+            '<input id="spWorkEnd" class="timeInput" type="time" step="60" value="' + escHtml(wh.end || '18:00') + '" />' +
+          '</div>' +
+          '<label>Break</label>' +
+          '<div class="row" style="gap:10px;flex-wrap:wrap">' +
+            '<input id="spBreakStart" class="timeInput" type="time" step="60" value="' + escHtml(br.start || '13:00') + '" />' +
+            '<span class="muted">to</span>' +
+            '<input id="spBreakEnd" class="timeInput" type="time" step="60" value="' + escHtml(br.end || '14:00') + '" />' +
+          '</div>' +
+          '<label>Notes</label>' +
+          '<input id="spNotes" value="' + escHtml(notes) + '" placeholder="Optional" />' +
+        '</div>';
+
+      openModalHtml(isEdit ? 'Edit Shift Pattern' : 'Add Shift Pattern', html, {
+        cancelText: 'Cancel',
+        onSaveAsync: async () => {
+          const p = String(el('spPattern')?.value || '').trim();
+          if (!p) throw new Error('Pattern is required');
+          if (!isEdit && lastShiftRows.some(r => String(r.pattern ?? '').trim() === p)) throw new Error('Pattern already exists');
+
+          const picked = new Set();
+          for (const cb of Array.from(el('modalBody')?.querySelectorAll('input.wdPick[type="checkbox"]') || [])) {
+            const day = String(cb.getAttribute('data-day') || '').trim();
+            if (cb.checked && day) picked.add(day);
+          }
+          const monFri = ['Mon','Tue','Wed','Thu','Fri'];
+          const monSun = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+          let wd = '';
+          if (picked.size === monFri.length && monFri.every(x => picked.has(x))) wd = 'Mon–Fri';
+          else if (picked.size === monSun.length) wd = 'Mon–Sun';
+          else wd = wdDays.filter(x => picked.has(x)).join(', ');
+          if (!wd) wd = 'Mon–Fri';
+
+          const ws = normalizeHm(el('spWorkStart')?.value || '');
+          const we = normalizeHm(el('spWorkEnd')?.value || '');
+          const bs = normalizeHm(el('spBreakStart')?.value || '');
+          const be = normalizeHm(el('spBreakEnd')?.value || '');
+          const workHours = (ws && we) ? (ws + '–' + we) : '';
+          const breakTime = (bs && be) ? (bs + '–' + be) : '';
+          const nt = String(el('spNotes')?.value || '').trim();
+
+          const nextRow = { pattern: p, workingDays: wd, workingHours: workHours, break: breakTime, notes: nt };
+          if (isEdit) {
+            lastShiftRows = lastShiftRows.map(r => (String(r.pattern ?? '').trim() === pattern ? nextRow : r));
+          } else {
+            lastShiftRows = lastShiftRows.concat([nextRow]);
+          }
+          lastShiftRows = (lastShiftRows || []).slice().sort((a, b) => String(a.pattern ?? '').localeCompare(String(b.pattern ?? '')));
+          await saveShiftRows(lastShiftRows);
+          await refreshShiftPatterns();
+          closeModal();
+          notify('Success', isEdit ? 'Shift pattern updated.' : 'Shift pattern added.', 'ok');
+        },
       });
-    });
+
+      for (const t of ['spWorkStart','spWorkEnd','spBreakStart','spBreakEnd']) {
+        const inp = el(t);
+        if (inp && String(inp.type || '').toLowerCase() === 'time') {
+          inp.addEventListener('focus', () => { try { if (inp.showPicker) inp.showPicker(); } catch { } });
+        }
+      }
+    }
+
+    if (shiftAddBtn) shiftAddBtn.addEventListener('click', () => openShiftPatternModal('add', { workingDays: 'Mon–Fri' }));
 
     const shiftBodyEl = el('shiftBody');
     if (shiftBodyEl) {
-      shiftBodyEl.addEventListener('change', (e) => {
+      shiftBodyEl.addEventListener('change', async (e) => {
         const t = e && e.target;
-        if (t && t.classList && t.classList.contains('shiftChk')) updateShiftDeleteEnabled();
+        if (!t) return;
+        if (t.classList && t.classList.contains('shiftChk')) {
+          const id = String(t.getAttribute('data-id') || '').trim();
+          if (t.checked) shiftSelectedKeys.add(id);
+          else shiftSelectedKeys.delete(id);
+          updateShiftDeleteEnabled();
+          return;
+        }
       });
       shiftBodyEl.addEventListener('click', (e) => {
         const t = e && e.target;
-        if (!t || !t.classList || !t.classList.contains('shiftEditRow')) return;
-        const id = String(t.getAttribute('data-id') || '').trim();
+        const target = (t && t.closest) ? t.closest('button.shiftEditRow') : null;
+        if (!target || !target.classList || !target.classList.contains('shiftEditRow')) return;
+        const id = String(target.getAttribute('data-id') || '').trim();
         if (!id) return;
         const existing = lastShiftRows.find(r => String(r.pattern ?? '').trim() === id);
         if (!existing) return;
-        openModal('Edit Shift Pattern', shiftFields('edit'), existing, async (vals) => {
-          lastShiftRows = lastShiftRows.map(r => {
-            if (String(r.pattern ?? '').trim() !== id) return r;
-            return {
-              pattern: id,
-              workingDays: String(vals.workingDays || '').trim(),
-              workingHours: String(vals.workingHours || '').trim(),
-              break: String(vals.break || '').trim(),
-              notes: String(vals.notes || '').trim(),
-            };
-          });
-          await saveShiftRows(lastShiftRows);
-          await refreshShiftPatterns();
-        });
+        openShiftPatternModal('edit', existing);
       });
     }
 
     const shiftDeleteBtn = el('shiftDelete');
     if (shiftDeleteBtn) shiftDeleteBtn.addEventListener('click', async () => {
-      const ids = getCheckedDataIds('shiftBody', 'shiftChk');
+      const ids = Array.from(shiftSelectedKeys);
       if (!ids.length) return;
       if (!confirm('Delete ' + ids.length + ' shift pattern(s)?')) return;
+      for (const id of ids) shiftSelectedKeys.delete(id);
       lastShiftRows = (lastShiftRows || []).filter(r => !ids.includes(String(r.pattern ?? '').trim()));
       await saveShiftRows(lastShiftRows);
       await refreshShiftPatterns();
@@ -8801,23 +12348,36 @@ static partial class Program
       const autoSyncEnabled = el('setAuto').value === 'true';
       const raw = (el('schedTimes')?.value || '').trim();
       const scheduleLocalTimes = raw ? raw.split(',').map(s => s.trim()).filter(s => !!s) : [];
-      let body = { autoSyncEnabled, scheduleLocalTimes };
-      if (!autoSyncEnabled) {
-        const dashboardRefreshMinutes = parseInt(el('setDashRefresh')?.value || '10', 10);
-        body = { autoSyncEnabled, dashboardRefreshMinutes, scheduleLocalTimes };
-      }
+      const everyRaw = (el('pollEvery')?.value || '').trim();
+      const unit = (el('pollUnit')?.value || 'min').trim();
+      const every = Math.max(1, parseInt(everyRaw || '1', 10));
+      const pollIntervalSeconds = unit === 'hr' ? (every * 3600) : (every * 60);
+
+      const dashboardRefreshMinutes = Math.max(1, Math.round(pollIntervalSeconds / 60));
+      const setDashRefresh = el('setDashRefresh');
+      if (setDashRefresh) setDashRefresh.value = String(dashboardRefreshMinutes);
+      const body = { autoSyncEnabled, scheduleLocalTimes, pollIntervalSeconds, dashboardRefreshMinutes };
       const r = await postJson('/api/settings', body);
-      if (r && r.ok === false) out(r.error || 'Save failed');
+      if (r && r.ok === false) {
+        out(r.error || 'Save failed');
+        notify('Error', 'Save Sync failed.', 'bad');
+        return;
+      }
+      notify('Success', 'Sync settings saved.', 'ok');
       await refreshStatus();
     });
 
     const setAutoSel = el('setAuto');
     if (setAutoSel) setAutoSel.addEventListener('change', () => {
       const on = setAutoSel.value === 'true';
-      const dashLabel = el('setDashRefreshLabel');
-      const dashInput = el('setDashRefresh');
-      if (dashLabel) dashLabel.style.display = on ? 'none' : '';
-      if (dashInput) dashInput.style.display = on ? 'none' : '';
+      const pollEvery = el('pollEvery');
+      const pollUnit = el('pollUnit');
+      if (pollEvery) pollEvery.disabled = !on;
+      if (pollUnit) pollUnit.disabled = !on;
+      const refreshPeriodLabel = el('refreshPeriodLabel');
+      const refreshPeriodRow = el('refreshPeriodRow');
+      if (refreshPeriodLabel) refreshPeriodLabel.style.display = on ? '' : 'none';
+      if (refreshPeriodRow) refreshPeriodRow.style.display = on ? '' : 'none';
     });
 
     const saveSupabaseBtn = el('saveSupabase');
@@ -8831,8 +12391,22 @@ static partial class Program
       const supabaseJwt = el('supaJwt').value.trim();
       const body = { supabaseUrl, supabaseAttendanceTable, supabaseSyncEnabled, supabaseServiceRoleKey, supabaseAnonKey, supabaseProjectId, supabaseJwt };
       const r = await postJson('/api/settings', body);
-      el('supaTestResult').textContent = (r && r.ok === false) ? ('Save failed: ' + String(r.error || 'error')) : 'Saved.';
+      if (r && r.ok === false) {
+        el('supaTestResult').textContent = 'Save failed: ' + String(r.error || 'error');
+        notify('Error', 'Save failed (see Activity Log).', 'bad');
+        return;
+      }
+
+      let envOk = false;
+      try {
+        const envRes = await postJson('/api/env/write', { supabaseUrl, supabaseAnonKey, supabaseProjectId, supabaseServiceRoleKey, supabaseJwtSecret: supabaseJwt });
+        envOk = !!(envRes && envRes.ok);
+      } catch { envOk = false; }
+
+      el('supaTestResult').textContent = envOk ? 'Saved (settings + .env.local).' : 'Saved settings. (.env.local write failed)';
+      notify(envOk ? 'Success' : 'Warning', envOk ? 'Settings saved.' : 'Settings saved, but .env.local write failed.', envOk ? 'ok' : 'bad');
       await refreshStatus();
+      if (supabaseSyncEnabled) triggerAutoSync('supabase-save', true);
     });
 
     const testSupabaseBtn = el('testSupabase');
@@ -8840,7 +12414,11 @@ static partial class Program
       el('supaTestResult').textContent = 'Testing...';
       try {
         const r = await postJson('/api/supabase/test', {});
-        if (r.ok) el('supaTestResult').textContent = 'Connection OK (' + (r.rttMs ?? '-') + 'ms)';
+        if (r.ok) {
+          el('supaTestResult').textContent = 'Connection OK (' + (r.rttMs ?? '-') + 'ms)';
+          refreshStatus().catch(() => {});
+          triggerAutoSync('supabase-test', true);
+        }
         else el('supaTestResult').textContent = 'Failed: ' + (r.reason || 'error');
       } catch (e) {
         el('supaTestResult').textContent = 'Failed: ' + String(e);
@@ -8917,15 +12495,6 @@ static partial class Program
         pollBody.appendChild(tr);
       }
     }
-
-    const saveEnvBtn = el('saveEnv');
-    if (saveEnvBtn) saveEnvBtn.addEventListener('click', async () => {
-      const supabaseUrl = el('supaUrl').value.trim();
-      const supabaseAnonKey = el('supaPubKey').value.trim();
-      const supabaseProjectId = el('supaProjectId').value.trim();
-      const r = await postJson('/api/env/write', { supabaseUrl, supabaseAnonKey, supabaseProjectId });
-      el('supaTestResult').textContent = (r && r.ok) ? 'Saved .env.local' : ('Failed: ' + (r && r.error ? r.error : 'error'));
-    });
 
     async function tick() {
       const ok = await refreshStatus();

@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Diagnostics;
 using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Text;
@@ -75,6 +76,74 @@ static partial class Program
     WriteIndented = true,
   };
 
+  private static void LogInfo(string message) => Console.WriteLine("[INFO] " + (message ?? string.Empty));
+  private static void LogWarn(string message) => Console.WriteLine("[WARN] " + (message ?? string.Empty));
+  private static void LogError(string message) => Console.Error.WriteLine("[ERROR] " + (message ?? string.Empty));
+  private static void LogDebug(AppConfig config, string message)
+  {
+    if (config.Debug) Console.WriteLine("[DEBUG] " + (message ?? string.Empty));
+  }
+
+  private static async Task TryWriteSupabaseLogSummary(AppConfig config, string level, string message, object? meta)
+  {
+    try
+    {
+      var table = (Environment.GetEnvironmentVariable("WL10_SUPABASE_LOGS_TABLE") ?? "middleware_logs").Trim();
+      if (table.Length == 0) table = "middleware_logs";
+      if (string.IsNullOrWhiteSpace(config.SupabaseUrl) || string.IsNullOrWhiteSpace(config.SupabaseServiceRoleKey)) return;
+
+      using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+      var url = $"{config.SupabaseUrl.TrimEnd('/')}/rest/v1/{table}";
+      var row = new
+      {
+        device_id = config.DeviceId,
+        level = (level ?? "INFO").Trim(),
+        message = (message ?? string.Empty).Trim(),
+        meta
+      };
+
+      using var req = new HttpRequestMessage(HttpMethod.Post, url);
+      req.Headers.TryAddWithoutValidation("apikey", config.SupabaseServiceRoleKey);
+      req.Headers.TryAddWithoutValidation("Authorization", $"Bearer {config.SupabaseServiceRoleKey}");
+      req.Headers.TryAddWithoutValidation("Prefer", "return=minimal");
+      req.Content = new StringContent(JsonSerializer.Serialize(new[] { row }, JsonOptions), Encoding.UTF8, "application/json");
+      using var resp = await http.SendAsync(req);
+      if (!resp.IsSuccessStatusCode) return;
+      await TryEnforceSupabaseLogRetention(http, config, table);
+    }
+    catch { }
+  }
+
+  private static async Task TryEnforceSupabaseLogRetention(HttpClient http, AppConfig config, string table)
+  {
+    try
+    {
+      var baseUrl = config.SupabaseUrl.TrimEnd('/');
+      var nthUrl = $"{baseUrl}/rest/v1/{table}?select=id&order=id.desc&limit=1&offset=1999";
+      using var nthReq = new HttpRequestMessage(HttpMethod.Get, nthUrl);
+      nthReq.Headers.TryAddWithoutValidation("apikey", config.SupabaseServiceRoleKey);
+      nthReq.Headers.TryAddWithoutValidation("Authorization", $"Bearer {config.SupabaseServiceRoleKey}");
+      using var nthResp = await http.SendAsync(nthReq);
+      if (!nthResp.IsSuccessStatusCode) return;
+      var nthBody = await nthResp.Content.ReadAsStringAsync();
+      using var nthDoc = JsonDocument.Parse(nthBody);
+      if (nthDoc.RootElement.ValueKind != JsonValueKind.Array) return;
+      var first = nthDoc.RootElement.GetArrayLength() > 0 ? nthDoc.RootElement[0] : default;
+      if (first.ValueKind != JsonValueKind.Object) return;
+      var idEl = first.TryGetProperty("id", out var idProp) ? idProp : default;
+      if (idEl.ValueKind != JsonValueKind.Number) return;
+      if (!idEl.TryGetInt64(out var cutoffId) || cutoffId <= 0) return;
+
+      var delUrl = $"{baseUrl}/rest/v1/{table}?id=lt.{cutoffId}";
+      using var delReq = new HttpRequestMessage(HttpMethod.Delete, delUrl);
+      delReq.Headers.TryAddWithoutValidation("apikey", config.SupabaseServiceRoleKey);
+      delReq.Headers.TryAddWithoutValidation("Authorization", $"Bearer {config.SupabaseServiceRoleKey}");
+      delReq.Headers.TryAddWithoutValidation("Prefer", "return=minimal");
+      _ = await http.SendAsync(delReq);
+    }
+    catch { }
+  }
+
   internal static int LastRunPunchCount;
   internal static int LastRunUpsertedCount;
   internal static int LastRunSkippedUpsertCount;
@@ -106,14 +175,29 @@ static partial class Program
         {
           var d = new DirectoryInfo(startDir);
           string? firstFound = null;
-          for (var i = 0; i < 10 && d is not null; i++)
+          for (var i = 0; i < 25 && d is not null; i++)
           {
-            var candidate = Path.Combine(d.FullName, "Reference");
+            if (d.Name.Equals("SHAB Attendance System", StringComparison.OrdinalIgnoreCase))
+            {
+              var direct = Path.Combine(d.FullName, "Reference");
+              if (Directory.Exists(direct)) return direct;
+            }
+
+            var shabRef = Path.Combine(d.FullName, "SHAB Attendance System", "Reference");
+            if (Directory.Exists(shabRef)) return shabRef;
+
+            var candidate = d.Name.Equals("SHAB Attendance System", StringComparison.OrdinalIgnoreCase)
+              ? Path.Combine(d.FullName, "Reference")
+              : Path.Combine(d.FullName, "Reference");
             if (Directory.Exists(candidate))
             {
               firstFound ??= candidate;
-              var gitDir = Path.Combine(d.FullName, ".git");
-              if (Directory.Exists(gitDir)) return candidate;
+              if (File.Exists(Path.Combine(candidate, "1_attlog.dat"))) return candidate;
+              var shabRoot = Path.GetDirectoryName(candidate);
+              if (!string.IsNullOrWhiteSpace(shabRoot) && shabRoot.Contains("SHAB Attendance System", StringComparison.OrdinalIgnoreCase))
+              {
+                firstFound = candidate;
+              }
             }
             d = d.Parent;
           }
@@ -287,7 +371,15 @@ static partial class Program
         }
         catch (Exception ex)
         {
-          Console.Error.WriteLine($"Poll error: {ex}");
+          LogError("Poll error: " + ex.Message);
+          LogDebug(config, ex.ToString());
+          await TryWriteSupabaseLogSummary(config, "ERROR", "Poll error", new
+          {
+            device_ip = config.DeviceIp,
+            device_port = config.DevicePort,
+            error = ex.Message,
+            error_type = ex.GetType().FullName,
+          });
         }
 
         await Task.Delay(TimeSpan.FromSeconds(config.PollIntervalSeconds));
@@ -539,7 +631,7 @@ static partial class Program
     using var http = new HttpClient();
     http.Timeout = TimeSpan.FromSeconds(15);
 
-    var url = $"{config.SupabaseUrl.TrimEnd('/')}/rest/v1/{config.SupabaseAttendanceTable}?select=staff_id,datetime,verified,status,workcode,reserved,created_at&order=datetime.desc&limit={limit}";
+    var url = $"{config.SupabaseUrl.TrimEnd('/')}/rest/v1/{config.SupabaseAttendanceTable}?select=staff_id,device_id,datetime,occurred_at,event_date,verified,status,workcode,reserved,created_at&order=occurred_at.desc&limit={limit}";
 
     using var req = new HttpRequestMessage(HttpMethod.Get, url);
     req.Headers.TryAddWithoutValidation("apikey", config.SupabaseServiceRoleKey);
@@ -576,7 +668,10 @@ static partial class Program
       .ToArray();
 
     var eventDates = rows
-      .Select(el => el.TryGetProperty("datetime", out var dtEl) && dtEl.ValueKind == JsonValueKind.String ? dtEl.GetString() : null)
+      .Select(el =>
+        el.TryGetProperty("event_date", out var dEl) && dEl.ValueKind == JsonValueKind.String ? dEl.GetString()
+        : (el.TryGetProperty("occurred_at", out var dtEl) && dtEl.ValueKind == JsonValueKind.String ? dtEl.GetString() : null)
+      )
       .OfType<string>()
       .Where(d => !string.IsNullOrWhiteSpace(d) && d.Length >= 10)
       .Select(d => d.Trim()[..10])
@@ -590,7 +685,10 @@ static partial class Program
     {
       var el = rows[i];
       var staffId = el.TryGetProperty("staff_id", out var staffEl) && staffEl.ValueKind == JsonValueKind.String ? staffEl.GetString() : null;
+      var occurredAt = el.TryGetProperty("occurred_at", out var oaEl) && oaEl.ValueKind == JsonValueKind.String ? oaEl.GetString() : null;
+      var deviceId = el.TryGetProperty("device_id", out var didEl) && didEl.ValueKind == JsonValueKind.String ? didEl.GetString() : null;
       var datetime = el.TryGetProperty("datetime", out var dtEl) && dtEl.ValueKind == JsonValueKind.String ? dtEl.GetString() : null;
+      var eventDate = el.TryGetProperty("event_date", out var edEl) && edEl.ValueKind == JsonValueKind.String ? edEl.GetString() : null;
       var verified = el.TryGetProperty("verified", out var vEl) && vEl.ValueKind == JsonValueKind.String ? vEl.GetString() : null;
       var status = el.TryGetProperty("status", out var stEl) && stEl.ValueKind == JsonValueKind.String ? stEl.GetString() : null;
       var workcode = el.TryGetProperty("workcode", out var wcEl) && wcEl.ValueKind == JsonValueKind.String ? wcEl.GetString() : null;
@@ -598,12 +696,11 @@ static partial class Program
       var createdAt = el.TryGetProperty("created_at", out var createdEl) && createdEl.ValueKind == JsonValueKind.String ? createdEl.GetString() : null;
 
       var name = staffId is not null && staffNames.TryGetValue(staffId, out var n) ? n : null;
-      var eventDate = (!string.IsNullOrWhiteSpace(datetime) && datetime.Trim().Length >= 10) ? datetime.Trim()[..10] : null;
       var recordKey = (staffId is null || eventDate is null) ? null : $"{staffId}|{eventDate}";
       var dayClockIn = recordKey is not null && attendanceRecords.TryGetValue(recordKey, out var rec) ? rec.ClockIn : null;
       var dayClockOut = recordKey is not null && attendanceRecords.TryGetValue(recordKey, out var rec2) ? rec2.ClockOut : null;
 
-      Console.WriteLine($"{i + 1,2}. staff_id={staffId ?? "(null)"} staff_name={name ?? "(unknown)"} datetime={datetime ?? "(null)"} verified={verified ?? "(null)"} status={status ?? "(null)"} workcode={workcode ?? "(null)"} reserved={reserved ?? "(null)"} day_clock_in={dayClockIn ?? "(n/a)"} day_clock_out={dayClockOut ?? "(n/a)"} created_at={createdAt ?? "(null)"}");
+      Console.WriteLine($"{i + 1,2}. staff_id={staffId ?? "(null)"} staff_name={name ?? "(unknown)"} datetime={datetime ?? "(null)"} occurred_at={occurredAt ?? "(null)"} event_date={eventDate ?? "(null)"} device_id={deviceId ?? "(null)"} verified={verified ?? "(null)"} status={status ?? "(null)"} workcode={workcode ?? "(null)"} reserved={reserved ?? "(null)"} day_clock_in={dayClockIn ?? "(n/a)"} day_clock_out={dayClockOut ?? "(n/a)"} created_at={createdAt ?? "(null)"}");
     }
   }
 
@@ -799,7 +896,7 @@ static partial class Program
     var syncStaffNames = EnvBool("WL10_SYNC_STAFF_NAMES", true);
     var filterToDeviceUsers = EnvBool("WL10_FILTER_TO_DEVICE_USERS", true);
     var minEventDate = EnvDateOnly("WL10_MIN_EVENT_DATE");
-    var maxStaffNumber = EnvInt("WL10_MAX_STAFF_NUMBER", 0);
+    var maxStaffNumber = EnvInt("WL10_MAX_STAFF_NUMBER", 999999);
     var watermarkSource = Env("WL10_WATERMARK_SOURCE", "db");
     var timeCorrectionMode = Env("WL10_TIME_CORRECTION_MODE", "none");
     var maxTimeOffsetHours = EnvInt("WL10_MAX_TIME_OFFSET_HOURS", 48);
@@ -873,6 +970,7 @@ static partial class Program
     LastRunUpsertedCount = 0;
     LastRunSkippedUpsertCount = 0;
     LastRunPunches = Array.Empty<Punch>();
+    var cycleSw = Stopwatch.StartNew();
 
     var priorState = LoadState(statePath);
     DevicePunches = priorState.DevicePunches ?? Array.Empty<Punch>();
@@ -893,18 +991,18 @@ static partial class Program
     if (watermark is not null) watermark = watermark.Value.AddMinutes(-Math.Abs(config.BackfillMinutes));
     if (today) watermark = null;
 
-    Console.WriteLine($"Polling WL10 {config.DeviceIp}:{config.DevicePort} (deviceId={config.DeviceId})...");
+    LogInfo($"Polling device {config.DeviceId} ({config.DeviceIp}:{config.DevicePort})");
     if (config.Debug)
     {
-      Console.WriteLine($"Watermark source: {config.WatermarkSource}");
-      Console.WriteLine($"Watermark local (UTC): {(watermarkLocal is null ? "(none)" : watermarkLocal.Value.ToString("O", CultureInfo.InvariantCulture))}");
-      Console.WriteLine($"Watermark db (UTC): {(watermarkDb is null ? "(none)" : watermarkDb.Value.ToString("O", CultureInfo.InvariantCulture))}");
-      Console.WriteLine($"Min event date: {(config.MinEventDate is null ? "(none)" : config.MinEventDate.Value.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture))}");
-      Console.WriteLine($"FilterToDeviceUsers: {config.FilterToDeviceUsers}");
-      Console.WriteLine($"Bad datetime mode: {config.BadDateTimeMode} (valid years {config.MinValidYear}..{(config.MaxValidYear > 0 ? config.MaxValidYear : DateTime.Now.Year + 1)})");
-      Console.WriteLine($"Time correction: {config.TimeCorrectionMode} (set device time={config.SetDeviceTime})");
+      LogDebug(config, $"Watermark source: {config.WatermarkSource}");
+      LogDebug(config, $"Watermark local (UTC): {(watermarkLocal is null ? "(none)" : watermarkLocal.Value.ToString("O", CultureInfo.InvariantCulture))}");
+      LogDebug(config, $"Watermark db (UTC): {(watermarkDb is null ? "(none)" : watermarkDb.Value.ToString("O", CultureInfo.InvariantCulture))}");
+      LogDebug(config, $"Min event date: {(config.MinEventDate is null ? "(none)" : config.MinEventDate.Value.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture))}");
+      LogDebug(config, $"FilterToDeviceUsers: {config.FilterToDeviceUsers}");
+      LogDebug(config, $"Bad datetime mode: {config.BadDateTimeMode} (valid years {config.MinValidYear}..{(config.MaxValidYear > 0 ? config.MaxValidYear : DateTime.Now.Year + 1)})");
+      LogDebug(config, $"Time correction: {config.TimeCorrectionMode} (set device time={config.SetDeviceTime})");
     }
-    if (watermark is not null) Console.WriteLine($"Watermark (UTC): {watermark:O}");
+    if (watermark is not null) LogInfo($"Watermark (UTC): {watermark:O}");
 
     var deviceUsers = (config.FilterToDeviceUsers || config.AutoCreateStaff || config.SyncStaffNames)
       ? ReadDeviceUsers(config)
@@ -914,6 +1012,7 @@ static partial class Program
     var validStaffIds = (config.FilterToDeviceUsers && deviceUsers.Count > 0)
       ? new HashSet<string>(deviceUsers.Keys, StringComparer.Ordinal)
       : null;
+    var pollSw = Stopwatch.StartNew();
     var punches = ReadDevicePunches(config, today ? null : watermark, today, validStaffIds);
     if (config.FilterToDeviceUsers && deviceUsers.Count > 0)
     {
@@ -921,12 +1020,14 @@ static partial class Program
       var before = punches.Count;
       punches = punches.Where(p => valid.Contains(p.StaffId)).ToList();
       var after = punches.Count;
-      if (after != before) Console.WriteLine($"Filtered punches by WL10 user list: kept {after}/{before}");
+      if (after != before) LogInfo($"Filtered punches by WL10 user list: kept {after}/{before}");
     }
     else if (config.Debug)
     {
-      Console.WriteLine($"Filtered punches by WL10 user list: (skipped) FilterToDeviceUsers={config.FilterToDeviceUsers} users={deviceUsers.Count}");
+      LogDebug(config, $"Filtered punches by WL10 user list: (skipped) FilterToDeviceUsers={config.FilterToDeviceUsers} users={deviceUsers.Count}");
     }
+    pollSw.Stop();
+    LogInfo($"Retrieved punches: {punches.Count} records (device poll {pollSw.ElapsedMilliseconds}ms)");
 
     if (config.Debug)
     {
@@ -1009,7 +1110,14 @@ static partial class Program
       {
         SaveState(statePath, priorState with { LastSeenOccurredAtUtc = localMax, DevicePunches = DevicePunches });
       }
-      Console.WriteLine("No new punches.");
+      LogInfo("No new punches.");
+      await TryWriteSupabaseLogSummary(config, "INFO", "No new punches", new
+      {
+        device_ip = config.DeviceIp,
+        device_port = config.DevicePort,
+        punches = 0,
+        duration_ms = cycleSw.ElapsedMilliseconds
+      });
       if (verify && !config.DryRun && config.SupabaseSyncEnabled) await VerifySupabaseAttendanceEventsForDevice(config, 20);
       return;
     }
@@ -1023,17 +1131,25 @@ static partial class Program
 
     if (config.DryRun)
     {
-      Console.WriteLine($"Dry run: would upsert {distinctUpsert} punches to Supabase.");
+      LogInfo($"Dry run: would upsert {distinctUpsert} punches to Supabase.");
       LastRunUpsertedCount = 0;
       LastRunSkippedUpsertCount = distinctUpsert;
+      await TryWriteSupabaseLogSummary(config, "INFO", "Dry run completed", new
+      {
+        device_ip = config.DeviceIp,
+        device_port = config.DevicePort,
+        punches = punches.Count,
+        distinct_upsert = distinctUpsert,
+        duration_ms = cycleSw.ElapsedMilliseconds
+      });
       return;
     }
 
     if (!config.SupabaseSyncEnabled)
     {
-      Console.WriteLine($"Supabase sync disabled: skipping upsert of {punches.Count} punches.");
+      LogWarn($"Supabase sync disabled: skipping upsert of {punches.Count} punches.");
       SaveState(statePath, priorState with { LastSeenOccurredAtUtc = maxSeen, DevicePunches = DevicePunches });
-      Console.WriteLine($"Saved watermark (UTC): {maxSeen:O}");
+      LogInfo($"Saved watermark (UTC): {maxSeen:O}");
       LastRunUpsertedCount = 0;
       LastRunSkippedUpsertCount = distinctUpsert;
       LastRunPunches = punches
@@ -1043,7 +1159,9 @@ static partial class Program
       return;
     }
 
+    var upsertSw = Stopwatch.StartNew();
     await UpsertToSupabase(config, punches, staffNames);
+    upsertSw.Stop();
     LastRunUpsertedCount = distinctUpsert;
     LastRunSkippedUpsertCount = 0;
     LastRunPunches = punches
@@ -1052,7 +1170,20 @@ static partial class Program
       .ToArray();
 
     SaveState(statePath, priorState with { LastSeenOccurredAtUtc = maxSeen, DevicePunches = DevicePunches });
-    Console.WriteLine($"Saved watermark (UTC): {maxSeen:O}");
+    LogInfo($"Sync to database: upserted={distinctUpsert} duration_ms={upsertSw.ElapsedMilliseconds}");
+    LogInfo($"Saved watermark (UTC): {maxSeen:O}");
+    await TryWriteSupabaseLogSummary(config, "INFO", "Sync completed", new
+    {
+      device_ip = config.DeviceIp,
+      device_port = config.DevicePort,
+      punches = punches.Count,
+      distinct_upsert = distinctUpsert,
+      upserted = distinctUpsert,
+      duration_ms = cycleSw.ElapsedMilliseconds,
+      device_poll_ms = pollSw.ElapsedMilliseconds,
+      supabase_ms = upsertSw.ElapsedMilliseconds,
+      watermark_utc = maxSeen.ToString("O", CultureInfo.InvariantCulture)
+    });
     if (verify) await VerifySupabaseAttendanceEventsForDevice(config, 20);
   }
 
@@ -1096,10 +1227,37 @@ static partial class Program
   {
     try
     {
-      if (!File.Exists(statePath)) return new PollState(null, null, null);
-      var raw = File.ReadAllText(statePath);
-      var parsed = JsonSerializer.Deserialize<PollState>(raw, JsonOptions);
-      return parsed ?? new PollState(null, null, null);
+      static string AltPath(string p)
+      {
+        var dir = Path.GetDirectoryName(p) ?? string.Empty;
+        var name = Path.GetFileNameWithoutExtension(p);
+        var ext = Path.GetExtension(p);
+        return Path.Combine(dir, name + ".alt" + ext);
+      }
+
+      var alt = AltPath(statePath);
+      var candidates = new List<string>(capacity: 2);
+      if (File.Exists(statePath)) candidates.Add(statePath);
+      if (File.Exists(alt)) candidates.Add(alt);
+      if (candidates.Count == 0) return new PollState(null, null, null);
+
+      var ordered = candidates
+        .Select(p => (p, t: SafeGetLastWriteUtc(p)))
+        .OrderByDescending(x => x.t)
+        .Select(x => x.p)
+        .ToArray();
+
+      foreach (var p in ordered)
+      {
+        try
+        {
+          var raw = File.ReadAllText(p);
+          var parsed = JsonSerializer.Deserialize<PollState>(raw, JsonOptions);
+          if (parsed is not null) return parsed;
+        }
+        catch { }
+      }
+      return new PollState(null, null, null);
     }
     catch
     {
@@ -1111,14 +1269,76 @@ static partial class Program
   {
     try
     {
-      var dir = Path.GetDirectoryName(statePath);
-      if (!string.IsNullOrWhiteSpace(dir)) Directory.CreateDirectory(dir);
-      File.WriteAllText(statePath, JsonSerializer.Serialize(state, JsonOptions));
+      static string AltPath(string p)
+      {
+        var dir = Path.GetDirectoryName(p) ?? string.Empty;
+        var name = Path.GetFileNameWithoutExtension(p);
+        var ext = Path.GetExtension(p);
+        return Path.Combine(dir, name + ".alt" + ext);
+      }
+
+      static void EnsureWritableFile(string path)
+      {
+        if (!File.Exists(path)) return;
+        try
+        {
+          var a = File.GetAttributes(path);
+          if ((a & FileAttributes.ReadOnly) != 0) File.SetAttributes(path, a & ~FileAttributes.ReadOnly);
+        }
+        catch { }
+      }
+
+      static void WriteAtomic(string path, string content)
+      {
+        var dir = Path.GetDirectoryName(path);
+        if (!string.IsNullOrWhiteSpace(dir)) Directory.CreateDirectory(dir);
+        EnsureWritableFile(path);
+        var tmp = path + ".tmp";
+        using (var fs = new FileStream(tmp, FileMode.Create, FileAccess.Write, FileShare.ReadWrite))
+        using (var sw = new StreamWriter(fs, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false)))
+        {
+          sw.Write(content);
+        }
+        try
+        {
+          if (File.Exists(path)) File.Replace(tmp, path, null);
+          else File.Move(tmp, path);
+        }
+        finally
+        {
+          try { if (File.Exists(tmp)) File.Delete(tmp); } catch { }
+        }
+      }
+
+      var payload = JsonSerializer.Serialize(state, JsonOptions);
+      try
+      {
+        WriteAtomic(statePath, payload);
+      }
+      catch (Exception ex1)
+      {
+        var alt = AltPath(statePath);
+        try
+        {
+          WriteAtomic(alt, payload);
+          try { Console.Error.WriteLine($"SaveState fallback: wrote alt state file '{alt}' because '{statePath}' failed: {ex1.Message}"); } catch { }
+        }
+        catch (Exception ex2)
+        {
+          try { Console.Error.WriteLine($"SaveState failed ({statePath}): {ex1.Message}"); } catch { }
+          try { Console.Error.WriteLine($"SaveState alt failed ({alt}): {ex2.Message}"); } catch { }
+        }
+      }
     }
     catch (Exception ex)
     {
-      try { Console.Error.WriteLine($"SaveState failed ({statePath}): {ex}"); } catch { }
+      try { Console.Error.WriteLine($"SaveState failed ({statePath}): {ex.Message}"); } catch { }
     }
+  }
+
+  private static DateTime SafeGetLastWriteUtc(string path)
+  {
+    try { return File.GetLastWriteTimeUtc(path); } catch { return DateTime.MinValue; }
   }
 
   private static bool NeedsDbWatermark(string watermarkSource)
@@ -1153,7 +1373,7 @@ static partial class Program
       using var http = new HttpClient();
       http.Timeout = TimeSpan.FromSeconds(15);
 
-      var url = $"{config.SupabaseUrl.TrimEnd('/')}/rest/v1/{config.SupabaseAttendanceTable}?select=datetime&order=datetime.desc&limit=1";
+      var url = $"{config.SupabaseUrl.TrimEnd('/')}/rest/v1/{config.SupabaseAttendanceTable}?select=occurred_at&order=occurred_at.desc&limit=1";
 
       using var req = new HttpRequestMessage(HttpMethod.Get, url);
       req.Headers.TryAddWithoutValidation("apikey", config.SupabaseServiceRoleKey);
@@ -1169,12 +1389,11 @@ static partial class Program
       if (!enumerator.MoveNext()) return null;
 
       var el = enumerator.Current;
-      if (!el.TryGetProperty("datetime", out var dtEl) || dtEl.ValueKind != JsonValueKind.String) return null;
+      if (!el.TryGetProperty("occurred_at", out var dtEl) || dtEl.ValueKind != JsonValueKind.String) return null;
       var raw = dtEl.GetString();
       if (string.IsNullOrWhiteSpace(raw)) return null;
 
-      if (!DateTime.TryParseExact(raw.Trim(), "yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture, DateTimeStyles.None, out var dt)) return null;
-      var dto = new DateTimeOffset(DateTime.SpecifyKind(dt, DateTimeKind.Unspecified), TimeSpan.FromHours(8));
+      if (!DateTimeOffset.TryParse(raw.Trim(), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var dto)) return null;
       return dto.ToUniversalTime();
     }
     catch
@@ -1379,7 +1598,20 @@ static partial class Program
     dynamic? zk = null;
     try
     {
-      var type = Type.GetTypeFromProgID("zkemkeeper.CZKEM", throwOnError: false);
+      Type? type = null;
+      foreach (var progId in new[] { "zkemkeeper.CZKEM", "zkemkeeper.ZKEM", "zkemkeeper.ZKEM.1" })
+      {
+        try
+        {
+          var candidate = Type.GetTypeFromProgID(progId, throwOnError: false);
+          if (candidate is not null && candidate.GUID != Guid.Empty)
+          {
+            type = candidate;
+            break;
+          }
+        }
+        catch { }
+      }
       if (type is null)
       {
         try { type = Type.GetTypeFromCLSID(new Guid("00853A19-BD51-419B-9269-2DABE57EB61F"), throwOnError: false); } catch { type = null; }
@@ -1442,6 +1674,9 @@ static partial class Program
       var skippedNotToday = 0;
       var invalidDateLogged = 0;
       var invalidStaffLogged = 0;
+      var normalizedLogged = 0;
+      var normalizedStaffCount = 0;
+      var correctedTimestampCount = 0;
 
       void ProcessRecord(
         List<Punch> results,
@@ -1531,7 +1766,8 @@ static partial class Program
             var offs = timeOffset.GetValueOrDefault();
             localDt = localDt.Add(offs);
           }
-          if (correctedLogged < 10)
+          correctedTimestampCount++;
+          if (config.Debug && correctedLogged < 10)
           {
             correctedLogged++;
             Console.WriteLine($"Corrected punch datetime (local): {year:D4}-{month:D2}-{day:D2} {hour:D2}:{minute:D2}:{second:D2} -> {localDt:yyyy-MM-dd HH:mm:ss}");
@@ -1567,7 +1803,8 @@ static partial class Program
               var offs = timeOffset.GetValueOrDefault();
               localDt = localDt.Add(offs);
             }
-            if (correctedLogged < 10)
+            correctedTimestampCount++;
+            if (config.Debug && correctedLogged < 10)
             {
               correctedLogged++;
               Console.WriteLine($"Corrected punch datetime (local): {year:D4}-{month:D2}-{day:D2} {hour:D2}:{minute:D2}:{second:D2} -> {localDt:yyyy-MM-dd HH:mm:ss}");
@@ -1582,10 +1819,14 @@ static partial class Program
           return;
         }
 
-        if (corrected != localDt && correctedLogged < 10)
+        if (corrected != localDt)
         {
-          correctedLogged++;
-          Console.WriteLine($"Corrected punch datetime (local): {localDt:yyyy-MM-dd HH:mm:ss} -> {corrected:yyyy-MM-dd HH:mm:ss}");
+          correctedTimestampCount++;
+          if (config.Debug && correctedLogged < 10)
+          {
+            correctedLogged++;
+            Console.WriteLine($"Corrected punch datetime (local): {localDt:yyyy-MM-dd HH:mm:ss} -> {corrected:yyyy-MM-dd HH:mm:ss}");
+          }
         }
         localDt = corrected;
 
@@ -1611,7 +1852,12 @@ static partial class Program
 
         if (!string.Equals(staffIdRaw, staffId, StringComparison.Ordinal))
         {
-          Console.WriteLine($"Normalized staff_id: rawCodes=[{DebugCharCodes(staffIdRaw)}] -> '{staffId}'");
+          normalizedStaffCount++;
+          if (config.Debug && normalizedLogged < 10)
+          {
+            normalizedLogged++;
+            Console.WriteLine($"Normalized staff_id: rawCodes=[{DebugCharCodes(staffIdRaw)}] -> '{staffId}'");
+          }
         }
 
         var eventDate = localDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
@@ -3120,19 +3366,39 @@ static partial class Program
     using var http = new HttpClient();
     http.Timeout = TimeSpan.FromSeconds(30);
 
-    var url = $"{config.SupabaseUrl.TrimEnd('/')}/rest/v1/{config.SupabaseAttendanceTable}?on_conflict=staff_id,datetime";
+    var url = $"{config.SupabaseUrl.TrimEnd('/')}/rest/v1/{config.SupabaseAttendanceTable}?on_conflict=id";
     var chunkSize = 1000;
     for (var i = 0; i < rows.Count; i += chunkSize)
     {
-      var batch = rows.Skip(i).Take(chunkSize).Select(r => new
+      var batch = new List<object>(capacity: chunkSize);
+      foreach (var r in rows.Skip(i).Take(chunkSize))
       {
-        staff_id = r.StaffId,
-        datetime = r.DateTime,
-        verified = r.Verified,
-        status = r.Status,
-        workcode = r.Workcode,
-        reserved = r.Reserved,
-      }).ToArray();
+        var staffId = (r.StaffId ?? string.Empty).Trim();
+        if (staffId.Length == 0) continue;
+
+        var dtRaw = (r.DateTime ?? string.Empty).Trim();
+        if (dtRaw.Length == 0) continue;
+        if (!DateTime.TryParseExact(dtRaw, "yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture, DateTimeStyles.None, out var localUnspec)) continue;
+
+        var localOffset = new DateTimeOffset(DateTime.SpecifyKind(localUnspec, DateTimeKind.Unspecified), TimeSpan.FromHours(8));
+        var occurredAtUtc = localOffset.ToUniversalTime();
+        var eventDate = localOffset.ToOffset(TimeSpan.FromHours(8)).Date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+        var id = BuildEventId(config.DeviceId, staffId, occurredAtUtc);
+
+        batch.Add(new
+        {
+          id,
+          device_id = config.DeviceId,
+          staff_id = staffId,
+          datetime = dtRaw,
+          occurred_at = occurredAtUtc.ToString("O", CultureInfo.InvariantCulture),
+          event_date = eventDate,
+          verified = (r.Verified ?? string.Empty).Trim(),
+          status = (r.Status ?? string.Empty).Trim(),
+          workcode = (r.Workcode ?? string.Empty).Trim(),
+          reserved = (r.Reserved ?? string.Empty).Trim(),
+        });
+      }
 
       using var req = new HttpRequestMessage(HttpMethod.Post, url);
       req.Headers.TryAddWithoutValidation("apikey", config.SupabaseServiceRoleKey);

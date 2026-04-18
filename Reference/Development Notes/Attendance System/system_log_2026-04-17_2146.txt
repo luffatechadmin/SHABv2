@@ -1,0 +1,256 @@
+2026-04-18 05:07:39.453 Dashboard running at http://0.0.0.0:5099
+2026-04-18 05:07:39.456 Dashboard login configured. Override credentials with WL10_DASHBOARD_USER and WL10_DASHBOARD_PASSWORD.
+2026-04-18 05:07:55.633 Polling WL10 192.168.1.170:4370 (deviceId=WL10-192.168.1.170)...
+2026-04-18 05:08:05.804 Corrected punch datetime (local): 2005-01-10 21:39:20 -> 2026-04-18 21:39:20
+2026-04-18 05:08:05.812 Corrected punch datetime (local): 2004-09-12 15:02:24 -> 2026-04-18 15:02:24
+2026-04-18 05:08:05.814 Normalized staff_id: rawCodes=[32 FF] -> '2'
+2026-04-18 05:08:05.814 Corrected punch datetime (local): 2000-07-08 13:42:33 -> 2026-04-18 13:42:33
+2026-04-18 05:08:05.814 Normalized staff_id: rawCodes=[01 64 2E 49 32 FF] -> '2'
+2026-04-18 05:08:05.822 Corrected punch datetime (local): 2027-02-29 11:12:00 -> 2026-04-18 11:12:00
+2026-04-18 05:08:05.822 Normalized staff_id: rawCodes=[08] -> '8'
+2026-04-18 05:08:05.822 Corrected punch datetime (local): 2000-01-01 00:00:01 -> 2026-04-18 00:00:01
+2026-04-18 05:08:05.822 Normalized staff_id: rawCodes=[65 49 32 01] -> '2'
+2026-04-18 05:08:05.822 Corrected punch datetime (local): 2000-07-09 06:20:32 -> 2026-04-18 06:20:32
+2026-04-18 05:08:05.822 Normalized staff_id: rawCodes=[34 A1 09 30 1C] -> '4'
+2026-04-18 05:08:05.822 Corrected punch datetime (local): 2005-01-10 21:39:20 -> 2026-04-18 21:39:20
+2026-04-18 05:08:05.822 Corrected punch datetime (local): 2004-09-12 15:02:24 -> 2026-04-18 15:02:24
+2026-04-18 05:08:05.822 Normalized staff_id: rawCodes=[32 FF] -> '2'
+2026-04-18 05:08:05.822 Corrected punch datetime (local): 2000-01-04 04:23:40 -> 2026-04-18 04:23:40
+2026-04-18 05:08:05.822 Normalized staff_id: rawCodes=[01 D3 56 4C 32 01] -> '2'
+2026-04-18 05:08:05.822 Corrected punch datetime (local): 2027-02-29 11:12:00 -> 2026-04-18 11:12:00
+2026-04-18 05:08:05.822 Normalized staff_id: rawCodes=[09] -> '9'
+2026-04-18 05:08:05.823 Normalized staff_id: rawCodes=[7A 4E 32 FF] -> '2'
+2026-04-18 05:08:05.823 Normalized staff_id: rawCodes=[34 A1 09 30 1C] -> '4'
+2026-04-18 05:08:05.823 Normalized staff_id: rawCodes=[32 FF] -> '2'
+2026-04-18 05:08:05.823 Normalized staff_id: rawCodes=[01 B4 6C 55 32 FF] -> '2'
+2026-04-18 05:08:05.823 Normalized staff_id: rawCodes=[09] -> '9'
+2026-04-18 05:08:05.823 Normalized staff_id: rawCodes=[0D 56 32 FF] -> '2'
+2026-04-18 05:08:05.823 Normalized staff_id: rawCodes=[34 A1 09 30 1C] -> '4'
+2026-04-18 05:08:05.823 Normalized staff_id: rawCodes=[32 FF] -> '2'
+2026-04-18 05:08:05.823 Normalized staff_id: rawCodes=[01 D1 6C 5E 32 FF] -> '2'
+2026-04-18 05:08:05.823 Normalized staff_id: rawCodes=[07] -> '7'
+2026-04-18 05:08:05.823 Normalized staff_id: rawCodes=[3F 5F 32 FF] -> '2'
+2026-04-18 05:08:05.823 Normalized staff_id: rawCodes=[32 FF] -> '2'
+2026-04-18 05:08:05.823 Normalized staff_id: rawCodes=[01 08 38 60 32 FF] -> '2'
+2026-04-18 05:08:06.418 Corrected punch datetime (local): 2084-02-24 13:34:00 -> 2026-04-18 13:34:00
+2026-04-18 05:08:06.418 Corrected punch datetime (local): 2084-02-24 13:34:00 -> 2026-04-18 13:34:00
+2026-04-18 05:08:06.418 Corrected punch datetime (local): 2000-01-01 00:12:00 -> 2026-04-18 00:12:00
+2026-04-18 05:08:06.418 Corrected punch datetime (local): 2000-01-01 00:12:00 -> 2026-04-18 00:12:00
+2026-04-18 05:08:06.419 Corrected punch datetime (local): 2084-02-24 13:34:00 -> 2026-04-18 13:34:00
+2026-04-18 05:08:06.419 Corrected punch datetime (local): 2000-01-01 00:12:00 -> 2026-04-18 00:12:00
+2026-04-18 05:08:06.419 Corrected punch datetime (local): 2084-02-24 13:34:00 -> 2026-04-18 13:34:00
+2026-04-18 05:08:06.419 Corrected punch datetime (local): 2000-01-01 00:12:00 -> 2026-04-18 00:12:00
+2026-04-18 05:08:06.419 Corrected punch datetime (local): 2000-01-01 00:00:00 -> 2026-04-18 00:00:00
+2026-04-18 05:08:06.419 Corrected punch datetime (local): 2000-01-01 00:00:00 -> 2026-04-18 00:00:00
+2026-04-18 05:08:06.966 Corrected punch datetime (local): 2005-01-10 21:39:20 -> 2026-04-18 21:39:20
+2026-04-18 05:08:06.966 Corrected punch datetime (local): 2004-09-12 15:02:24 -> 2026-04-18 15:02:24
+2026-04-18 05:08:06.966 Normalized staff_id: rawCodes=[32 FF] -> '2'
+2026-04-18 05:08:06.966 Corrected punch datetime (local): 2000-07-08 13:42:33 -> 2026-04-18 13:42:33
+2026-04-18 05:08:06.966 Normalized staff_id: rawCodes=[01 64 2E 49 32 FF] -> '2'
+2026-04-18 05:08:06.966 Corrected punch datetime (local): 2027-02-29 11:12:00 -> 2026-04-18 11:12:00
+2026-04-18 05:08:06.966 Normalized staff_id: rawCodes=[08] -> '8'
+2026-04-18 05:08:06.966 Corrected punch datetime (local): 2000-01-01 00:00:01 -> 2026-04-18 00:00:01
+2026-04-18 05:08:06.966 Normalized staff_id: rawCodes=[65 49 32 01] -> '2'
+2026-04-18 05:08:06.966 Corrected punch datetime (local): 2000-07-09 06:20:32 -> 2026-04-18 06:20:32
+2026-04-18 05:08:06.966 Normalized staff_id: rawCodes=[34 A1 09 30 1C] -> '4'
+2026-04-18 05:08:06.966 Corrected punch datetime (local): 2005-01-10 21:39:20 -> 2026-04-18 21:39:20
+2026-04-18 05:08:06.966 Corrected punch datetime (local): 2004-09-12 15:02:24 -> 2026-04-18 15:02:24
+2026-04-18 05:08:06.966 Normalized staff_id: rawCodes=[32 FF] -> '2'
+2026-04-18 05:08:06.966 Corrected punch datetime (local): 2000-01-04 04:23:40 -> 2026-04-18 04:23:40
+2026-04-18 05:08:06.966 Normalized staff_id: rawCodes=[01 D3 56 4C 32 01] -> '2'
+2026-04-18 05:08:06.966 Corrected punch datetime (local): 2027-02-29 11:12:00 -> 2026-04-18 11:12:00
+2026-04-18 05:08:06.966 Normalized staff_id: rawCodes=[09] -> '9'
+2026-04-18 05:08:06.967 Normalized staff_id: rawCodes=[7A 4E 32 FF] -> '2'
+2026-04-18 05:08:06.967 Normalized staff_id: rawCodes=[34 A1 09 30 1C] -> '4'
+2026-04-18 05:08:06.967 Normalized staff_id: rawCodes=[32 FF] -> '2'
+2026-04-18 05:08:06.967 Normalized staff_id: rawCodes=[01 B4 6C 55 32 FF] -> '2'
+2026-04-18 05:08:06.967 Normalized staff_id: rawCodes=[09] -> '9'
+2026-04-18 05:08:06.967 Normalized staff_id: rawCodes=[0D 56 32 FF] -> '2'
+2026-04-18 05:08:06.967 Normalized staff_id: rawCodes=[34 A1 09 30 1C] -> '4'
+2026-04-18 05:08:06.967 Normalized staff_id: rawCodes=[32 FF] -> '2'
+2026-04-18 05:08:06.967 Normalized staff_id: rawCodes=[01 D1 6C 5E 32 FF] -> '2'
+2026-04-18 05:08:06.967 Normalized staff_id: rawCodes=[07] -> '7'
+2026-04-18 05:08:06.967 Normalized staff_id: rawCodes=[3F 5F 32 FF] -> '2'
+2026-04-18 05:08:06.967 Normalized staff_id: rawCodes=[32 FF] -> '2'
+2026-04-18 05:08:06.967 Normalized staff_id: rawCodes=[01 08 38 60 32 FF] -> '2'
+2026-04-18 05:08:14.503 Upserting 88 punches to Supabase...
+2026-04-18 05:08:14.934 Supabase upsert OK.
+2026-04-18 05:08:14.980 Saved watermark (UTC): 2026-04-17T16:30:06.0000000+00:00
+2026-04-18 05:25:34.292 Disconnect requested.
+2026-04-18 05:25:44.784 TCP OK to 192.168.1.170:4370 58ms
+2026-04-18 05:25:44.792 Polling WL10 192.168.1.170:4370 (deviceId=WL10-192.168.1.170)...
+2026-04-18 05:25:54.809 Corrected punch datetime (local): 2005-01-10 21:39:20 -> 2026-04-18 21:39:20
+2026-04-18 05:25:54.809 Corrected punch datetime (local): 2004-09-12 15:02:24 -> 2026-04-18 15:02:24
+2026-04-18 05:25:54.809 Normalized staff_id: rawCodes=[32 FF] -> '2'
+2026-04-18 05:25:54.809 Corrected punch datetime (local): 2000-07-08 13:42:33 -> 2026-04-18 13:42:33
+2026-04-18 05:25:54.809 Normalized staff_id: rawCodes=[01 64 2E 49 32 FF] -> '2'
+2026-04-18 05:25:54.809 Corrected punch datetime (local): 2027-02-29 11:12:00 -> 2026-04-18 11:12:00
+2026-04-18 05:25:54.809 Normalized staff_id: rawCodes=[08] -> '8'
+2026-04-18 05:25:54.809 Corrected punch datetime (local): 2000-01-01 00:00:01 -> 2026-04-18 00:00:01
+2026-04-18 05:25:54.810 Normalized staff_id: rawCodes=[65 49 32 01] -> '2'
+2026-04-18 05:25:54.810 Corrected punch datetime (local): 2000-07-09 06:20:32 -> 2026-04-18 06:20:32
+2026-04-18 05:25:54.810 Normalized staff_id: rawCodes=[34 A1 09 30 1C] -> '4'
+2026-04-18 05:25:54.810 Corrected punch datetime (local): 2005-01-10 21:39:20 -> 2026-04-18 21:39:20
+2026-04-18 05:25:54.810 Corrected punch datetime (local): 2004-09-12 15:02:24 -> 2026-04-18 15:02:24
+2026-04-18 05:25:54.810 Normalized staff_id: rawCodes=[32 FF] -> '2'
+2026-04-18 05:25:54.810 Corrected punch datetime (local): 2000-01-04 04:23:40 -> 2026-04-18 04:23:40
+2026-04-18 05:25:54.810 Normalized staff_id: rawCodes=[01 D3 56 4C 32 01] -> '2'
+2026-04-18 05:25:54.810 Corrected punch datetime (local): 2027-02-29 11:12:00 -> 2026-04-18 11:12:00
+2026-04-18 05:25:54.810 Normalized staff_id: rawCodes=[09] -> '9'
+2026-04-18 05:25:54.810 Normalized staff_id: rawCodes=[7A 4E 32 FF] -> '2'
+2026-04-18 05:25:54.810 Normalized staff_id: rawCodes=[34 A1 09 30 1C] -> '4'
+2026-04-18 05:25:54.811 Normalized staff_id: rawCodes=[32 FF] -> '2'
+2026-04-18 05:25:54.811 Normalized staff_id: rawCodes=[01 B4 6C 55 32 FF] -> '2'
+2026-04-18 05:25:54.811 Normalized staff_id: rawCodes=[09] -> '9'
+2026-04-18 05:25:54.811 Normalized staff_id: rawCodes=[0D 56 32 FF] -> '2'
+2026-04-18 05:25:54.811 Normalized staff_id: rawCodes=[34 A1 09 30 1C] -> '4'
+2026-04-18 05:25:54.811 Normalized staff_id: rawCodes=[32 FF] -> '2'
+2026-04-18 05:25:54.811 Normalized staff_id: rawCodes=[01 D1 6C 5E 32 FF] -> '2'
+2026-04-18 05:25:54.811 Normalized staff_id: rawCodes=[07] -> '7'
+2026-04-18 05:25:54.811 Normalized staff_id: rawCodes=[3F 5F 32 FF] -> '2'
+2026-04-18 05:25:54.812 Normalized staff_id: rawCodes=[32 FF] -> '2'
+2026-04-18 05:25:54.812 Normalized staff_id: rawCodes=[01 08 38 60 32 FF] -> '2'
+2026-04-18 05:25:55.387 Corrected punch datetime (local): 2084-02-24 13:34:00 -> 2026-04-18 13:34:00
+2026-04-18 05:25:55.387 Corrected punch datetime (local): 2084-02-24 13:34:00 -> 2026-04-18 13:34:00
+2026-04-18 05:25:55.387 Corrected punch datetime (local): 2000-01-01 00:12:00 -> 2026-04-18 00:12:00
+2026-04-18 05:25:55.387 Corrected punch datetime (local): 2000-01-01 00:12:00 -> 2026-04-18 00:12:00
+2026-04-18 05:25:55.387 Corrected punch datetime (local): 2084-02-24 13:34:00 -> 2026-04-18 13:34:00
+2026-04-18 05:25:55.387 Corrected punch datetime (local): 2000-01-01 00:12:00 -> 2026-04-18 00:12:00
+2026-04-18 05:25:55.387 Corrected punch datetime (local): 2084-02-24 13:34:00 -> 2026-04-18 13:34:00
+2026-04-18 05:25:55.388 Corrected punch datetime (local): 2000-01-01 00:12:00 -> 2026-04-18 00:12:00
+2026-04-18 05:25:55.388 Corrected punch datetime (local): 2000-01-01 00:00:00 -> 2026-04-18 00:00:00
+2026-04-18 05:25:55.388 Corrected punch datetime (local): 2000-01-01 00:00:00 -> 2026-04-18 00:00:00
+2026-04-18 05:25:55.972 Corrected punch datetime (local): 2005-01-10 21:39:20 -> 2026-04-18 21:39:20
+2026-04-18 05:25:55.972 Corrected punch datetime (local): 2004-09-12 15:02:24 -> 2026-04-18 15:02:24
+2026-04-18 05:25:55.972 Normalized staff_id: rawCodes=[32 FF] -> '2'
+2026-04-18 05:25:55.972 Corrected punch datetime (local): 2000-07-08 13:42:33 -> 2026-04-18 13:42:33
+2026-04-18 05:25:55.972 Normalized staff_id: rawCodes=[01 64 2E 49 32 FF] -> '2'
+2026-04-18 05:25:55.972 Corrected punch datetime (local): 2027-02-29 11:12:00 -> 2026-04-18 11:12:00
+2026-04-18 05:25:55.972 Normalized staff_id: rawCodes=[08] -> '8'
+2026-04-18 05:25:55.972 Corrected punch datetime (local): 2000-01-01 00:00:01 -> 2026-04-18 00:00:01
+2026-04-18 05:25:55.972 Normalized staff_id: rawCodes=[65 49 32 01] -> '2'
+2026-04-18 05:25:55.972 Corrected punch datetime (local): 2000-07-09 06:20:32 -> 2026-04-18 06:20:32
+2026-04-18 05:25:55.972 Normalized staff_id: rawCodes=[34 A1 09 30 1C] -> '4'
+2026-04-18 05:25:55.972 Corrected punch datetime (local): 2005-01-10 21:39:20 -> 2026-04-18 21:39:20
+2026-04-18 05:25:55.972 Corrected punch datetime (local): 2004-09-12 15:02:24 -> 2026-04-18 15:02:24
+2026-04-18 05:25:55.972 Normalized staff_id: rawCodes=[32 FF] -> '2'
+2026-04-18 05:25:55.972 Corrected punch datetime (local): 2000-01-04 04:23:40 -> 2026-04-18 04:23:40
+2026-04-18 05:25:55.972 Normalized staff_id: rawCodes=[01 D3 56 4C 32 01] -> '2'
+2026-04-18 05:25:55.972 Corrected punch datetime (local): 2027-02-29 11:12:00 -> 2026-04-18 11:12:00
+2026-04-18 05:25:55.972 Normalized staff_id: rawCodes=[09] -> '9'
+2026-04-18 05:25:55.972 Normalized staff_id: rawCodes=[7A 4E 32 FF] -> '2'
+2026-04-18 05:25:55.972 Normalized staff_id: rawCodes=[34 A1 09 30 1C] -> '4'
+2026-04-18 05:25:55.972 Normalized staff_id: rawCodes=[32 FF] -> '2'
+2026-04-18 05:25:55.972 Normalized staff_id: rawCodes=[01 B4 6C 55 32 FF] -> '2'
+2026-04-18 05:25:55.973 Normalized staff_id: rawCodes=[09] -> '9'
+2026-04-18 05:25:55.973 Normalized staff_id: rawCodes=[0D 56 32 FF] -> '2'
+2026-04-18 05:25:55.973 Normalized staff_id: rawCodes=[34 A1 09 30 1C] -> '4'
+2026-04-18 05:25:55.973 Normalized staff_id: rawCodes=[32 FF] -> '2'
+2026-04-18 05:25:55.973 Normalized staff_id: rawCodes=[01 D1 6C 5E 32 FF] -> '2'
+2026-04-18 05:25:55.973 Normalized staff_id: rawCodes=[07] -> '7'
+2026-04-18 05:25:55.973 Normalized staff_id: rawCodes=[3F 5F 32 FF] -> '2'
+2026-04-18 05:25:55.973 Normalized staff_id: rawCodes=[32 FF] -> '2'
+2026-04-18 05:25:55.973 Normalized staff_id: rawCodes=[01 08 38 60 32 FF] -> '2'
+2026-04-18 05:26:03.732 Supabase sync disabled: skipping upsert of 88 punches.
+2026-04-18 05:26:03.736 Saved watermark (UTC): 2026-04-17T16:30:06.0000000+00:00
+2026-04-18 05:26:03.736 VERIFY OK (read) from 192.168.1.170:4370
+2026-04-18 05:26:04.743 Polling WL10 192.168.1.170:4370 (deviceId=WL10-192.168.1.170)...
+2026-04-18 05:26:14.498 Corrected punch datetime (local): 2005-01-10 21:39:20 -> 2026-04-18 21:39:20
+2026-04-18 05:26:14.498 Corrected punch datetime (local): 2004-09-12 15:02:24 -> 2026-04-18 15:02:24
+2026-04-18 05:26:14.498 Normalized staff_id: rawCodes=[32 FF] -> '2'
+2026-04-18 05:26:14.498 Corrected punch datetime (local): 2000-07-08 13:42:33 -> 2026-04-18 13:42:33
+2026-04-18 05:26:14.498 Normalized staff_id: rawCodes=[01 64 2E 49 32 FF] -> '2'
+2026-04-18 05:26:14.498 Corrected punch datetime (local): 2027-02-29 11:12:00 -> 2026-04-18 11:12:00
+2026-04-18 05:26:14.498 Normalized staff_id: rawCodes=[08] -> '8'
+2026-04-18 05:26:14.498 Corrected punch datetime (local): 2000-01-01 00:00:01 -> 2026-04-18 00:00:01
+2026-04-18 05:26:14.498 Normalized staff_id: rawCodes=[65 49 32 01] -> '2'
+2026-04-18 05:26:14.498 Corrected punch datetime (local): 2000-07-09 06:20:32 -> 2026-04-18 06:20:32
+2026-04-18 05:26:14.498 Normalized staff_id: rawCodes=[34 A1 09 30 1C] -> '4'
+2026-04-18 05:26:14.498 Corrected punch datetime (local): 2005-01-10 21:39:20 -> 2026-04-18 21:39:20
+2026-04-18 05:26:14.498 Corrected punch datetime (local): 2004-09-12 15:02:24 -> 2026-04-18 15:02:24
+2026-04-18 05:26:14.498 Normalized staff_id: rawCodes=[32 FF] -> '2'
+2026-04-18 05:26:14.498 Corrected punch datetime (local): 2000-01-04 04:23:40 -> 2026-04-18 04:23:40
+2026-04-18 05:26:14.498 Normalized staff_id: rawCodes=[01 D3 56 4C 32 01] -> '2'
+2026-04-18 05:26:14.498 Corrected punch datetime (local): 2027-02-29 11:12:00 -> 2026-04-18 11:12:00
+2026-04-18 05:26:14.499 Normalized staff_id: rawCodes=[09] -> '9'
+2026-04-18 05:26:14.499 Normalized staff_id: rawCodes=[7A 4E 32 FF] -> '2'
+2026-04-18 05:26:14.499 Normalized staff_id: rawCodes=[34 A1 09 30 1C] -> '4'
+2026-04-18 05:26:14.499 Normalized staff_id: rawCodes=[32 FF] -> '2'
+2026-04-18 05:26:14.499 Normalized staff_id: rawCodes=[01 B4 6C 55 32 FF] -> '2'
+2026-04-18 05:26:14.499 Normalized staff_id: rawCodes=[09] -> '9'
+2026-04-18 05:26:14.499 Normalized staff_id: rawCodes=[0D 56 32 FF] -> '2'
+2026-04-18 05:26:14.499 Normalized staff_id: rawCodes=[34 A1 09 30 1C] -> '4'
+2026-04-18 05:26:14.499 Normalized staff_id: rawCodes=[32 FF] -> '2'
+2026-04-18 05:26:14.499 Normalized staff_id: rawCodes=[01 D1 6C 5E 32 FF] -> '2'
+2026-04-18 05:26:14.499 Normalized staff_id: rawCodes=[07] -> '7'
+2026-04-18 05:26:14.499 Normalized staff_id: rawCodes=[3F 5F 32 FF] -> '2'
+2026-04-18 05:26:14.499 Normalized staff_id: rawCodes=[32 FF] -> '2'
+2026-04-18 05:26:14.499 Normalized staff_id: rawCodes=[01 08 38 60 32 FF] -> '2'
+2026-04-18 05:26:15.163 Corrected punch datetime (local): 2084-02-24 13:34:00 -> 2026-04-18 13:34:00
+2026-04-18 05:26:15.163 Corrected punch datetime (local): 2084-02-24 13:34:00 -> 2026-04-18 13:34:00
+2026-04-18 05:26:15.163 Corrected punch datetime (local): 2000-01-01 00:12:00 -> 2026-04-18 00:12:00
+2026-04-18 05:26:15.163 Corrected punch datetime (local): 2000-01-01 00:12:00 -> 2026-04-18 00:12:00
+2026-04-18 05:26:15.163 Corrected punch datetime (local): 2084-02-24 13:34:00 -> 2026-04-18 13:34:00
+2026-04-18 05:26:15.163 Corrected punch datetime (local): 2000-01-01 00:12:00 -> 2026-04-18 00:12:00
+2026-04-18 05:26:15.163 Corrected punch datetime (local): 2084-02-24 13:34:00 -> 2026-04-18 13:34:00
+2026-04-18 05:26:15.164 Corrected punch datetime (local): 2000-01-01 00:12:00 -> 2026-04-18 00:12:00
+2026-04-18 05:26:15.164 Corrected punch datetime (local): 2000-01-01 00:00:00 -> 2026-04-18 00:00:00
+2026-04-18 05:26:15.164 Corrected punch datetime (local): 2000-01-01 00:00:00 -> 2026-04-18 00:00:00
+2026-04-18 05:26:15.691 Corrected punch datetime (local): 2005-01-10 21:39:20 -> 2026-04-18 21:39:20
+2026-04-18 05:26:15.691 Corrected punch datetime (local): 2004-09-12 15:02:24 -> 2026-04-18 15:02:24
+2026-04-18 05:26:15.691 Normalized staff_id: rawCodes=[32 FF] -> '2'
+2026-04-18 05:26:15.691 Corrected punch datetime (local): 2000-07-08 13:42:33 -> 2026-04-18 13:42:33
+2026-04-18 05:26:15.691 Normalized staff_id: rawCodes=[01 64 2E 49 32 FF] -> '2'
+2026-04-18 05:26:15.691 Corrected punch datetime (local): 2027-02-29 11:12:00 -> 2026-04-18 11:12:00
+2026-04-18 05:26:15.691 Normalized staff_id: rawCodes=[08] -> '8'
+2026-04-18 05:26:15.691 Corrected punch datetime (local): 2000-01-01 00:00:01 -> 2026-04-18 00:00:01
+2026-04-18 05:26:15.691 Normalized staff_id: rawCodes=[65 49 32 01] -> '2'
+2026-04-18 05:26:15.691 Corrected punch datetime (local): 2000-07-09 06:20:32 -> 2026-04-18 06:20:32
+2026-04-18 05:26:15.691 Normalized staff_id: rawCodes=[34 A1 09 30 1C] -> '4'
+2026-04-18 05:26:15.691 Corrected punch datetime (local): 2005-01-10 21:39:20 -> 2026-04-18 21:39:20
+2026-04-18 05:26:15.691 Corrected punch datetime (local): 2004-09-12 15:02:24 -> 2026-04-18 15:02:24
+2026-04-18 05:26:15.691 Normalized staff_id: rawCodes=[32 FF] -> '2'
+2026-04-18 05:26:15.691 Corrected punch datetime (local): 2000-01-04 04:23:40 -> 2026-04-18 04:23:40
+2026-04-18 05:26:15.691 Normalized staff_id: rawCodes=[01 D3 56 4C 32 01] -> '2'
+2026-04-18 05:26:15.691 Corrected punch datetime (local): 2027-02-29 11:12:00 -> 2026-04-18 11:12:00
+2026-04-18 05:26:15.691 Normalized staff_id: rawCodes=[09] -> '9'
+2026-04-18 05:26:15.691 Normalized staff_id: rawCodes=[7A 4E 32 FF] -> '2'
+2026-04-18 05:26:15.691 Normalized staff_id: rawCodes=[34 A1 09 30 1C] -> '4'
+2026-04-18 05:26:15.691 Normalized staff_id: rawCodes=[32 FF] -> '2'
+2026-04-18 05:26:15.691 Normalized staff_id: rawCodes=[01 B4 6C 55 32 FF] -> '2'
+2026-04-18 05:26:15.691 Normalized staff_id: rawCodes=[09] -> '9'
+2026-04-18 05:26:15.691 Normalized staff_id: rawCodes=[0D 56 32 FF] -> '2'
+2026-04-18 05:26:15.691 Normalized staff_id: rawCodes=[34 A1 09 30 1C] -> '4'
+2026-04-18 05:26:15.691 Normalized staff_id: rawCodes=[32 FF] -> '2'
+2026-04-18 05:26:15.691 Normalized staff_id: rawCodes=[01 D1 6C 5E 32 FF] -> '2'
+2026-04-18 05:26:15.691 Normalized staff_id: rawCodes=[07] -> '7'
+2026-04-18 05:26:15.691 Normalized staff_id: rawCodes=[3F 5F 32 FF] -> '2'
+2026-04-18 05:26:15.691 Normalized staff_id: rawCodes=[32 FF] -> '2'
+2026-04-18 05:26:15.691 Normalized staff_id: rawCodes=[01 08 38 60 32 FF] -> '2'
+2026-04-18 05:26:27.243 Upserting 88 punches to Supabase...
+2026-04-18 05:26:28.153 Supabase upsert OK.
+2026-04-18 05:26:28.158 Saved watermark (UTC): 2026-04-17T16:30:06.0000000+00:00
+2026-04-18 05:08:14.980 SaveState failed (C:\Users\admin\AppData\Local\WL10Middleware\state.json): System.UnauthorizedAccessException: Access to the path 'C:\Users\admin\AppData\Local\WL10Middleware\state.json' is denied.
+2026-04-18 05:08:14.980    at Microsoft.Win32.SafeHandles.SafeFileHandle.CreateFile(String fullPath, FileMode mode, FileAccess access, FileShare share, FileOptions options)
+2026-04-18 05:08:14.980    at Microsoft.Win32.SafeHandles.SafeFileHandle.Open(String fullPath, FileMode mode, FileAccess access, FileShare share, FileOptions options, Int64 preallocationSize, Nullable`1 unixCreateMode)
+2026-04-18 05:08:14.980    at System.IO.File.WriteToFile(String path, FileMode mode, String contents, Encoding encoding)
+2026-04-18 05:08:14.980    at System.IO.File.WriteAllText(String path, String contents)
+2026-04-18 05:08:14.980    at Program.SaveState(String statePath, PollState state) in c:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\SHAB Attendance Middleware\Program.cs:line 1136
+2026-04-18 05:25:44.791 SaveState failed (C:\Users\admin\AppData\Local\WL10Middleware\state.json): System.UnauthorizedAccessException: Access to the path 'C:\Users\admin\AppData\Local\WL10Middleware\state.json' is denied.
+2026-04-18 05:25:44.791    at Microsoft.Win32.SafeHandles.SafeFileHandle.CreateFile(String fullPath, FileMode mode, FileAccess access, FileShare share, FileOptions options)
+2026-04-18 05:25:44.791    at Microsoft.Win32.SafeHandles.SafeFileHandle.Open(String fullPath, FileMode mode, FileAccess access, FileShare share, FileOptions options, Int64 preallocationSize, Nullable`1 unixCreateMode)
+2026-04-18 05:25:44.791    at System.IO.File.WriteToFile(String path, FileMode mode, String contents, Encoding encoding)
+2026-04-18 05:25:44.791    at System.IO.File.WriteAllText(String path, String contents)
+2026-04-18 05:25:44.791    at Program.SaveState(String statePath, PollState state) in c:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\SHAB Attendance Middleware\Program.cs:line 1136
+2026-04-18 05:26:03.736 SaveState failed (C:\Users\admin\AppData\Local\WL10Middleware\state.json): System.UnauthorizedAccessException: Access to the path 'C:\Users\admin\AppData\Local\WL10Middleware\state.json' is denied.
+2026-04-18 05:26:03.736    at Microsoft.Win32.SafeHandles.SafeFileHandle.CreateFile(String fullPath, FileMode mode, FileAccess access, FileShare share, FileOptions options)
+2026-04-18 05:26:03.736    at Microsoft.Win32.SafeHandles.SafeFileHandle.Open(String fullPath, FileMode mode, FileAccess access, FileShare share, FileOptions options, Int64 preallocationSize, Nullable`1 unixCreateMode)
+2026-04-18 05:26:03.736    at System.IO.File.WriteToFile(String path, FileMode mode, String contents, Encoding encoding)
+2026-04-18 05:26:03.736    at System.IO.File.WriteAllText(String path, String contents)
+2026-04-18 05:26:03.736    at Program.SaveState(String statePath, PollState state) in c:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\SHAB Attendance Middleware\Program.cs:line 1136
+2026-04-18 05:26:28.158 SaveState failed (C:\Users\admin\AppData\Local\WL10Middleware\state.json): System.UnauthorizedAccessException: Access to the path 'C:\Users\admin\AppData\Local\WL10Middleware\state.json' is denied.
+2026-04-18 05:26:28.158    at Microsoft.Win32.SafeHandles.SafeFileHandle.CreateFile(String fullPath, FileMode mode, FileAccess access, FileShare share, FileOptions options)
+2026-04-18 05:26:28.158    at Microsoft.Win32.SafeHandles.SafeFileHandle.Open(String fullPath, FileMode mode, FileAccess access, FileShare share, FileOptions options, Int64 preallocationSize, Nullable`1 unixCreateMode)
+2026-04-18 05:26:28.158    at System.IO.File.WriteToFile(String path, FileMode mode, String contents, Encoding encoding)
+2026-04-18 05:26:28.158    at System.IO.File.WriteAllText(String path, String contents)
+2026-04-18 05:26:28.158    at Program.SaveState(String statePath, PollState state) in c:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\SHAB Attendance Middleware\Program.cs:line 1136

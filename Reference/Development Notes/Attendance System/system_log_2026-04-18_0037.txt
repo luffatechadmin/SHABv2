@@ -1,0 +1,16 @@
+2026-04-18 08:30:24.126 Dashboard running at http://0.0.0.0:5099
+2026-04-18 08:30:24.130 Dashboard login configured. Override credentials with WL10_DASHBOARD_USER and WL10_DASHBOARD_PASSWORD.
+2026-04-18 08:30:34.175 [INFO] [Activity] [Attendance Spreadsheet / Daily] [INFO] Refreshing daily report: 18/04/2026 to 18/04/2026
+2026-04-18 08:30:46.391 [INFO] [Activity] [Attendance Spreadsheet / Daily] [INFO] Refreshing daily report: 18/04/2026 to 18/04/2026
+2026-04-18 08:30:46.396 [INFO] [Activity] [Attendance Spreadsheet / Daily] [INFO] Refreshing daily report: 18/04/2026 to 18/04/2026
+2026-04-18 08:30:46.401 [INFO] [Activity] [Attendance Spreadsheet / Daily] [INFO] Refreshing daily report: 18/04/2026 to 18/04/2026
+2026-04-18 08:30:46.802 [INFO] [Activity] [Attendance Spreadsheet / Daily] [INFO] Refreshing daily report: 18/04/2026 to 18/04/2026
+2026-04-18 08:30:59.158 [INFO] [Activity] [Attendance Spreadsheet / Daily] [INFO] Refreshing daily report: 18/04/2026 to 18/04/2026
+2026-04-18 08:34:55.100 [INFO] [Activity] [Raw Data / Device Records] [INFO] Refreshing from device...
+2026-04-18 08:34:55.112 [INFO] Polling device WL10-192.168.1.170 (192.168.1.170:4370)
+2026-04-18 08:35:06.895 [INFO] Retrieved punches: 24 records (device poll 6901ms)
+2026-04-18 08:35:13.882 [WARN] Supabase sync disabled: skipping upsert of 92 punches.
+2026-04-18 08:35:13.902 [INFO] Saved watermark (UTC): 2026-04-18T00:16:45.0000000+00:00
+2026-04-18 08:35:13.911 [INFO] [Activity] [Raw Data / Device Records] [OK] Refresh complete.
+2026-04-18 08:35:13.901 SaveState failed (C:\Users\admin\AppData\Local\WL10Middleware\state.json): Access to the path 'C:\Users\admin\AppData\Local\WL10Middleware\state.json.tmp' is denied.
+2026-04-18 08:35:13.902 SaveState alt failed (C:\Users\admin\AppData\Local\WL10Middleware\state.alt.json): Access to the path 'C:\Users\admin\AppData\Local\WL10Middleware\state.alt.json.tmp' is denied.

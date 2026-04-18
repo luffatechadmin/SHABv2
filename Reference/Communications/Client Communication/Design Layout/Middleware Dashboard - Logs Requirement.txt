@@ -1,0 +1,32 @@
+The current logging implementation is highly detailed but overly verbose, resulting in large log files that are difficult to read, maintain, and use for audit purposes. While it captures low-level processing steps such as individual staff ID normalization and timestamp corrections, these entries are repeated many times and do not provide meaningful value to business users or auditors. For audit and operational monitoring, logs should prioritize clarity, traceability, and outcomes rather than internal processing noise. The goal is not to reduce information, but to present it in a structured and summarized manner that highlights what actually happened during each synchronization cycle.
+
+A proper logging approach should focus on high-level events and outcomes. Each polling cycle should clearly indicate when the device was accessed, how many records were retrieved, how the data was processed in aggregate, and the final result of synchronization with the database. Instead of logging every individual transformation, the system should summarize these operations into counts and key metrics. This ensures that logs remain concise while still providing sufficient detail for auditing and troubleshooting. Additionally, logs should include timestamps, device identifiers, and operation durations to allow clear traceability of system behavior over time.
+
+It is also important to distinguish between different log levels. Informational logs (INFO) should capture normal system operations in a clean and readable format suitable for audit review. Warning (WARN) and error (ERROR) logs should highlight anomalies and failures that require attention, such as invalid data patterns or system exceptions. Detailed internal processing logs, such as byte-level parsing or per-record transformations, should be categorized under a DEBUG level and only enabled when troubleshooting is required. This separation ensures that routine logs remain manageable while still allowing deep diagnostics when needed.
+
+Another key requirement is the aggregation of repetitive operations. Instead of logging every normalized staff ID or corrected timestamp individually, the system should count and summarize these actions. This significantly reduces log volume while improving readability. In addition, the system should explicitly highlight anomalies, such as invalid timestamps or unexpected data patterns, as these are important for audit purposes. By surfacing anomalies clearly, stakeholders can quickly identify potential data integrity issues without scanning through hundreds of lines.
+
+From a storage perspective, the logging system must support both local and remote persistence. A full log should be written (only update and avoid over-write) to a .txt file on the client’s PC to serve as a complete historical record. At the same time, a summarized version of the logs should be stored in a Supabase table, with a retention policy that keeps only the most recent 2000 rows. This ensures that the database remains lightweight and performant while still providing recent operational visibility. Older records can remain in the local text file for long-term reference.
+
+Overall, the objective is to transform the logging system from a developer-centric debug output into a structured, audit-friendly record of system activity. The improved logging should be concise, categorized by severity, aggregated where appropriate, and focused on outcomes and anomalies. This will make the logs easier to review, reduce storage overhead, and better meet the client’s audit and compliance requirements.
+
+Example (Add aggregation & highlight anomalies)
+[INFO] Polling device WL10 (192.168.1.170)
+
+[INFO] Retrieved punches: 88 records
+[INFO] Data normalization:
+       - corrected timestamps: 88
+       - normalized staff IDs: 88
+       - invalid records: 0
+
+[INFO] Sync to Supabase:
+       - inserted: 85
+       - updated: 3
+       - failed: 0
+       - duration: 420ms
+
+[INFO] Watermark updated: 2026-04-17T16:30:06Z
+
+[ERROR] State save failed:
+        path: C:\Users\admin\AppData\Local\WL10Middleware\state.json
+        reason: Access denied
