@@ -2,9 +2,9 @@
 setlocal EnableExtensions
 
 set "RUN_MODE=background"
-if /I "%~1"=="--console" set "RUN_MODE=console" & shift
-if /I "%~1"=="--foreground" set "RUN_MODE=console" & shift
-if /I "%~1"=="--debug" set "RUN_MODE=console" & shift
+if /I "%~1"=="--console" ( set "RUN_MODE=console" & shift )
+if /I "%~1"=="--foreground" ( set "RUN_MODE=console" & shift )
+if /I "%~1"=="--debug" ( set "RUN_MODE=console" & shift )
 
 set "SHAB_START_VERSION=2026-04-16"
 set "ROOT=%~dp0"
@@ -95,7 +95,7 @@ call :LOG WL10_STATE_PATH=%WL10_STATE_PATH%
 call :LOG WL10_ATTLOG_EXPORT_PATH=%WL10_ATTLOG_EXPORT_PATH%
 
 if exist "%APP_DIR%\coreclr.dll" (
-  call :LOG Self-contained runtime detected (coreclr.dll). Skipping .NET runtime checks.
+  call :LOG Self-contained runtime detected: coreclr.dll. Skipping dotnet runtime checks.
 ) else (
   call :LOG Checking .NET runtimes...
   call :CHECK_DOTNET
@@ -138,23 +138,25 @@ if /I "%RUN_MODE%"=="console" (
 )
 
 set "PS_RC="
-if exist "%PS_EXE%" (
-  "%PS_EXE%" -NoProfile -ExecutionPolicy Bypass -Command ^
-    "$exe=Join-Path (Get-Location) 'WL10Middleware.exe';" ^
-    "$out='%MIDDLE_OUT%';" ^
-    "$err='%MIDDLE_ERR%';" ^
-    "try { $p=Start-Process -FilePath $exe -ArgumentList @('--dashboard','--dashboard-port','5099') -RedirectStandardOutput $out -RedirectStandardError $err -PassThru; Write-Output ('PID=' + $p.Id); Start-Sleep -Seconds 2; if ($p.HasExited) { Write-Output ('EXITED=' + $p.ExitCode); exit 100 } else { exit 0 } } catch { Write-Output ('START_ERROR=' + $_.Exception.GetType().FullName + ': ' + $_.Exception.Message); exit 101 }" >>"%LOG_FILE%" 2>>&1
-  set "PS_RC=%errorlevel%"
-  if "%PS_RC%"=="0" goto :STARTED_OK
-  if "%PS_RC%"=="100" (
-    call :LOG Middleware exited immediately after start attempt (within 2 seconds).
-    goto :START_FAILED
-  )
-  call :LOG Middleware start via PowerShell failed (rc=%PS_RC%). Trying fallback start...
-  start "SHAB Attendance Middleware" /min ""%CD%\WL10Middleware.exe" --dashboard --dashboard-port 5099
-) else (
-  start "SHAB Attendance Middleware" /min ""%CD%\WL10Middleware.exe" --dashboard --dashboard-port 5099
+if exist "%PS_EXE%" goto :START_VIA_POWERSHELL
+goto :START_VIA_FALLBACK
+
+:START_VIA_POWERSHELL
+"%PS_EXE%" -NoProfile -ExecutionPolicy Bypass -Command ^
+  "$exe=Join-Path (Get-Location) 'WL10Middleware.exe';" ^
+  "$out='%MIDDLE_OUT%';" ^
+  "$err='%MIDDLE_ERR%';" ^
+  "try { $p=Start-Process -FilePath $exe -ArgumentList @('--dashboard','--dashboard-port','5099') -RedirectStandardOutput $out -RedirectStandardError $err -PassThru; Write-Output ('PID=' + $p.Id); Start-Sleep -Seconds 2; if ($p.HasExited) { Write-Output ('EXITED=' + $p.ExitCode); exit 100 } else { exit 0 } } catch { Write-Output ('START_ERROR=' + $_.Exception.GetType().FullName + ': ' + $_.Exception.Message); exit 101 }" >>"%LOG_FILE%" 2>>&1
+set "PS_RC=%errorlevel%"
+if "%PS_RC%"=="0" goto :STARTED_OK
+if "%PS_RC%"=="100" (
+  call :LOG Middleware exited immediately after start attempt within 2 seconds.
+  goto :START_FAILED
 )
+call :LOG Middleware start via PowerShell failed. rc=%PS_RC%. Trying fallback start.
+
+:START_VIA_FALLBACK
+start "SHAB Attendance Middleware" /min ""%CD%\WL10Middleware.exe" --dashboard --dashboard-port 5099
 
 timeout /t 2 /nobreak >nul
 tasklist /fi "imagename eq WL10Middleware.exe" | find /i "WL10Middleware.exe" >nul 2>&1
@@ -284,11 +286,15 @@ endlocal
 exit /b 1
 
 :CHECK_PORT
-if exist "%PS_EXE%" (
-  "%PS_EXE%" -NoProfile -ExecutionPolicy Bypass -Command ^
-    "try { $ok=$false; foreach($h in @('127.0.0.1','localhost')){ try{$c=New-Object Net.Sockets.TcpClient; $c.Connect($h,5099); $c.Close(); $ok=$true; break}catch{} }; if($ok){ exit 0 } else { exit 1 } } catch { exit 1 }" >nul 2>&1
-  if not errorlevel 1 exit /b 0
-)
+if exist "%PS_EXE%" goto :CHECK_PORT_PS
+goto :CHECK_PORT_NETSTAT
+
+:CHECK_PORT_PS
+"%PS_EXE%" -NoProfile -ExecutionPolicy Bypass -Command ^
+  "try { $ok=$false; foreach($h in @('127.0.0.1','localhost')){ try{$c=New-Object Net.Sockets.TcpClient; $c.Connect($h,5099); $c.Close(); $ok=$true; break}catch{} }; if($ok){ exit 0 } else { exit 1 } } catch { exit 1 }" >nul 2>&1
+if not errorlevel 1 exit /b 0
+
+:CHECK_PORT_NETSTAT
 netstat -ano | findstr /R /C:":5099 .*LISTENING" >nul 2>&1
 if not errorlevel 1 exit /b 0
 exit /b 1
@@ -354,10 +360,14 @@ exit /b 1
 setlocal EnableExtensions
 >>"%LOG_FILE%" echo [%date% %time%] OS_VER: %OS% (ver: %CMDEXTVERSION%)
 ver >>"%LOG_FILE%" 2>>&1
-if exist "%PS_EXE%" (
-  "%PS_EXE%" -NoProfile -ExecutionPolicy Bypass -Command ^
-    "try { Write-Output ('PSVersion=' + $PSVersionTable.PSVersion.ToString()); Write-Output ('Is64BitOS=' + [Environment]::Is64BitOperatingSystem); Write-Output ('Is64BitProc=' + [Environment]::Is64BitProcess); Write-Output ('OSVersion=' + [Environment]::OSVersion.VersionString) } catch { }" >>"%LOG_FILE%" 2>>&1
-)
+if exist "%PS_EXE%" goto :LOG_SYSTEM_INFO_PS
+goto :LOG_SYSTEM_INFO_DONE
+
+:LOG_SYSTEM_INFO_PS
+"%PS_EXE%" -NoProfile -ExecutionPolicy Bypass -Command ^
+  "try { Write-Output ('PSVersion=' + $PSVersionTable.PSVersion.ToString()); Write-Output ('Is64BitOS=' + [Environment]::Is64BitOperatingSystem); Write-Output ('Is64BitProc=' + [Environment]::Is64BitProcess); Write-Output ('OSVersion=' + [Environment]::OSVersion.VersionString) } catch { }" >>"%LOG_FILE%" 2>>&1
+
+:LOG_SYSTEM_INFO_DONE
 endlocal & exit /b 0
 
 :LOG
@@ -375,10 +385,18 @@ exit /b 0
 :TAIL
 setlocal EnableExtensions
 set "F=%~1"
-if not exist "%F%" (>>"%LOG_FILE%" echo (missing) %F% & endlocal & exit /b 0)
-if not exist "%PS_EXE%" (>>"%LOG_FILE%" echo (no powershell) %F% & endlocal & exit /b 0)
+if not exist "%F%" goto :TAIL_MISSING
+if not exist "%PS_EXE%" goto :TAIL_NO_PS
 "%PS_EXE%" -NoProfile -ExecutionPolicy Bypass -Command ^
   "try { $p='%F%'; if (Test-Path $p) { $t = Get-Content -LiteralPath $p -Tail 80 -ErrorAction SilentlyContinue; foreach($l in $t){ Write-Output $l } } } catch { }" >>"%LOG_FILE%" 2>>&1
+endlocal & exit /b 0
+
+:TAIL_MISSING
+>>"%LOG_FILE%" echo (missing) "%F%"
+endlocal & exit /b 0
+
+:TAIL_NO_PS
+>>"%LOG_FILE%" echo (no powershell) "%F%"
 endlocal & exit /b 0
 
 :LOG_EVENT_ERRORS
@@ -403,9 +421,13 @@ del /f /q "%DESKTOP_DIR%\SHAB Attendance Dashboard (Browser Only).url" >nul 2>&1
 del /f /q "%DESKTOP_DIR%\SHAB Attendance Dashboard.lnk" >nul 2>&1
 
 set "LNK_SHORTCUT=%DESKTOP_DIR%\SHAB Attendance Dashboard.lnk"
-if exist "%PS_EXE%" (
-  "%PS_EXE%" -NoProfile -ExecutionPolicy Bypass -Command "$desktop='%DESKTOP_DIR%'; $lnk=Join-Path $desktop 'SHAB Attendance Dashboard.lnk'; $root='%ROOT%'; $target=Join-Path $root 'Start Dashboard.bat'; $w=New-Object -ComObject WScript.Shell; $s=$w.CreateShortcut($lnk); $s.TargetPath=$target; $s.WorkingDirectory=$root; $s.Description='SHAB Attendance Dashboard'; if (Test-Path '%SHORTCUT_ICON%') { $s.IconLocation='%SHORTCUT_ICON%,0' }; $s.Save();" >nul 2>&1
-)
+if exist "%PS_EXE%" goto :CREATE_SHORTCUT_PS
+goto :CREATE_SHORTCUT_FALLBACK
+
+:CREATE_SHORTCUT_PS
+"%PS_EXE%" -NoProfile -ExecutionPolicy Bypass -Command "$desktop='%DESKTOP_DIR%'; $lnk=Join-Path $desktop 'SHAB Attendance Dashboard.lnk'; $root='%ROOT%'; $target=Join-Path $root 'Start Dashboard.bat'; $w=New-Object -ComObject WScript.Shell; $s=$w.CreateShortcut($lnk); $s.TargetPath=$target; $s.WorkingDirectory=$root; $s.Description='SHAB Attendance Dashboard'; if (Test-Path '%SHORTCUT_ICON%') { $s.IconLocation='%SHORTCUT_ICON%,0' }; $s.Save();" >nul 2>&1
+
+:CREATE_SHORTCUT_FALLBACK
 
 if not exist "%LNK_SHORTCUT%" (
   set "CMD_SHORTCUT=%DESKTOP_DIR%\SHAB Attendance Dashboard.cmd"
