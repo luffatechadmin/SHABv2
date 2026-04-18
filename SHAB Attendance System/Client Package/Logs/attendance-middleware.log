@@ -343,3 +343,72 @@ IsAdmin: True
 Defender exclusion attempted.
 [Sun 04/19/2026  3:53:43.46] WL10_STATE_PATH=C:\Users\USER\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\Data\state.json
 [Sun 04/19/2026  3:53:43.48] WL10_ATTLOG_EXPORT_PATH=C:\Users\USER\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\Exports
+[Sun 04/19/2026  4:03:40.20] ============================================================
+[Sun 04/19/2026  4:03:40.20] SHAB Attendance System - Start Dashboard
+[Sun 04/19/2026  4:03:40.20] Version: 2026-04-16
+[Sun 04/19/2026  4:03:40.22] Root: C:\Users\USER\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\
+[Sun 04/19/2026  4:03:40.22] AppDir: C:\Users\USER\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\App\win-x86
+[Sun 04/19/2026  4:03:40.22] User: USER
+[Sun 04/19/2026  4:03:40.22] Machine: DESKTOP-KKLQT7L
+[Sun 04/19/2026  4:03:40.23] RunMode: console
+[Sun 04/19/2026  4:03:40.23] ============================================================
+[Sun 04/19/2026  4:03:40.23] OS_VER: Windows_NT (ver: 2)
+
+Microsoft Windows [Version 10.0.19045.6466]
+PSVersion=5.1.19041.6456
+Is64BitOS=True
+Is64BitProc=True
+OSVersion=Microsoft Windows NT 10.0.19045.0
+[Sun 04/19/2026  4:03:40.42] Checking if dashboard is already running (port 5099)...
+[Sun 04/19/2026  4:03:44.81] ZKTeco SDK not detected. Installing now - requires Administrator...
+[Sun 04/19/2026  4:03:47.08] ZKTeco SDK detected (or dll present).
+[Sun 04/19/2026  4:03:47.10] Preparing app files and security settings...
+Security prep app path: C:\Users\USER\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\App\win-x86
+Unblocked files: 339
+IsAdmin: True
+Defender exclusion attempted.
+[Sun 04/19/2026  4:03:48.04] WL10_STATE_PATH=C:\Users\USER\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\Data\state.json
+[Sun 04/19/2026  4:03:48.04] WL10_ATTLOG_EXPORT_PATH=C:\Users\USER\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\Exports
+[Sun 04/19/2026  4:03:48.06] Self-contained runtime detected: coreclr.dll. Skipping dotnet runtime checks.
+[Sun 04/19/2026  4:03:48.06] Creating desktop shortcuts...
+[Sun 04/19/2026  4:03:48.90] Shortcut created: C:\Users\USER\Desktop\SHAB Attendance Dashboard.lnk
+[Sun 04/19/2026  4:03:48.90] Launching SHAB Attendance Dashboard...
+[Sun 04/19/2026  4:03:48.92] Middleware: WL10Middleware.exe --dashboard --dashboard-port 5099
+[Sun 04/19/2026  4:03:48.92] LogFile: C:\Users\USER\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\Logs\attendance-middleware.log
+[Sun 04/19/2026  4:03:48.92] MiddlewareStdout: C:\Users\USER\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\Logs\middleware-stdout.log
+[Sun 04/19/2026  4:03:48.92] MiddlewareStderr: C:\Users\USER\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\Logs\middleware-stderr.log
+[Sun 04/19/2026  4:20:01.59] ============================================================
+[Sun 04/19/2026  4:20:01.59] SHAB Attendance System - Start Dashboard
+[Sun 04/19/2026  4:20:01.61] Version: 2026-04-16
+[Sun 04/19/2026  4:20:01.61] Root: C:\Users\USER\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\
+[Sun 04/19/2026  4:20:01.61] AppDir: C:\Users\USER\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\App\win-x86
+[Sun 04/19/2026  4:20:01.62] User: USER
+[Sun 04/19/2026  4:20:01.63] Machine: DESKTOP-KKLQT7L
+[Sun 04/19/2026  4:20:01.63] RunMode: console
+[Sun 04/19/2026  4:20:01.63] ============================================================
+[Sun 04/19/2026  4:20:01.63] OS_VER: Windows_NT (ver: 2)
+
+Microsoft Windows [Version 10.0.19045.6466]
+PSVersion=5.1.19041.6456
+Is64BitOS=True
+Is64BitProc=True
+OSVersion=Microsoft Windows NT 10.0.19045.0
+[Sun 04/19/2026  4:20:01.83] Checking if dashboard is already running (port 5099)...
+[Sun 04/19/2026  4:20:06.18] ZKTeco SDK not detected. Installing now - requires Administrator...
+[Sun 04/19/2026  4:20:08.44] ZKTeco SDK detected (or dll present).
+[Sun 04/19/2026  4:20:08.44] Preparing app files and security settings...
+Security prep app path: C:\Users\USER\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\App\win-x86
+Unblocked files: 339
+IsAdmin: True
+Defender exclusion attempted.
+[Sun 04/19/2026  4:20:09.43] WL10_STATE_PATH=C:\Users\USER\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\Data\state.json
+[Sun 04/19/2026  4:20:09.43] WL10_ATTLOG_EXPORT_PATH=C:\Users\USER\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\Exports
+[Sun 04/19/2026  4:20:09.43] Dotnet check OK (or self-contained runtime detected).
+[Sun 04/19/2026  4:20:09.45] Creating desktop shortcuts...
+[Sun 04/19/2026  4:20:09.73] Shortcut created: C:\Users\USER\Desktop\SHAB Attendance Dashboard.lnk
+[Sun 04/19/2026  4:20:09.73] Launching SHAB Attendance Dashboard...
+[Sun 04/19/2026  4:20:09.73] Middleware: WL10Middleware.exe --dashboard --dashboard-port 5099
+[Sun 04/19/2026  4:20:09.75] LogFile: C:\Users\USER\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\Logs\attendance-middleware.log
+[Sun 04/19/2026  4:20:09.75] MiddlewareStdout: C:\Users\USER\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\Logs\middleware-stdout.log
+[Sun 04/19/2026  4:20:09.75] MiddlewareStderr: C:\Users\USER\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\Logs\middleware-stderr.log
+[Sun 04/19/2026  4:20:09.76] Running middleware in foreground (console mode)...
