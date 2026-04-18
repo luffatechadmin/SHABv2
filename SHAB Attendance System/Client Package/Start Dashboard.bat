@@ -1,11 +1,16 @@
 @echo off
 setlocal EnableExtensions
 
+set "RUN_MODE=background"
+if /I "%~1"=="--console" set "RUN_MODE=console" & shift
+if /I "%~1"=="--foreground" set "RUN_MODE=console" & shift
+if /I "%~1"=="--debug" set "RUN_MODE=console" & shift
+
 set "SHAB_START_VERSION=2026-04-16"
 set "ROOT=%~dp0"
 set "APP_DIR=%ROOT%App\win-x86"
 set "SDK_INSTALL=%ROOT%ZKTecoSDK\x86\Auto-install_sdk.bat"
-set "DASH_URL=http://localhost:5099/login"
+set "DASH_URL=http://127.0.0.1:5099/login"
 set "SHORTCUT_ICON=%ROOT%Assets\SHAB Attendance Dashboard.ico"
 set "LOG_DIR=%ROOT%Logs"
 set "LOG_FILE=%LOG_DIR%\attendance-middleware.log"
@@ -34,7 +39,9 @@ call :LOG Root: %ROOT%
 call :LOG AppDir: %APP_DIR%
 call :LOG User: %USERNAME%
 call :LOG Machine: %COMPUTERNAME%
+call :LOG RunMode: %RUN_MODE%
 call :LOG ============================================================
+call :LOG_SYSTEM_INFO
 
 echo.
 echo ============================================================
@@ -111,14 +118,39 @@ call :LOG MiddlewareStderr: %MIDDLE_ERR%
 if exist "%MIDDLE_OUT%" del /f /q "%MIDDLE_OUT%" >nul 2>&1
 if exist "%MIDDLE_ERR%" del /f /q "%MIDDLE_ERR%" >nul 2>&1
 
+if /I "%RUN_MODE%"=="console" (
+  echo.
+  echo Running middleware in foreground (console mode)...
+  echo Close this window to stop the dashboard.
+  call :LOG Running middleware in foreground (console mode)...
+  WL10Middleware.exe --dashboard --dashboard-port 5099
+  set "MW_EXIT=%errorlevel%"
+  call :LOG Middleware exited (console mode). ExitCode=%MW_EXIT%
+  echo.
+  echo Middleware exited with code: %MW_EXIT%
+  echo Check logs:
+  echo   %MIDDLE_OUT%
+  echo   %MIDDLE_ERR%
+  echo   %LOG_FILE%
+  echo.
+  pause
+  endlocal & exit /b %MW_EXIT%
+)
+
+set "PS_RC="
 if exist "%PS_EXE%" (
   "%PS_EXE%" -NoProfile -ExecutionPolicy Bypass -Command ^
     "$exe=Join-Path (Get-Location) 'WL10Middleware.exe';" ^
     "$out='%MIDDLE_OUT%';" ^
     "$err='%MIDDLE_ERR%';" ^
     "try { $p=Start-Process -FilePath $exe -ArgumentList @('--dashboard','--dashboard-port','5099') -RedirectStandardOutput $out -RedirectStandardError $err -PassThru; Write-Output ('PID=' + $p.Id); Start-Sleep -Seconds 2; if ($p.HasExited) { Write-Output ('EXITED=' + $p.ExitCode); exit 100 } else { exit 0 } } catch { Write-Output ('START_ERROR=' + $_.Exception.GetType().FullName + ': ' + $_.Exception.Message); exit 101 }" >>"%LOG_FILE%" 2>>&1
-  if not errorlevel 1 goto :STARTED_OK
-  call :LOG Middleware start via PowerShell failed. Trying fallback start...
+  set "PS_RC=%errorlevel%"
+  if "%PS_RC%"=="0" goto :STARTED_OK
+  if "%PS_RC%"=="100" (
+    call :LOG Middleware exited immediately after start attempt (within 2 seconds).
+    goto :START_FAILED
+  )
+  call :LOG Middleware start via PowerShell failed (rc=%PS_RC%). Trying fallback start...
   start "SHAB Attendance Middleware" /min ""%CD%\WL10Middleware.exe" --dashboard --dashboard-port 5099
 ) else (
   start "SHAB Attendance Middleware" /min ""%CD%\WL10Middleware.exe" --dashboard --dashboard-port 5099
@@ -317,6 +349,16 @@ if exist "C:\Program Files (x86)\" (
 
 if defined NETCORE_OK if defined ASPNET_OK exit /b 0
 exit /b 1
+
+:LOG_SYSTEM_INFO
+setlocal EnableExtensions
+>>"%LOG_FILE%" echo [%date% %time%] OS_VER: %OS% (ver: %CMDEXTVERSION%)
+ver >>"%LOG_FILE%" 2>>&1
+if exist "%PS_EXE%" (
+  "%PS_EXE%" -NoProfile -ExecutionPolicy Bypass -Command ^
+    "try { Write-Output ('PSVersion=' + $PSVersionTable.PSVersion.ToString()); Write-Output ('Is64BitOS=' + [Environment]::Is64BitOperatingSystem); Write-Output ('Is64BitProc=' + [Environment]::Is64BitProcess); Write-Output ('OSVersion=' + [Environment]::OSVersion.VersionString) } catch { }" >>"%LOG_FILE%" 2>>&1
+)
+endlocal & exit /b 0
 
 :LOG
 setlocal EnableExtensions
