@@ -1,0 +1,229 @@
+## Developer Note – File Handling Strategy for Multi-Device Attendance Logs
+
+### 1. Background
+
+As part of the ongoing enhancement to support multiple attendance devices (WL10 and W30), we have identified a key difference in how each device generates attendance log files.
+
+* **WL10 (existing device)** uses a **static filename**:
+
+  ```
+  1_attlog.dat
+  ```
+
+* **W30 (new device)** generates **dynamic filenames**:
+
+  ```
+  AttendanceLog04192026061238.dat
+  ```
+
+  (includes timestamp in filename)
+
+This introduces a critical requirement:
+
+> The system must support both **static and dynamically generated attendance log files**, depending on the device type.
+
+---
+
+### 2. Problem Statement
+
+The current system assumes:
+
+* A fixed filename
+* A single file source
+* Repeated overwrite behavior
+
+This works for WL10 but will fail for W30 because:
+
+* File names change every time
+* Multiple files may exist simultaneously
+* There is no predictable filename to target
+
+---
+
+### 3. Required Approach (Production-Grade)
+
+We will implement a **file processing system that tracks and processes only new files**, regardless of naming convention.
+
+> **Chosen Strategy: Option C – Process All New Files (Recommended Production Approach)**
+
+---
+
+### 4. Core Concept
+
+Instead of targeting a specific filename, the system should:
+
+1. Scan a directory for relevant files
+2. Identify which files are **new (not yet processed)**
+3. Process only those new files
+4. Mark them as processed
+5. Avoid reprocessing the same file
+
+---
+
+### 5. Functional Requirements
+
+#### 5.1 File Discovery
+
+The system should:
+
+* Scan a configured directory (e.g., `/logs/attendance/`)
+* Support pattern matching:
+
+```id="pattern"
+*.dat
+```
+
+or more specifically:
+
+```id="pattern2"
+1_attlog.dat
+AttendanceLog*.dat
+```
+
+---
+
+#### 5.2 Process Only New Files
+
+The system must maintain a record of processed files.
+
+Example tracking structure:
+
+```id="tracking"
+processed_files
+
+file_name
+file_hash (optional)
+processed_at
+device_id
+```
+
+---
+
+#### 5.3 Processing Flow
+
+Expected workflow:
+
+```id="flow"
+1. Scan directory
+2. Get list of all matching files
+3. Compare against processed_files table
+4. Identify unprocessed files
+5. Process each new file:
+   - Parse content
+   - Normalize data
+   - Insert into database
+6. Mark file as processed
+```
+
+---
+
+#### 5.4 Duplicate Prevention (Critical)
+
+We must handle duplicates at TWO levels:
+
+### A. File-Level Deduplication
+
+* Do not process the same file twice
+
+### B. Record-Level Deduplication
+
+Already implemented but must be preserved:
+
+```id="dedupe"
+UNIQUE (staff_id, timestamp, device_id)
+```
+
+This ensures:
+
+* Even if the same record appears again → no duplication in DB
+
+---
+
+### 6. Suggested Implementation (Example Logic)
+
+```csharp id="example"
+var files = Directory.GetFiles(path, "*.dat");
+
+foreach (var file in files)
+{
+    if (IsAlreadyProcessed(file))
+        continue;
+
+    var lines = File.ReadAllLines(file);
+
+    foreach (var line in lines)
+    {
+        var record = ParseByDeviceType(line, deviceType);
+        UpsertAttendance(record);
+    }
+
+    MarkAsProcessed(file);
+}
+```
+
+---
+
+### 7. Device-Aware Handling
+
+File handling must integrate with device logic:
+
+| Device | Behavior               | Handling                                       |
+| ------ | ---------------------- | ---------------------------------------------- |
+| WL10   | Single static file     | Will be re-read → rely on record deduplication |
+| W30    | Multiple dynamic files | Process each file once                         |
+
+---
+
+### 8. Important Design Principles
+
+1. **Do not rely on filename stability**
+
+   * Filenames are not guaranteed to be consistent
+
+2. **Do not assume one file per device**
+
+   * Especially for W30
+
+3. **System must be idempotent**
+
+   * Running multiple times should not create duplicates
+
+4. **System must be extensible**
+
+   * Future devices may introduce new patterns
+
+---
+
+### 9. Optional Enhancements (Recommended)
+
+* Store file checksum (MD5/SHA1) for stronger deduplication
+* Move processed files to `/processed/` folder
+* Add logging:
+
+  * Files processed
+  * Records imported
+  * Errors
+
+---
+
+### 10. Expected Outcome
+
+After implementation:
+
+* System can handle both static and dynamic file naming
+* New W30 files are automatically detected and processed
+* No duplicate records are inserted
+* No manual intervention required
+* Fully scalable for additional device types
+
+---
+
+### 11. Summary
+
+This enhancement ensures that:
+
+> The attendance ingestion system becomes resilient to differences in device file behavior, enabling reliable multi-device support without relying on fragile filename assumptions.
+
+---
+
+Please implement the file tracking and processing mechanism accordingly, ensuring it integrates with the device-specific parsing logic already outlined.

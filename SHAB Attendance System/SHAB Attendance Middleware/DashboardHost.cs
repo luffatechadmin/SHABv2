@@ -1486,7 +1486,7 @@ static partial class Program
         cfg = currentConfig;
         anon = dashboardSupabaseAnonKey;
       }
-      var (ok, rows, error) = await TryFetchLatestAttendanceEventsVerbose(cfg, anon, limit: 50, null, null, ctx.RequestAborted);
+      var (ok, rows, error) = await TryFetchLatestAttendanceEventsVerbose(cfg, anon, limit: 50, null, null, deviceIdFilter: null, ctx.RequestAborted);
       return Results.Json(new { ok, rows, error }, JsonOptions);
     }).RequireAuthorization();
 
@@ -1518,7 +1518,7 @@ static partial class Program
         if (s.Length > 0) to = s;
       }
 
-      var (ok, rows, error) = await TryFetchLatestAttendanceEventsVerbose(cfg, anon, limit: limit, from, to, ctx.RequestAborted);
+      var (ok, rows, error) = await TryFetchLatestAttendanceEventsVerbose(cfg, anon, limit: limit, from, to, deviceIdFilter: cfg.DeviceId, ctx.RequestAborted);
       return Results.Json(new { ok, rows, error }, JsonOptions);
     }).RequireAuthorization();
 
@@ -1561,10 +1561,53 @@ static partial class Program
           if (maxDt is null || string.CompareOrdinal(dt, maxDt) > 0) maxDt = dt;
         }
 
+        DateTimeOffset? FromLocal8ToUtc(string dtRaw)
+        {
+          if (string.IsNullOrWhiteSpace(dtRaw)) return null;
+          if (!DateTime.TryParseExact(dtRaw.Trim(), "yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture, DateTimeStyles.None, out var localUnspec)) return null;
+          var localOffset = new DateTimeOffset(DateTime.SpecifyKind(localUnspec, DateTimeKind.Unspecified), TimeSpan.FromHours(8));
+          return localOffset.ToUniversalTime();
+        }
+
+        var rangeFromUtc = minDt is null ? null : FromLocal8ToUtc(minDt);
+        var rangeToUtc = maxDt is null ? null : FromLocal8ToUtc(maxDt);
+        string? deleted = null;
+        if (rangeFromUtc.HasValue && rangeToUtc.HasValue && !string.IsNullOrWhiteSpace(cfg.DeviceId))
+        {
+          var fromUtc = rangeFromUtc.Value;
+          var toUtc = rangeToUtc.Value;
+          if (toUtc < fromUtc)
+          {
+            var tmp = fromUtc;
+            fromUtc = toUtc;
+            toUtc = tmp;
+          }
+
+          var baseUrl = cfg.SupabaseUrl.TrimEnd('/');
+          var table = cfg.SupabaseAttendanceTable.Trim();
+          var deviceId = Uri.EscapeDataString(cfg.DeviceId.Trim());
+          var fromIso = Uri.EscapeDataString(fromUtc.ToString("O", CultureInfo.InvariantCulture));
+          var toIso = Uri.EscapeDataString(toUtc.ToString("O", CultureInfo.InvariantCulture));
+          var delUrl = $"{baseUrl}/rest/v1/{table}?device_id=eq.{deviceId}&occurred_at=gte.{fromIso}&occurred_at=lte.{toIso}";
+
+          using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+          using var delReq = new HttpRequestMessage(HttpMethod.Delete, delUrl);
+          delReq.Headers.TryAddWithoutValidation("apikey", cfg.SupabaseServiceRoleKey);
+          delReq.Headers.TryAddWithoutValidation("Authorization", $"Bearer {cfg.SupabaseServiceRoleKey}");
+          delReq.Headers.TryAddWithoutValidation("Prefer", "count=exact,return=minimal");
+          using var delResp = await http.SendAsync(delReq, ctx.RequestAborted);
+          if (!delResp.IsSuccessStatusCode)
+          {
+            var body = await delResp.Content.ReadAsStringAsync(ctx.RequestAborted);
+            throw new InvalidOperationException($"Supabase delete failed: {(int)delResp.StatusCode} {delResp.ReasonPhrase}. Body={body}");
+          }
+          deleted = delResp.Headers.TryGetValues("Content-Range", out var ranges) ? ranges.FirstOrDefault() : null;
+        }
+
         await UpsertAttlogRowsToSupabase(cfg, distinctRows, ctx.RequestAborted);
         runtime.LastSupabaseSyncResult = "ok";
         runtime.LastSupabaseUpsertedCount = keys.Count;
-        return Results.Json(new { ok = true, upserted = rows.Count, distinct = keys.Count, rangeFrom = minDt, rangeTo = maxDt }, JsonOptions);
+        return Results.Json(new { ok = true, upserted = rows.Count, distinct = keys.Count, rangeFrom = minDt, rangeTo = maxDt, deleted }, JsonOptions);
       }
       catch (Exception ex)
       {
@@ -5762,7 +5805,7 @@ static partial class Program
     }
   }
 
-  private static async Task<(bool Ok, object[] Rows, string? Error)> TryFetchLatestAttendanceEventsVerbose(AppConfig config, string? anonKey, int limit, string? from, string? to, CancellationToken ct)
+  private static async Task<(bool Ok, object[] Rows, string? Error)> TryFetchLatestAttendanceEventsVerbose(AppConfig config, string? anonKey, int limit, string? from, string? to, string? deviceIdFilter, CancellationToken ct)
   {
     var baseUrlRaw = (config.SupabaseUrl ?? string.Empty).Trim();
     var tableRaw = (config.SupabaseAttendanceTable ?? string.Empty).Trim();
@@ -5781,6 +5824,7 @@ static partial class Program
       var url = $"{baseUrl}/rest/v1/{tableRaw}?select={select}&order=occurred_at.desc&limit={Math.Clamp(limit, 1, 200)}";
       if (!string.IsNullOrWhiteSpace(from)) url += "&occurred_at=gte." + Uri.EscapeDataString(from.Trim());
       if (!string.IsNullOrWhiteSpace(to)) url += "&occurred_at=lte." + Uri.EscapeDataString(to.Trim());
+      if (!string.IsNullOrWhiteSpace(deviceIdFilter)) url += "&device_id=eq." + Uri.EscapeDataString(deviceIdFilter.Trim());
 
       static async Task<(bool ok, object[] rows, string? error, int statusCode)> FetchAsync(string url, string apiKey, CancellationToken ct)
       {
