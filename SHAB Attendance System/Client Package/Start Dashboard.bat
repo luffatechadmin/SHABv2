@@ -161,14 +161,27 @@ endlocal & exit /b %MW_EXIT%
 :STARTED_OK
 echo Waiting for dashboard to be ready...
 call :LOG Waiting for dashboard to be ready (port 5099)...
-set /a tries=120
+set /a tries=180
+set /a tick=0
 :WAIT_LOOP
-call :CHECK_PORT
+set /a tick+=1
+if %tick%==1 call :LOG Waiting... (up to 180 seconds)
+if %tick%==5 echo Still waiting... & set /a tick=0
+call :CHECK_READY
 if not errorlevel 1 set "READY=1" & goto OPEN_BROWSER
 set /a tries-=1
 if %tries% LEQ 0 goto NOT_READY
 timeout /t 1 /nobreak >nul
 goto WAIT_LOOP
+
+:CHECK_READY
+call :CHECK_PORT
+if not errorlevel 1 exit /b 0
+if exist "%MIDDLE_OUT%" (
+  findstr /i /c:"Dashboard running at" "%MIDDLE_OUT%" >nul 2>&1
+  if not errorlevel 1 exit /b 0
+)
+exit /b 1
 
 :OPEN_BROWSER
 echo.
@@ -282,7 +295,7 @@ goto CHECK_PORT_NETSTAT
 
 :CHECK_PORT_PS
 "%PS_EXE%" -NoProfile -ExecutionPolicy Bypass -Command ^
-  "try { $ok=$false; foreach($h in @('127.0.0.1','localhost')){ try{$c=New-Object Net.Sockets.TcpClient; $c.Connect($h,5099); $c.Close(); $ok=$true; break}catch{} }; if($ok){ exit 0 } else { exit 1 } } catch { exit 1 }" >nul 2>&1
+  "try { $ok=$false; foreach($h in @('127.0.0.1','localhost')){ try { $r = Test-NetConnection -ComputerName $h -Port 5099 -InformationLevel Quiet -WarningAction SilentlyContinue; if ($r) { $ok=$true; break } } catch { } }; if($ok){ exit 0 } else { exit 1 } } catch { exit 1 }" >nul 2>&1
 if not errorlevel 1 exit /b 0
 
 :CHECK_PORT_NETSTAT

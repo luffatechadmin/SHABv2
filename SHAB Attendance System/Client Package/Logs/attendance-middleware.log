@@ -691,3 +691,40 @@ OSVersion=Microsoft Windows NT 10.0.19045.0
 (missing) "C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\Logs\middleware-stderr.log"
 [Sun 04/19/2026 15:36:23.31] Desktop path: C:\Users\admin\Desktop
 [Sun 04/19/2026 15:36:23.31] Recent crash events (Application log):
+[Sun 04/19/2026 15:53:19.60] ============================================================
+[Sun 04/19/2026 15:53:19.61] SHAB Attendance System - Start Dashboard
+[Sun 04/19/2026 15:53:19.61] Version: 2026-04-16
+[Sun 04/19/2026 15:53:19.62] Root: C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\
+[Sun 04/19/2026 15:53:19.63] AppDir: C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\App\win-x86
+[Sun 04/19/2026 15:53:19.63] User: admin
+[Sun 04/19/2026 15:53:19.64] Machine: OLV51-LIDDESK
+[Sun 04/19/2026 15:53:19.64] RunMode: background
+[Sun 04/19/2026 15:53:19.65] ============================================================
+[Sun 04/19/2026 15:53:19.66] OS_VER: Windows_NT (ver: 2)
+
+Microsoft Windows [Version 10.0.19045.5965]
+PSVersion=5.1.19041.5965
+Is64BitOS=True
+Is64BitProc=True
+OSVersion=Microsoft Windows NT 10.0.19045.0
+[Sun 04/19/2026 15:53:19.98] Checking if dashboard is already running (port 5099)...
+[Sun 04/19/2026 15:53:19.98] Restart requested. Stopping existing middleware...
+[Sun 04/19/2026 15:53:28.66] Requesting Administrator access for SDK install...
+[Sun 04/19/2026 15:53:32.10] ============================================================
+[Sun 04/19/2026 15:53:32.11] SHAB Attendance System - Start Dashboard
+[Sun 04/19/2026 15:53:32.11] Version: 2026-04-16
+[Sun 04/19/2026 15:53:32.12] Root: C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\
+[Sun 04/19/2026 15:53:32.12] AppDir: C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\App\win-x86
+[Sun 04/19/2026 15:53:32.13] User: admin
+[Sun 04/19/2026 15:53:32.13] Machine: OLV51-LIDDESK
+[Sun 04/19/2026 15:53:32.14] RunMode: background
+[Sun 04/19/2026 15:53:32.14] ============================================================
+[Sun 04/19/2026 15:53:32.15] OS_VER: Windows_NT (ver: 2)
+
+Microsoft Windows [Version 10.0.19045.5965]
+PSVersion=5.1.19041.5965
+Is64BitOS=True
+Is64BitProc=True
+OSVersion=Microsoft Windows NT 10.0.19045.0
+[Sun 04/19/2026 15:53:32.48] Checking if dashboard is already running (port 5099)...
+[Sun 04/19/2026 15:53:39.98] Recent crash events (Application log):
