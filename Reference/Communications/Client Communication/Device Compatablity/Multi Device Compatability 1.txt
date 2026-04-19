@@ -1,0 +1,207 @@
+## Developer Note – Multi-Device Attendance Integration (WL10 + W30)
+
+### 1. Background & Objective
+
+We currently have a working attendance pipeline using the ZKTeco WL10 device, where fingerprint punch data is successfully retrieved, parsed, and displayed in the SHAB Attendance Dashboard.
+
+The client has now introduced a second device, **NGTeco W30**, which operates on a different firmware and produces attendance logs in a different format.
+
+The objective of this enhancement is:
+
+> To enable the system to support multiple attendance devices simultaneously, where each device may have different data formats, but all data must be unified into a single consistent structure for storage, processing, and dashboard display.
+
+---
+
+### 2. Key Requirement (Very Important)
+
+The system must:
+
+* Support **multiple devices (e.g., Device #1, Device #2, etc.)**
+* Allow each device to be configured independently (IP, device ID, type)
+* Correctly **parse attendance logs based on device type**
+* Normalize all parsed data into a **single standard format**
+
+This means:
+
+* The dashboard and database structure should NOT change
+* Only the **parsing and ingestion layer** needs to be enhanced
+
+---
+
+### 3. Current Situation
+
+#### WL10 (Existing – Working)
+
+The current parser assumes a fixed structure:
+
+```
+staff_id | timestamp | verified | status | workcode | reserved
+```
+
+This logic is already implemented and should remain unchanged.
+
+---
+
+#### W30 (New Device)
+
+The W30 device produces a different format:
+
+```
+staff_id | timestamp | col_2 | col_3
+```
+
+Key differences:
+
+* Fewer columns (4 instead of 6)
+* Different meaning for each column
+* Does not follow WL10 schema
+
+Because of this, the current parser fails or produces incorrect interpretation.
+
+---
+
+### 4. Required Enhancement – Device-Aware Parsing
+
+We need to introduce a **device-aware parsing mechanism**.
+
+#### Concept:
+
+Instead of using one global parser, the system must:
+
+> Select the correct parser based on the device type.
+
+---
+
+### 5. Implementation Approach
+
+#### 5.1 Device Configuration
+
+Each device should have identifiable metadata:
+
+```
+device_id
+device_name
+device_type   (e.g., "WL10", "W30")
+ip_address
+port
+```
+
+---
+
+#### 5.2 Parser Routing Logic
+
+When processing logs:
+
+```
+IF device_type == "WL10"
+    → use existing WL10 parser
+
+IF device_type == "W30"
+    → use new W30 parser
+```
+
+---
+
+#### 5.3 W30 Parser (New)
+
+Based on sample data, W30 format is:
+
+```
+staff_id | timestamp | status | flag
+```
+
+Initial assumption (to be validated during testing):
+
+* Column 0 → staff_id
+* Column 1 → timestamp
+* Column 2 → status (likely 0 = IN, 1 = OUT)
+* Column 3 → verification mode or device flag
+
+The parser should:
+
+* Extract available fields
+* Safely handle missing columns
+* Map values into our standard structure
+
+---
+
+### 6. Unified Output Structure (Critical)
+
+Regardless of device type, ALL parsed data must be converted into a consistent format:
+
+```
+staff_id
+timestamp
+status        (normalized: IN / OUT)
+verified      (if available, else default)
+device_id
+```
+
+This ensures:
+
+* No change required in database schema
+* No change required in frontend/dashboard
+* Existing analytics continue to work
+
+---
+
+### 7. Status Normalization
+
+Important difference:
+
+* WL10 uses complex status codes (e.g., 255, 1, etc.)
+* W30 likely uses simplified values (0 / 1)
+
+You must implement a **mapping layer** to standardize:
+
+Example:
+
+```
+WL10 → mapped using existing logic
+W30 → 0 = IN, 1 = OUT
+```
+
+---
+
+### 8. Design Principles (Must Follow)
+
+1. **Do not modify existing WL10 logic**
+
+   * Keep backward compatibility fully intact
+
+2. **Do not hardcode assumptions globally**
+
+   * Parsing must be device-specific
+
+3. **Do not change database or frontend**
+
+   * Only middleware parsing layer is affected
+
+4. **Make it extensible**
+
+   * Future devices should be pluggable without rewriting core logic
+
+---
+
+### 9. Expected Outcome
+
+After implementation:
+
+* System can connect to multiple devices simultaneously
+* Each device is parsed correctly according to its format
+* All attendance records appear unified in the dashboard
+* No duplication or inconsistency in data
+
+---
+
+### 10. Summary
+
+This enhancement is not just about supporting one new device.
+
+It is a structural upgrade to:
+
+> Transform the system from a single-device integration into a scalable, multi-device attendance ingestion engine.
+
+---
+
+Please proceed with designing the parser abstraction layer and implementing W30 support accordingly.
