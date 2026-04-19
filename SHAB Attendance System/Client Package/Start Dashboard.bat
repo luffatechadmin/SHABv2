@@ -18,6 +18,8 @@ set "MIDDLE_OUT=%LOG_DIR%\middleware-stdout.log"
 set "MIDDLE_ERR=%LOG_DIR%\middleware-stderr.log"
 set "DATA_DIR=%ROOT%Data"
 set "EXPORT_DIR=%ROOT%Exports"
+set "REF_DIR=%ROOT%Reference"
+set "ATTLOG_FILE=%REF_DIR%\1_attlog.dat"
 set "WIN_DIR=%SystemRoot%"
 if not defined WIN_DIR set "WIN_DIR=%windir%"
 set "PS_EXE=%WIN_DIR%\System32\WindowsPowerShell\v1.0\powershell.exe"
@@ -31,6 +33,8 @@ set "DOTNET_X64_EXE=C:\Program Files\dotnet\dotnet.exe"
 if not exist "%LOG_DIR%" mkdir "%LOG_DIR%" >nul 2>&1
 if not exist "%DATA_DIR%" mkdir "%DATA_DIR%" >nul 2>&1
 if not exist "%EXPORT_DIR%" mkdir "%EXPORT_DIR%" >nul 2>&1
+if not exist "%REF_DIR%" mkdir "%REF_DIR%" >nul 2>&1
+if not exist "%ATTLOG_FILE%" type nul > "%ATTLOG_FILE%" 2>nul
 
 call :LOG ============================================================
 call :LOG SHAB Attendance System - Start Dashboard
@@ -90,9 +94,11 @@ call :PREPARE_SECURITY
 
 REM Force local state/export paths so the package is self-contained (no dependency on other folders)
 set "WL10_STATE_PATH=%DATA_DIR%\state.json"
-set "WL10_ATTLOG_EXPORT_PATH=%EXPORT_DIR%"
+set "WL10_ATTLOG_EXPORT_PATH=%ATTLOG_FILE%"
+set "WL10_ATTLOG_FILE_PATH=%ATTLOG_FILE%"
 call :LOG WL10_STATE_PATH=%WL10_STATE_PATH%
 call :LOG WL10_ATTLOG_EXPORT_PATH=%WL10_ATTLOG_EXPORT_PATH%
+call :LOG WL10_ATTLOG_FILE_PATH=%WL10_ATTLOG_FILE_PATH%
 
 if exist "%APP_DIR%\coreclr.dll" goto :DOTNET_OK
 call :LOG Checking .NET runtimes...
