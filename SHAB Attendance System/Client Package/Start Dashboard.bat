@@ -133,6 +133,8 @@ call :LOG MiddlewareStderr: %MIDDLE_ERR%
 
 if exist "%MIDDLE_OUT%" del /f /q "%MIDDLE_OUT%" >nul 2>&1
 if exist "%MIDDLE_ERR%" del /f /q "%MIDDLE_ERR%" >nul 2>&1
+type nul > "%MIDDLE_OUT%" 2>nul
+type nul > "%MIDDLE_ERR%" 2>nul
 
 if /I "%RUN_MODE%"=="console" goto RUN_CONSOLE
 
@@ -161,7 +163,8 @@ endlocal & exit /b %MW_EXIT%
 :STARTED_OK
 echo Waiting for dashboard to be ready...
 call :LOG Waiting for dashboard to be ready (port 5099)...
-set /a tries=180
+set /a TRIES_MAX=180
+set /a tries=%TRIES_MAX%
 set /a tick=0
 :WAIT_LOOP
 set /a tick+=1
@@ -169,6 +172,14 @@ if %tick%==1 call :LOG Waiting... (up to 180 seconds)
 if %tick%==5 echo Still waiting... & set /a tick=0
 call :CHECK_READY
 if not errorlevel 1 set "READY=1" & goto OPEN_BROWSER
+call :CHECK_PROC
+if errorlevel 1 (
+  set /a elapsed=%TRIES_MAX%-%tries%
+  if %elapsed% GEQ 10 (
+    call :LOG Middleware process not detected after %elapsed% seconds.
+    goto START_FAILED
+  )
+)
 set /a tries-=1
 if %tries% LEQ 0 goto NOT_READY
 timeout /t 1 /nobreak >nul
@@ -181,6 +192,11 @@ if exist "%MIDDLE_OUT%" (
   findstr /i /c:"Dashboard running at" "%MIDDLE_OUT%" >nul 2>&1
   if not errorlevel 1 exit /b 0
 )
+exit /b 1
+
+:CHECK_PROC
+tasklist /fi "imagename eq WL10Middleware.exe" | find /i "WL10Middleware.exe" >nul 2>&1
+if not errorlevel 1 exit /b 0
 exit /b 1
 
 :OPEN_BROWSER
