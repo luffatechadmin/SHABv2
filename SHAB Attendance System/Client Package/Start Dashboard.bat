@@ -5,6 +5,11 @@ set "RUN_MODE=background"
 if /I "%~1"=="--console" ( set "RUN_MODE=console" & shift )
 if /I "%~1"=="--foreground" ( set "RUN_MODE=console" & shift )
 if /I "%~1"=="--debug" ( set "RUN_MODE=console" & shift )
+set "FORCE_RESTART="
+if /I "%~1"=="--restart" ( set "FORCE_RESTART=1" & shift )
+if /I "%~1"=="--force" ( set "FORCE_RESTART=1" & shift )
+set "OPEN_LINKS="
+if /I "%~1"=="--open-links" ( set "OPEN_LINKS=1" & shift )
 
 set "SHAB_START_VERSION=2026-04-16"
 set "ROOT=%~dp0"
@@ -35,6 +40,7 @@ if not exist "%DATA_DIR%" mkdir "%DATA_DIR%" >nul 2>&1
 if not exist "%EXPORT_DIR%" mkdir "%EXPORT_DIR%" >nul 2>&1
 if not exist "%REF_DIR%" mkdir "%REF_DIR%" >nul 2>&1
 if not exist "%ATTLOG_FILE%" type nul > "%ATTLOG_FILE%" 2>nul
+set "DESKTOP_DIR=%USERPROFILE%\Desktop"
 
 call :LOG ============================================================
 call :LOG SHAB Attendance System - Start Dashboard
@@ -60,13 +66,19 @@ cd /d "%APP_DIR%"
 echo.
 echo Checking if dashboard is already running...
 call :LOG Checking if dashboard is already running (port 5099)...
+if defined FORCE_RESTART (
+  echo Restart requested. Stopping existing middleware...
+  call :LOG Restart requested. Stopping existing middleware...
+  taskkill /IM WL10Middleware.exe /F >nul 2>nul
+  timeout /t 1 /nobreak >nul
+)
 call :CHECK_PORT
-if not errorlevel 1 set "READY=1" & goto :OPEN_BROWSER
+if not errorlevel 1 set "READY=1" & goto OPEN_BROWSER
 
 call :CHECK_ZKEMKEEPER
-if not errorlevel 1 goto :SDK_OK
+if not errorlevel 1 goto SDK_OK
 call :IS_ADMIN
-if not errorlevel 1 goto :SDK_INSTALL
+if not errorlevel 1 goto SDK_INSTALL
 echo Requesting Administrator access for SDK install...
 call :LOG Requesting Administrator access for SDK install...
 call :ELEVATE_SELF
@@ -81,8 +93,8 @@ call :RUN_AS_ADMIN "%SDK_INSTALL%"
 set "SHAB_SDK_INSTALL_SILENT="
 if errorlevel 1 echo ERROR: Administrator request was cancelled or blocked. & echo Please run this as Administrator: & echo   %SDK_INSTALL% & echo. & pause & exit /b 1
 call :CHECK_ZKEMKEEPER
-if not errorlevel 1 goto :SDK_OK
-if exist "%ZK_TARGET%\zkemkeeper.dll" echo WARNING: ZKTeco SDK dll is present but COM registration was not detected or COM could not be loaded. & echo Device functions may not work until the SDK is registered. & goto :SDK_OK
+if not errorlevel 1 goto SDK_OK
+if exist "%ZK_TARGET%\zkemkeeper.dll" echo WARNING: ZKTeco SDK dll is present but COM registration was not detected or COM could not be loaded. & echo Device functions may not work until the SDK is registered. & goto SDK_OK
 echo ERROR: ZKTeco SDK install may have failed or was cancelled. & echo Please run this as Administrator: & echo   %SDK_INSTALL% & echo. & pause & exit /b 1
 
 :SDK_OK
@@ -100,10 +112,10 @@ call :LOG WL10_STATE_PATH=%WL10_STATE_PATH%
 call :LOG WL10_ATTLOG_EXPORT_PATH=%WL10_ATTLOG_EXPORT_PATH%
 call :LOG WL10_ATTLOG_FILE_PATH=%WL10_ATTLOG_FILE_PATH%
 
-if exist "%APP_DIR%\coreclr.dll" goto :DOTNET_OK
+if exist "%APP_DIR%\coreclr.dll" goto DOTNET_OK
 call :LOG Checking .NET runtimes...
 call :CHECK_DOTNET
-if errorlevel 1 goto :DOTNET_MISSING
+if errorlevel 1 goto DOTNET_MISSING
 :DOTNET_OK
 call :LOG Dotnet check OK (or self-contained runtime detected).
 
@@ -122,11 +134,11 @@ call :LOG MiddlewareStderr: %MIDDLE_ERR%
 if exist "%MIDDLE_OUT%" del /f /q "%MIDDLE_OUT%" >nul 2>&1
 if exist "%MIDDLE_ERR%" del /f /q "%MIDDLE_ERR%" >nul 2>&1
 
-if /I "%RUN_MODE%"=="console" goto :RUN_CONSOLE
+if /I "%RUN_MODE%"=="console" goto RUN_CONSOLE
 
-set "PS_RC="
-if exist "%PS_EXE%" goto :START_VIA_POWERSHELL
-goto :START_VIA_FALLBACK
+call :LOG Starting middleware in background...
+start "SHAB Attendance Middleware" /min cmd /c "\"%CD%\WL10Middleware.exe\" --dashboard --dashboard-port 5099 1>\"%MIDDLE_OUT%\" 2>\"%MIDDLE_ERR%\""
+goto STARTED_OK
 
 :RUN_CONSOLE
 echo.
@@ -146,39 +158,21 @@ echo.
 pause
 endlocal & exit /b %MW_EXIT%
 
-:START_VIA_POWERSHELL
-"%PS_EXE%" -NoProfile -ExecutionPolicy Bypass -Command ^
-  "$exe=Join-Path (Get-Location) 'WL10Middleware.exe';" ^
-  "$out='%MIDDLE_OUT%';" ^
-  "$err='%MIDDLE_ERR%';" ^
-  "try { $p=Start-Process -FilePath $exe -ArgumentList @('--dashboard','--dashboard-port','5099') -RedirectStandardOutput $out -RedirectStandardError $err -PassThru; Write-Output ('PID=' + $p.Id); Start-Sleep -Seconds 2; if ($p.HasExited) { Write-Output ('EXITED=' + $p.ExitCode); exit 100 } else { exit 0 } } catch { Write-Output ('START_ERROR=' + $_.Exception.GetType().FullName + ': ' + $_.Exception.Message); exit 101 }" >>"%LOG_FILE%" 2>>&1
-set "PS_RC=%errorlevel%"
-if "%PS_RC%"=="0" goto :STARTED_OK
-if "%PS_RC%"=="100" goto :START_FAILED_EARLY_EXIT
-call :LOG Middleware start via PowerShell failed. rc=%PS_RC%. Trying fallback start.
-
-:START_VIA_FALLBACK
-start "SHAB Attendance Middleware" /min "%CD%\WL10Middleware.exe" --dashboard --dashboard-port 5099
-
-timeout /t 2 /nobreak >nul
-tasklist /fi "imagename eq WL10Middleware.exe" | find /i "WL10Middleware.exe" >nul 2>&1
-if errorlevel 1 goto :START_FAILED_TASKLIST
-
 :STARTED_OK
 echo Waiting for dashboard to be ready...
 call :LOG Waiting for dashboard to be ready (port 5099)...
 set /a tries=120
 :WAIT_LOOP
 call :CHECK_PORT
-if not errorlevel 1 set "READY=1" & goto :OPEN_BROWSER
+if not errorlevel 1 set "READY=1" & goto OPEN_BROWSER
 set /a tries-=1
-if %tries% LEQ 0 goto :NOT_READY
+if %tries% LEQ 0 goto NOT_READY
 timeout /t 1 /nobreak >nul
-goto :WAIT_LOOP
+goto WAIT_LOOP
 
 :OPEN_BROWSER
 echo.
-if not defined READY goto :NOT_READY
+if not defined READY goto NOT_READY
 echo Opening browser: %DASH_URL%
 call :LOG Dashboard reachable. Opening browser: %DASH_URL%
 call :OPEN_URL "%DASH_URL%"
@@ -190,11 +184,11 @@ exit /b 0
 
 :START_FAILED_EARLY_EXIT
 call :LOG Middleware exited immediately after start attempt within 2 seconds.
-goto :START_FAILED
+goto START_FAILED
 
 :START_FAILED_TASKLIST
 call :LOG Middleware not found in tasklist after initial start attempt.
-goto :START_FAILED
+goto START_FAILED
 
 :NOT_READY
 echo Dashboard did not become reachable on port 5099.
@@ -223,11 +217,10 @@ call :LOG Middleware stdout (tail):
 call :TAIL "%MIDDLE_OUT%"
 call :LOG Middleware stderr (tail):
 call :TAIL "%MIDDLE_ERR%"
-if not exist "%MIDDLE_ERR%" goto :NOT_READY_AFTER_ERR_OPEN
+if not exist "%MIDDLE_ERR%" goto NOT_READY_AFTER_ERR_OPEN
 for %%A in ("%MIDDLE_ERR%") do set "ERR_SIZE=%%~zA"
 if not "%ERR_SIZE%"=="0" start "" notepad.exe "%MIDDLE_ERR%"
 :NOT_READY_AFTER_ERR_OPEN
-if exist "%LOG_FILE%" findstr /i /c:"You must install or update .NET" "%LOG_FILE%" >nul 2>&1 & call :OPEN_URL "https://dotnet.microsoft.com/en-us/download/dotnet/8.0"
 for %%A in ("%LOG_FILE%") do set "LOG_SIZE=%%~zA"
 for %%A in ("%LOG_FILE%") do set "LOG_SIZE=%%~zA"
 if "%LOG_SIZE%"=="0" echo NOTE: Log file is empty. Windows Defender or SmartScreen may be blocking WL10Middleware.exe. & echo Try: Right-click WL10Middleware.exe ^> Properties ^> Unblock, then run again.
@@ -240,13 +233,13 @@ exit /b 1
 
 :START_FAILED
 echo Middleware process did not start.
-echo This is usually caused by missing .NET runtime, antivirus blocking the EXE, or missing permissions.
+echo This is usually caused by antivirus blocking the EXE, missing permissions, or a missing dependency.
 call :LOG ERROR: Middleware process did not start.
 call :LOG Middleware stdout (tail):
 call :TAIL "%MIDDLE_OUT%"
 call :LOG Middleware stderr (tail):
 call :TAIL "%MIDDLE_ERR%"
-if not exist "%MIDDLE_ERR%" goto :START_FAILED_AFTER_ERR_OPEN
+if not exist "%MIDDLE_ERR%" goto START_FAILED_AFTER_ERR_OPEN
 for %%A in ("%MIDDLE_ERR%") do set "ERR_SIZE=%%~zA"
 if not "%ERR_SIZE%"=="0" start "" notepad.exe "%MIDDLE_ERR%"
 :START_FAILED_AFTER_ERR_OPEN
@@ -258,16 +251,8 @@ call :LOG Desktop path: %DESKTOP_DIR%
 call :LOG Recent crash events (Application log):
 call :LOG_EVENT_ERRORS
 if exist "%LOG_FILE%" echo Log file: & echo   %LOG_FILE% & echo. & start "" notepad.exe "%LOG_FILE%"
-if exist "%LOG_FILE%" findstr /i /c:"You must install or update .NET" "%LOG_FILE%" >nul 2>&1 & call :OPEN_URL "https://dotnet.microsoft.com/en-us/download/dotnet/8.0"
 for %%A in ("%LOG_FILE%") do set "LOG_SIZE=%%~zA"
 if "%LOG_SIZE%"=="0" echo NOTE: Log file is empty. Windows Defender or SmartScreen may be blocking WL10Middleware.exe. & echo Try: Right-click WL10Middleware.exe ^> Properties ^> Unblock, then run again.
-echo Required runtimes:
-echo - .NET 8 Runtime for Windows x86
-echo - ASP.NET Core 8 Runtime for Windows x86
-echo.
-echo Download .NET 8 here:
-echo https://dotnet.microsoft.com/en-us/download/dotnet/8.0
-call :OPEN_URL "https://dotnet.microsoft.com/en-us/download/dotnet/8.0"
 echo.
 pause
 echo.
@@ -285,15 +270,15 @@ call :LOG ERROR: Required .NET runtimes are missing for this app.
 echo.
 echo Download .NET 8 here and install the Windows x86 runtimes:
 echo https://dotnet.microsoft.com/en-us/download/dotnet/8.0
-call :OPEN_URL "https://dotnet.microsoft.com/en-us/download/dotnet/8.0"
+if defined OPEN_LINKS call :OPEN_URL "https://dotnet.microsoft.com/en-us/download/dotnet/8.0"
 echo.
 pause
 endlocal
 exit /b 1
 
 :CHECK_PORT
-if exist "%PS_EXE%" goto :CHECK_PORT_PS
-goto :CHECK_PORT_NETSTAT
+if exist "%PS_EXE%" goto CHECK_PORT_PS
+goto CHECK_PORT_NETSTAT
 
 :CHECK_PORT_PS
 "%PS_EXE%" -NoProfile -ExecutionPolicy Bypass -Command ^
@@ -366,8 +351,8 @@ exit /b 1
 setlocal EnableExtensions
 >>"%LOG_FILE%" echo [%date% %time%] OS_VER: %OS% (ver: %CMDEXTVERSION%)
 ver >>"%LOG_FILE%" 2>>&1
-if exist "%PS_EXE%" goto :LOG_SYSTEM_INFO_PS
-goto :LOG_SYSTEM_INFO_DONE
+if exist "%PS_EXE%" goto LOG_SYSTEM_INFO_PS
+goto LOG_SYSTEM_INFO_DONE
 
 :LOG_SYSTEM_INFO_PS
 "%PS_EXE%" -NoProfile -ExecutionPolicy Bypass -Command ^
@@ -391,8 +376,8 @@ exit /b 0
 :TAIL
 setlocal EnableExtensions
 set "F=%~1"
-if not exist "%F%" goto :TAIL_MISSING
-if not exist "%PS_EXE%" goto :TAIL_NO_PS
+if not exist "%F%" goto TAIL_MISSING
+if not exist "%PS_EXE%" goto TAIL_NO_PS
 "%PS_EXE%" -NoProfile -ExecutionPolicy Bypass -Command ^
   "try { $p='%F%'; if (Test-Path $p) { $t = Get-Content -LiteralPath $p -Tail 80 -ErrorAction SilentlyContinue; foreach($l in $t){ Write-Output $l } } } catch { }" >>"%LOG_FILE%" 2>>&1
 endlocal & exit /b 0
@@ -410,9 +395,11 @@ wevtutil qe Application /c:20 /f:text /rd:true /q:"*[System[(EventID=1000 or Eve
 exit /b 0
 
 :OPEN_URL
-if exist "%PS_EXE%" "%PS_EXE%" -NoProfile -ExecutionPolicy Bypass -Command "Start-Process '%~1'" >nul 2>&1
+if exist "%PS_EXE%" (
+  "%PS_EXE%" -NoProfile -ExecutionPolicy Bypass -Command "Start-Process '%~1'" >nul 2>&1
+  exit /b 0
+)
 start "" "%~1" >nul 2>&1
-rundll32 url.dll,FileProtocolHandler "%~1" >nul 2>&1
 exit /b 0
 
 :CREATE_SHORTCUT
@@ -427,15 +414,15 @@ del /f /q "%DESKTOP_DIR%\SHAB Attendance Dashboard (Browser Only).url" >nul 2>&1
 del /f /q "%DESKTOP_DIR%\SHAB Attendance Dashboard.lnk" >nul 2>&1
 
 set "LNK_SHORTCUT=%DESKTOP_DIR%\SHAB Attendance Dashboard.lnk"
-if exist "%PS_EXE%" goto :CREATE_SHORTCUT_PS
-goto :CREATE_SHORTCUT_FALLBACK
+if exist "%PS_EXE%" goto CREATE_SHORTCUT_PS
+goto CREATE_SHORTCUT_FALLBACK
 
 :CREATE_SHORTCUT_PS
 "%PS_EXE%" -NoProfile -ExecutionPolicy Bypass -Command "$desktop='%DESKTOP_DIR%'; $lnk=Join-Path $desktop 'SHAB Attendance Dashboard.lnk'; $root='%ROOT%'; $target=Join-Path $root 'Start Dashboard.bat'; $w=New-Object -ComObject WScript.Shell; $s=$w.CreateShortcut($lnk); $s.TargetPath=$target; $s.WorkingDirectory=$root; $s.Description='SHAB Attendance Dashboard'; if (Test-Path '%SHORTCUT_ICON%') { $s.IconLocation='%SHORTCUT_ICON%,0' }; $s.Save();" >nul 2>&1
 
 :CREATE_SHORTCUT_FALLBACK
 
-if not exist "%LNK_SHORTCUT%" goto :CREATE_SHORTCUT_CMD
+if not exist "%LNK_SHORTCUT%" goto CREATE_SHORTCUT_CMD
 
 echo Shortcut created:
 echo   %LNK_SHORTCUT%

@@ -448,3 +448,246 @@ Defender exclusion attempted.
 [Sun 04/19/2026 12:04:09.54] MiddlewareStdout: C:\Users\USER\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\Logs\middleware-stdout.log
 [Sun 04/19/2026 12:04:09.56] MiddlewareStderr: C:\Users\USER\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\Logs\middleware-stderr.log
 PID=9220
+[Sun 04/19/2026 14:26:01.65] ============================================================
+[Sun 04/19/2026 14:26:01.66] SHAB Attendance System - Start Dashboard
+[Sun 04/19/2026 14:26:01.68] Version: 2026-04-16
+[Sun 04/19/2026 14:26:01.69] Root: C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\
+[Sun 04/19/2026 14:26:01.71] AppDir: C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\App\win-x86
+[Sun 04/19/2026 14:26:01.72] User: admin
+[Sun 04/19/2026 14:26:02.15] Dashboard reachable. Opening browser: http://127.0.0.1:5099/login
+[Sun 04/19/2026 14:26:03.72] Done.
+[Sun 04/19/2026 14:26:03.74] RunMode: background
+[Sun 04/19/2026 14:26:03.76] ============================================================
+[Sun 04/19/2026 14:26:03.78] OS_VER: Windows_NT (ver: 2)
+
+Microsoft Windows [Version 10.0.19045.5965]
+PSVersion=5.1.19041.5965
+Is64BitOS=True
+Is64BitProc=True
+OSVersion=Microsoft Windows NT 10.0.19045.0
+[Sun 04/19/2026 14:26:04.32] Checking if dashboard is already running (port 5099)...
+[Sun 04/19/2026 14:26:04.74] Dashboard reachable. Opening browser: http://127.0.0.1:5099/login
+[Sun 04/19/2026 14:26:05.70] Done.
+[Sun 04/19/2026 14:29:53.75] ============================================================
+[Sun 04/19/2026 14:29:53.76] SHAB Attendance System - Start Dashboard
+[Sun 04/19/2026 14:29:53.79] Version: 2026-04-16
+[Sun 04/19/2026 14:29:53.81] Root: C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\
+[Sun 04/19/2026 14:29:53.82] AppDir: C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\App\win-x86
+[Sun 04/19/2026 14:29:53.84] User: admin
+[Sun 04/19/2026 14:29:54.40] Dashboard reachable. Opening browser: http://127.0.0.1:5099/login
+[Sun 04/19/2026 14:29:55.62] Done.
+[Sun 04/19/2026 14:29:55.64] RunMode: background
+[Sun 04/19/2026 14:29:55.65] ============================================================
+[Sun 04/19/2026 14:29:55.67] OS_VER: Windows_NT (ver: 2)
+
+Microsoft Windows [Version 10.0.19045.5965]
+PSVersion=5.1.19041.5965
+Is64BitOS=True
+Is64BitProc=True
+OSVersion=Microsoft Windows NT 10.0.19045.0
+[Sun 04/19/2026 14:29:56.13] Checking if dashboard is already running (port 5099)...
+[Sun 04/19/2026 14:29:56.48] Dashboard reachable. Opening browser: http://127.0.0.1:5099/login
+[Sun 04/19/2026 14:29:57.22] Done.
+[Sun 04/19/2026 14:35:33.97] ============================================================
+[Sun 04/19/2026 14:35:33.98] SHAB Attendance System - Start Dashboard
+[Sun 04/19/2026 14:35:33.99] Version: 2026-04-16
+[Sun 04/19/2026 14:35:34.01] Root: C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\
+[Sun 04/19/2026 14:35:34.02] AppDir: C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\App\win-x86
+[Sun 04/19/2026 14:35:34.04] User: admin
+[Sun 04/19/2026 14:35:34.39] Dashboard reachable. Opening browser: http://127.0.0.1:5099/login
+[Sun 04/19/2026 14:35:35.67] Done.
+[Sun 04/19/2026 14:35:35.68] RunMode: background
+[Sun 04/19/2026 14:35:35.70] ============================================================
+[Sun 04/19/2026 14:35:35.72] OS_VER: Windows_NT (ver: 2)
+
+Microsoft Windows [Version 10.0.19045.5965]
+PSVersion=5.1.19041.5965
+Is64BitOS=True
+Is64BitProc=True
+OSVersion=Microsoft Windows NT 10.0.19045.0
+[Sun 04/19/2026 14:35:36.16] Checking if dashboard is already running (port 5099)...
+[Sun 04/19/2026 14:35:36.52] Dashboard reachable. Opening browser: http://127.0.0.1:5099/login
+[Sun 04/19/2026 14:35:37.39] Done.
+[Sun 04/19/2026 14:44:35.74] ============================================================
+[Sun 04/19/2026 14:44:35.74] SHAB Attendance System - Start Dashboard
+[Sun 04/19/2026 14:44:35.77] Version: 2026-04-16
+[Sun 04/19/2026 14:44:35.78] Root: C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\
+[Sun 04/19/2026 14:44:35.80] AppDir: C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\App\win-x86
+[Sun 04/19/2026 14:44:35.81] User: admin
+[Sun 04/19/2026 14:44:36.20] Dashboard reachable. Opening browser: http://127.0.0.1:5099/login
+[Sun 04/19/2026 14:44:37.62] Done.
+[Sun 04/19/2026 14:44:37.64] RunMode: background
+[Sun 04/19/2026 14:44:37.66] ============================================================
+[Sun 04/19/2026 14:44:37.68] OS_VER: Windows_NT (ver: 2)
+
+Microsoft Windows [Version 10.0.19045.5965]
+PSVersion=5.1.19041.5965
+Is64BitOS=True
+Is64BitProc=True
+OSVersion=Microsoft Windows NT 10.0.19045.0
+[Sun 04/19/2026 14:44:38.41] Checking if dashboard is already running (port 5099)...
+[Sun 04/19/2026 14:44:38.78] Dashboard reachable. Opening browser: http://127.0.0.1:5099/login
+[Sun 04/19/2026 14:44:39.74] Done.
+[Sun 04/19/2026 14:51:40.74] ============================================================
+[Sun 04/19/2026 14:51:40.75] SHAB Attendance System - Start Dashboard
+[Sun 04/19/2026 14:51:40.77] Version: 2026-04-16
+[Sun 04/19/2026 14:51:40.79] Creating desktop shortcuts...
+[Sun 04/19/2026 14:51:41.38] Shortcut created: C:\Users\admin\Desktop\SHAB Attendance Dashboard.lnk
+[Sun 04/19/2026 14:51:41.39] Launching SHAB Attendance Dashboard...
+[Sun 04/19/2026 14:51:41.41] Middleware: WL10Middleware.exe --dashboard --dashboard-port 5099
+[Sun 04/19/2026 14:51:41.43] LogFile: C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\Logs\attendance-middleware.log
+[Sun 04/19/2026 14:51:41.44] MiddlewareStdout: C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\Logs\middleware-stdout.log
+[Sun 04/19/2026 14:51:41.47] MiddlewareStderr: C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\Logs\middleware-stderr.log
+START_ERROR=System.InvalidOperationException: This command cannot be run due to the error: The system cannot find the file specified.
+[Sun 04/19/2026 14:51:41.98] Middleware start via PowerShell failed. rc=101. Trying fallback start.
+[Sun 04/19/2026 14:51:50.25] Middleware not found in tasklist after initial start attempt.
+[Sun 04/19/2026 14:51:50.26] ERROR: Middleware process did not start.
+[Sun 04/19/2026 14:51:50.27] Middleware stdout (tail):
+[Sun 04/19/2026 14:51:50.63] Middleware stderr (tail):
+[Sun 04/19/2026 14:51:50.98] Desktop path: C:\Users\admin\Desktop
+[Sun 04/19/2026 14:51:50.99] Recent crash events (Application log):
+[Sun 04/19/2026 15:07:37.11] ERROR: Middleware process did not start.
+[Sun 04/19/2026 15:07:37.12] Middleware stdout (tail):
+[Sun 04/19/2026 15:07:37.57] Middleware stderr (tail):
+[Sun 04/19/2026 15:07:37.91] Desktop path: C:\Users\admin\Desktop
+[Sun 04/19/2026 15:07:37.91] Recent crash events (Application log):
+^C[Sun 04/19/2026 15:07:46.94] User: admin
+[Sun 04/19/2026 15:07:46.96] Middleware exited (console mode). ExitCode=9009
+[Sun 04/19/2026 15:07:47.04] RunMode: background
+INFO: No tasks are running which match the specified criteria.
+[Sun 04/19/2026 15:07:47.22] Desktop path: C:\Users\admin\Desktop
+[Sun 04/19/2026 15:07:47.24] HTTP probe:
+HTTP_ERROR System.Net.WebException The operation has timed out.
+[Sun 04/19/2026 15:07:50.50] Recent crash events (Application log):
+[Sun 04/19/2026 15:07:50.88] Middleware stdout (tail):
+[Sun 04/19/2026 15:07:51.38] Middleware stderr (tail):
+[Sun 04/19/2026 15:16:02.45] ============================================================
+[Sun 04/19/2026 15:16:02.45] SHAB Attendance System - Start Dashboard
+[Sun 04/19/2026 15:16:02.48] Version: 2026-04-16
+[Sun 04/19/2026 15:16:02.51] Creating desktop shortcuts...
+[Sun 04/19/2026 15:16:03.09] Shortcut created: C:\Users\admin\Desktop\SHAB Attendance Dashboard.lnk
+[Sun 04/19/2026 15:16:03.10] Launching SHAB Attendance Dashboard...
+[Sun 04/19/2026 15:16:03.11] Middleware: WL10Middleware.exe --dashboard --dashboard-port 5099
+[Sun 04/19/2026 15:16:03.13] LogFile: C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\Logs\attendance-middleware.log
+[Sun 04/19/2026 15:16:03.14] MiddlewareStdout: C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\Logs\middleware-stdout.log
+[Sun 04/19/2026 15:16:03.16] MiddlewareStderr: C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\Logs\middleware-stderr.log
+[Sun 04/19/2026 15:16:03.18] ERROR: Middleware process did not start.
+[Sun 04/19/2026 15:16:03.19] Middleware stdout (tail):
+(missing) "C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\Logs\middleware-stdout.log"
+[Sun 04/19/2026 15:16:03.22] Middleware stderr (tail):
+(missing) "C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\Logs\middleware-stderr.log"
+[Sun 04/19/2026 15:16:03.27] Desktop path: C:\Users\admin\Desktop
+[Sun 04/19/2026 15:16:03.28] Recent crash events (Application log):
+[Sun 04/19/2026 15:16:58.30] Middleware not found in tasklist after initial start attempt.
+[Sun 04/19/2026 15:16:58.31] ERROR: Middleware process did not start.
+[Sun 04/19/2026 15:16:58.32] Middleware stdout (tail):
+(missing) "C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\Logs\middleware-stdout.log"
+[Sun 04/19/2026 15:16:58.35] Middleware stderr (tail):
+(missing) "C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\Logs\middleware-stderr.log"
+[Sun 04/19/2026 15:16:58.38] Desktop path: C:\Users\admin\Desktop
+[Sun 04/19/2026 15:16:58.39] Recent crash events (Application log):
+[Sun 04/19/2026 15:21:15.89] ERROR: Middleware process did not start.
+[Sun 04/19/2026 15:21:15.90] Middleware stdout (tail):
+(missing) "C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\Logs\middleware-stdout.log"
+[Sun 04/19/2026 15:21:15.91] Middleware stderr (tail):
+(missing) "C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\Logs\middleware-stderr.log"
+[Sun 04/19/2026 15:21:15.93] Desktop path: C:\Users\admin\Desktop
+[Sun 04/19/2026 15:21:15.93] Recent crash events (Application log):
+[Sun 04/19/2026 15:22:46.89] ============================================================
+[Sun 04/19/2026 15:22:46.90] SHAB Attendance System - Start Dashboard
+[Sun 04/19/2026 15:22:46.91] Version: 2026-04-16
+[Sun 04/19/2026 15:22:46.92] Creating desktop shortcuts...
+[Sun 04/19/2026 15:22:47.40] Shortcut created: C:\Users\admin\Desktop\SHAB Attendance Dashboard.lnk
+[Sun 04/19/2026 15:22:47.41] Launching SHAB Attendance Dashboard...
+[Sun 04/19/2026 15:22:47.42] Middleware: WL10Middleware.exe --dashboard --dashboard-port 5099
+[Sun 04/19/2026 15:22:47.43] LogFile: C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\Logs\attendance-middleware.log
+[Sun 04/19/2026 15:22:47.43] MiddlewareStdout: C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\Logs\middleware-stdout.log
+[Sun 04/19/2026 15:22:47.44] MiddlewareStderr: C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\Logs\middleware-stderr.log
+[Sun 04/19/2026 15:22:47.45] ERROR: Middleware process did not start.
+[Sun 04/19/2026 15:22:47.45] Middleware stdout (tail):
+(missing) "C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\Logs\middleware-stdout.log"
+[Sun 04/19/2026 15:22:47.46] Middleware stderr (tail):
+(missing) "C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\Logs\middleware-stderr.log"
+[Sun 04/19/2026 15:22:47.48] Desktop path: C:\Users\admin\Desktop
+[Sun 04/19/2026 15:22:47.48] Recent crash events (Application log):
+[Sun 04/19/2026 15:32:28.25] ERROR: Middleware process did not start.
+[Sun 04/19/2026 15:32:28.25] Middleware stdout (tail):
+(missing) "C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\Logs\middleware-stdout.log"
+[Sun 04/19/2026 15:32:28.29] Middleware stderr (tail):
+(missing) "C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\Logs\middleware-stderr.log"
+[Sun 04/19/2026 15:32:28.31] Desktop path: C:\Users\admin\Desktop
+[Sun 04/19/2026 15:32:28.32] Recent crash events (Application log):
+INFO: No tasks are running which match the specified criteria.
+[Sun 04/19/2026 15:32:29.24] Desktop path: C:\Users\admin\Desktop
+[Sun 04/19/2026 15:32:29.25] HTTP probe:
+[Sun 04/19/2026 15:32:29.26] Recent crash events (Application log):
+^C[Sun 04/19/2026 15:32:33.86] Middleware stdout (tail):
+(missing) "C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\Logs\middleware-stdout.log"
+[Sun 04/19/2026 15:32:33.88] Middleware stderr (tail):
+(missing) "C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\Logs\middleware-stderr.log"
+[Sun 04/19/2026 15:32:33.99] OS_VER: Windows_NT (ver: 2)
+
+Microsoft Windows [Version 10.0.19045.5965]
+^C[Sun 04/19/2026 15:32:36.46] LogFile: C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\Logs\attendance-middleware.log
+[Sun 04/19/2026 15:32:36.47] MiddlewareStdout: C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\Logs\middleware-stdout.log
+[Sun 04/19/2026 15:32:36.47] MiddlewareStderr: C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\Logs\middleware-stderr.log
+[Sun 04/19/2026 15:32:38.25] Middleware not found in tasklist after initial start attempt.
+[Sun 04/19/2026 15:32:38.26] Restart requested. Stopping existing middleware...
+[Sun 04/19/2026 15:32:43.67] Requesting Administrator access for SDK install...
+[Sun 04/19/2026 15:32:45.88] ============================================================
+[Sun 04/19/2026 15:32:45.89] SHAB Attendance System - Start Dashboard
+[Sun 04/19/2026 15:32:45.90] Version: 2026-04-16
+[Sun 04/19/2026 15:32:45.91] Creating desktop shortcuts...
+[Sun 04/19/2026 15:32:46.44] Middleware exited (console mode). ExitCode=9009
+[Sun 04/19/2026 15:32:57.96] Middleware: WL10Middleware.exe --dashboard --dashboard-port 5099
+[Sun 04/19/2026 15:32:57.97] LogFile: C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\Logs\attendance-middleware.log
+[Sun 04/19/2026 15:32:57.97] MiddlewareStdout: C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\Logs\middleware-stdout.log
+[Sun 04/19/2026 15:32:57.98] MiddlewareStderr: C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\Logs\middleware-stderr.log
+[Sun 04/19/2026 15:33:00.26] Middleware not found in tasklist after initial start attempt.
+[Sun 04/19/2026 15:33:00.27] ERROR: Middleware process did not start.
+[Sun 04/19/2026 15:33:00.28] Middleware stdout (tail):
+(missing) "C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\Logs\middleware-stdout.log"
+[Sun 04/19/2026 15:33:00.29] Middleware stderr (tail):
+(missing) "C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\Logs\middleware-stderr.log"
+[Sun 04/19/2026 15:33:00.30] Desktop path: C:\Users\admin\Desktop
+[Sun 04/19/2026 15:33:00.31] Recent crash events (Application log):
+[Sun 04/19/2026 15:34:34.37] ============================================================
+[Sun 04/19/2026 15:34:34.38] SHAB Attendance System - Start Dashboard
+[Sun 04/19/2026 15:34:34.38] Version: 2026-04-16
+[Sun 04/19/2026 15:34:34.39] Root: C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\
+[Sun 04/19/2026 15:34:34.40] AppDir: C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\App\win-x86
+[Sun 04/19/2026 15:34:34.40] User: admin
+[Sun 04/19/2026 15:34:34.41] Machine: OLV51-LIDDESK
+[Sun 04/19/2026 15:34:34.42] RunMode: background
+[Sun 04/19/2026 15:34:34.43] ============================================================
+[Sun 04/19/2026 15:34:34.43] OS_VER: Windows_NT (ver: 2)
+
+Microsoft Windows [Version 10.0.19045.5965]
+PSVersion=5.1.19041.5965
+Is64BitOS=True
+Is64BitProc=True
+OSVersion=Microsoft Windows NT 10.0.19045.0
+[Sun 04/19/2026 15:34:34.75] Checking if dashboard is already running (port 5099)...
+(missing) "C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\Logs\middleware-stderr.log"
+[Sun 04/19/2026 15:34:34.78] Desktop path:
+[Sun 04/19/2026 15:34:34.78] Recent crash events (Application log):
+[Sun 04/19/2026 15:36:22.91] ============================================================
+[Sun 04/19/2026 15:36:22.91] SHAB Attendance System - Start Dashboard
+[Sun 04/19/2026 15:36:22.92] Version: 2026-04-16
+[Sun 04/19/2026 15:36:22.93] Root: C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\
+[Sun 04/19/2026 15:36:22.93] AppDir: C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\App\win-x86
+[Sun 04/19/2026 15:36:22.94] User: admin
+[Sun 04/19/2026 15:36:22.94] Machine: OLV51-LIDDESK
+[Sun 04/19/2026 15:36:22.95] RunMode: background
+[Sun 04/19/2026 15:36:22.96] ============================================================
+[Sun 04/19/2026 15:36:22.96] OS_VER: Windows_NT (ver: 2)
+
+Microsoft Windows [Version 10.0.19045.5965]
+PSVersion=5.1.19041.5965
+Is64BitOS=True
+Is64BitProc=True
+OSVersion=Microsoft Windows NT 10.0.19045.0
+[Sun 04/19/2026 15:36:23.28] Checking if dashboard is already running (port 5099)...
+(missing) "C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\Logs\middleware-stderr.log"
+[Sun 04/19/2026 15:36:23.31] Desktop path: C:\Users\admin\Desktop
+[Sun 04/19/2026 15:36:23.31] Recent crash events (Application log):

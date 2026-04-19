@@ -63,7 +63,29 @@ sealed record PollState(
   PollingPreset[]? PollingPresets = null,
   DbPreset[]? DbPresets = null,
   string[]? SyncScheduleLocalTimes = null,
-  int DashboardRefreshSeconds = 600
+  int DashboardRefreshSeconds = 600,
+  ProcessedFileEntry[]? ProcessedFiles = null,
+  ConfiguredDeviceEntry[]? ConfiguredDevices = null
+);
+
+sealed record ProcessedFileEntry(
+  string DeviceId,
+  string FileName,
+  long SizeBytes,
+  long LastWriteUtcTicks,
+  DateTimeOffset ProcessedAtUtc
+);
+
+sealed record ConfiguredDeviceEntry(
+  string DeviceId,
+  string DeviceType,
+  string DeviceIp,
+  int DevicePort,
+  string ReaderMode,
+  string LogDir = "",
+  string FilePattern = "",
+  DateTimeOffset? LastOkAtUtc = null,
+  DateTimeOffset SavedAtUtc = default
 );
 
 static partial class Program

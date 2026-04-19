@@ -831,6 +831,19 @@ static partial class Program
       var pcNet = GetPcNetworkInfo(cfg.DeviceIp);
       var deviceTotal = (Program.DevicePunches ?? Array.Empty<Punch>()).Length;
       var isSuperadmin = string.Equals(ctx.User.FindFirstValue("role") ?? string.Empty, "superadmin", StringComparison.Ordinal);
+      var configured = EnsureConfiguredDevices(saveIfSeeded: true);
+      var devices = configured.Select(d => new
+      {
+        type = d.DeviceType,
+        ip = d.DeviceIp,
+        port = d.DevicePort,
+        deviceId = d.DeviceId,
+        readerMode = d.ReaderMode,
+        logDir = d.LogDir,
+        filePattern = d.FilePattern,
+        lastOkAtUtc = d.LastOkAtUtc?.ToString("O"),
+        active = string.Equals(d.DeviceId, cfg.DeviceId, StringComparison.Ordinal)
+      }).ToArray();
 
       int? supaTotal = null;
       var supaConfigured = !string.IsNullOrWhiteSpace(cfg.SupabaseUrl)
@@ -853,6 +866,7 @@ static partial class Program
       await ctx.Response.WriteAsync(JsonSerializer.Serialize(new
       {
         isSuperadmin,
+        devices,
         device = new
         {
           ip = cfg.DeviceIp,
@@ -1518,7 +1532,16 @@ static partial class Program
         if (s.Length > 0) to = s;
       }
 
-      var (ok, rows, error) = await TryFetchLatestAttendanceEventsVerbose(cfg, anon, limit: limit, from, to, deviceIdFilter: cfg.DeviceId, ctx.RequestAborted);
+      string? deviceIdFilter = cfg.DeviceId;
+      if (ctx.Request.Query.TryGetValue("deviceId", out var dv))
+      {
+        var s = (dv.ToString() ?? string.Empty).Trim();
+        if (s.Length == 0) deviceIdFilter = cfg.DeviceId;
+        else if (s.Equals("all", StringComparison.OrdinalIgnoreCase)) deviceIdFilter = null;
+        else deviceIdFilter = s;
+      }
+
+      var (ok, rows, error) = await TryFetchLatestAttendanceEventsVerbose(cfg, anon, limit: limit, from, to, deviceIdFilter: deviceIdFilter, ctx.RequestAborted);
       return Results.Json(new { ok, rows, error }, JsonOptions);
     }).RequireAuthorization();
 
@@ -1605,9 +1628,122 @@ static partial class Program
         }
 
         await UpsertAttlogRowsToSupabase(cfg, distinctRows, ctx.RequestAborted);
+
+        int w30FilesProcessed = 0;
+        int w30RowsUpserted = 0;
+        var w30Details = new List<object>(capacity: 5);
+        try
+        {
+          var deviceCfg = EnsureConfiguredDevices(saveIfSeeded: true);
+          var w30Devices = deviceCfg.Where(d => d.DeviceType == "W30").ToArray();
+          if (w30Devices.Length > 0)
+          {
+            var baseDir = Path.GetDirectoryName(Path.GetFullPath(path)) ?? string.Empty;
+            var state = LoadState(statePath);
+            var processedKeys = (state.ProcessedFiles ?? Array.Empty<ProcessedFileEntry>())
+              .Where(x => x is not null && !string.IsNullOrWhiteSpace(x.DeviceId) && !string.IsNullOrWhiteSpace(x.FileName))
+              .Select(x => $"{x.DeviceId}|{x.FileName}|{x.SizeBytes}|{x.LastWriteUtcTicks}")
+              .ToHashSet(StringComparer.Ordinal);
+
+            var newEntries = new List<ProcessedFileEntry>(capacity: 64);
+
+            foreach (var dev in w30Devices)
+            {
+              var dir = (dev.LogDir ?? string.Empty).Trim();
+              if (dir.Length == 0) dir = baseDir.Length > 0 ? baseDir : Directory.GetCurrentDirectory();
+              var pat = (dev.FilePattern ?? string.Empty).Trim();
+              if (pat.Length == 0) pat = "AttendanceLog*.dat";
+              if (!Directory.Exists(dir)) continue;
+
+              List<(FileInfo file, string key)> candidates;
+              try
+              {
+                candidates = new DirectoryInfo(dir)
+                  .EnumerateFiles(pat, SearchOption.TopDirectoryOnly)
+                  .Select(f =>
+                  {
+                    var full = f.FullName;
+                    var lw = 0L;
+                    var sz = 0L;
+                    try { lw = f.LastWriteTimeUtc.Ticks; } catch { lw = 0L; }
+                    try { sz = f.Length; } catch { sz = 0L; }
+                    var k = $"{dev.DeviceId}|{full}|{sz}|{lw}";
+                    return (file: f, key: k);
+                  })
+                  .OrderBy(x => x.file.LastWriteTimeUtc)
+                  .ToList();
+              }
+              catch
+              {
+                candidates = new List<(FileInfo, string)>();
+              }
+
+              var w30Rows = new List<AttlogRow>(capacity: 1024);
+              foreach (var c in candidates)
+              {
+                if (processedKeys.Contains(c.key)) continue;
+                try
+                {
+                  foreach (var r in ReadW30AttlogRows(c.file.FullName)) w30Rows.Add(r);
+                  w30FilesProcessed++;
+                  var lw = 0L;
+                  var sz = 0L;
+                  try { lw = c.file.LastWriteTimeUtc.Ticks; } catch { lw = 0L; }
+                  try { sz = c.file.Length; } catch { sz = 0L; }
+                  newEntries.Add(new ProcessedFileEntry(dev.DeviceId, c.file.FullName, sz, lw, DateTimeOffset.UtcNow));
+                  processedKeys.Add(c.key);
+                }
+                catch { }
+              }
+
+              int upserted = 0;
+              if (w30Rows.Count > 0)
+              {
+                var w30Cfg = cfg with { DeviceId = dev.DeviceId };
+                var w30DistinctKeys = new HashSet<string>(StringComparer.Ordinal);
+                var w30Distinct = new List<AttlogRow>(capacity: w30Rows.Count);
+                foreach (var r in w30Rows)
+                {
+                  var k = (r.StaffId ?? string.Empty) + "|" + (r.DateTime ?? string.Empty);
+                  if (!w30DistinctKeys.Add(k)) continue;
+                  w30Distinct.Add(r);
+                }
+                await UpsertAttlogRowsToSupabase(w30Cfg, w30Distinct, ctx.RequestAborted);
+                upserted = w30Distinct.Count;
+                w30RowsUpserted += upserted;
+              }
+
+              w30Details.Add(new { deviceId = dev.DeviceId, logDir = dir, filePattern = pat, filesProcessed = candidates.Count, newFilesImported = w30Rows.Count > 0 ? 1 : 0, rowsUpserted = upserted });
+            }
+
+            if (newEntries.Count > 0)
+            {
+              var latest = LoadState(statePath);
+              var merged = (latest.ProcessedFiles ?? Array.Empty<ProcessedFileEntry>()).ToList();
+              merged.AddRange(newEntries);
+              var keep = merged
+                .Where(x => x is not null && !string.IsNullOrWhiteSpace(x.DeviceId) && !string.IsNullOrWhiteSpace(x.FileName))
+                .OrderByDescending(x => x.ProcessedAtUtc)
+                .Take(5000)
+                .ToArray();
+              SaveState(statePath, latest with { ProcessedFiles = keep });
+            }
+          }
+        }
+        catch { }
+
         runtime.LastSupabaseSyncResult = "ok";
         runtime.LastSupabaseUpsertedCount = keys.Count;
-        return Results.Json(new { ok = true, upserted = rows.Count, distinct = keys.Count, rangeFrom = minDt, rangeTo = maxDt, deleted }, JsonOptions);
+        return Results.Json(new
+        {
+          ok = true,
+          upserted = rows.Count,
+          distinct = keys.Count,
+          rangeFrom = minDt,
+          rangeTo = maxDt,
+          deleted,
+          w30 = new { filesProcessed = w30FilesProcessed, rowsUpserted = w30RowsUpserted, devices = w30Details.ToArray() }
+        }, JsonOptions);
       }
       catch (Exception ex)
       {
@@ -1896,6 +2032,228 @@ static partial class Program
         autoSyncEnabled = false;
       }
       Console.WriteLine("Disconnect requested.");
+      return Results.Json(new { ok = true }, JsonOptions);
+    }).RequireAuthorization();
+
+    static string NormalizeDeviceType(string raw)
+    {
+      var t = (raw ?? string.Empty).Trim();
+      if (t.Length == 0) return "WL10";
+      if (t.Equals("WL10", StringComparison.OrdinalIgnoreCase)) return "WL10";
+      if (t.Equals("W30", StringComparison.OrdinalIgnoreCase)) return "W30";
+      return t.ToUpperInvariant();
+    }
+
+    static string DefaultDeviceId(string deviceType, string deviceIp)
+    {
+      var t = NormalizeDeviceType(deviceType);
+      var ip = (deviceIp ?? string.Empty).Trim();
+      if (ip.Length == 0) ip = "unknown";
+      return $"{t}-{ip}";
+    }
+
+    static ConfiguredDeviceEntry NormalizeDeviceEntry(ConfiguredDeviceEntry d)
+    {
+      var type = NormalizeDeviceType(d.DeviceType);
+      var ip = (d.DeviceIp ?? string.Empty).Trim();
+      var id = (d.DeviceId ?? string.Empty).Trim();
+      if (id.Length == 0) id = DefaultDeviceId(type, ip);
+      var rm = (d.ReaderMode ?? string.Empty).Trim();
+      if (rm.Length == 0) rm = type == "W30" ? "file" : "auto";
+      var dir = (d.LogDir ?? string.Empty).Trim();
+      var pat = (d.FilePattern ?? string.Empty).Trim();
+      if (type == "W30" && pat.Length == 0) pat = "AttendanceLog*.dat";
+      var port = d.DevicePort;
+      if (type == "WL10" && port <= 0) port = 4370;
+      return d with { DeviceId = id, DeviceType = type, DeviceIp = ip, DevicePort = port, ReaderMode = rm, LogDir = dir, FilePattern = pat };
+    }
+
+    ConfiguredDeviceEntry[] EnsureConfiguredDevices(bool saveIfSeeded)
+    {
+      var now = DateTimeOffset.UtcNow;
+      var state = LoadState(statePath);
+      var list = (state.ConfiguredDevices ?? Array.Empty<ConfiguredDeviceEntry>()).ToList();
+      if (list.Count > 0) return list.Select(NormalizeDeviceEntry).ToArray();
+
+      AppConfig cfg;
+      lock (stateGate) cfg = currentConfig;
+      list.Add(new ConfiguredDeviceEntry(cfg.DeviceId, "WL10", cfg.DeviceIp, cfg.DevicePort, cfg.ReaderMode, "", "", null, now));
+
+      var w30EnabledRaw = (Environment.GetEnvironmentVariable("WL10_W30_ENABLED") ?? "").Trim();
+      var w30Enabled = w30EnabledRaw.Length == 0
+        || w30EnabledRaw.Equals("1", StringComparison.OrdinalIgnoreCase)
+        || w30EnabledRaw.Equals("true", StringComparison.OrdinalIgnoreCase)
+        || w30EnabledRaw.Equals("yes", StringComparison.OrdinalIgnoreCase)
+        || w30EnabledRaw.Equals("on", StringComparison.OrdinalIgnoreCase);
+      if (w30Enabled)
+      {
+        var ip = (Environment.GetEnvironmentVariable("WL10_W30_IP") ?? "192.168.1.177").Trim();
+        if (ip.Length == 0) ip = "192.168.1.177";
+        var id = (Environment.GetEnvironmentVariable("WL10_W30_DEVICE_ID") ?? $"W30-{ip}").Trim();
+        if (id.Length == 0) id = $"W30-{ip}";
+        var dir = (Environment.GetEnvironmentVariable("WL10_W30_LOG_DIR") ?? "").Trim();
+        var pat = (Environment.GetEnvironmentVariable("WL10_W30_FILE_PATTERN") ?? "AttendanceLog*.dat").Trim();
+        list.Add(new ConfiguredDeviceEntry(id, "W30", ip, 0, "file", dir, pat, null, now));
+      }
+
+      var normalized = list.Select(NormalizeDeviceEntry).ToArray();
+      if (saveIfSeeded)
+      {
+        SaveState(statePath, state with { ConfiguredDevices = normalized });
+      }
+      return normalized;
+    }
+
+    app.MapGet("/api/devices/list", (HttpContext ctx) =>
+    {
+      var devices = EnsureConfiguredDevices(saveIfSeeded: true);
+      AppConfig cfg;
+      lock (stateGate) cfg = currentConfig;
+      return Results.Json(new
+      {
+        ok = true,
+        activeDeviceId = cfg.DeviceId,
+        devices = devices.Select(d => new
+        {
+          deviceId = d.DeviceId,
+          deviceType = d.DeviceType,
+          deviceIp = d.DeviceIp,
+          devicePort = d.DevicePort,
+          readerMode = d.ReaderMode,
+          logDir = d.LogDir,
+          filePattern = d.FilePattern,
+          lastOkAtUtc = d.LastOkAtUtc?.ToString("O"),
+          savedAtUtc = d.SavedAtUtc == default ? null : d.SavedAtUtc.ToString("O"),
+        }).ToArray()
+      }, JsonOptions);
+    }).RequireAuthorization();
+
+    app.MapPost("/api/devices/upsert", async (HttpContext ctx) =>
+    {
+      using var doc = await JsonDocument.ParseAsync(ctx.Request.Body, cancellationToken: ctx.RequestAborted);
+      var root = doc.RootElement;
+      var now = DateTimeOffset.UtcNow;
+
+      var deviceId = root.TryGetProperty("deviceId", out var idEl) ? (idEl.GetString() ?? string.Empty).Trim() : string.Empty;
+      var deviceType = root.TryGetProperty("deviceType", out var tEl) ? (tEl.GetString() ?? string.Empty).Trim() : "WL10";
+      var deviceIp = root.TryGetProperty("deviceIp", out var ipEl) ? (ipEl.GetString() ?? string.Empty).Trim() : string.Empty;
+      var readerMode = root.TryGetProperty("readerMode", out var rmEl) ? (rmEl.GetString() ?? string.Empty).Trim() : string.Empty;
+      var logDir = root.TryGetProperty("logDir", out var ldEl) ? (ldEl.GetString() ?? string.Empty).Trim() : string.Empty;
+      var filePattern = root.TryGetProperty("filePattern", out var fpEl) ? (fpEl.GetString() ?? string.Empty).Trim() : string.Empty;
+      var port = root.TryGetProperty("devicePort", out var portEl) && portEl.TryGetInt32(out var p) ? p : 0;
+
+      if (deviceIp.Length == 0) return Results.Json(new { ok = false, error = "deviceIp required" }, JsonOptions);
+      var entry = NormalizeDeviceEntry(new ConfiguredDeviceEntry(deviceId, deviceType, deviceIp, port, readerMode, logDir, filePattern, null, now));
+
+      var state = LoadState(statePath);
+      var list = (state.ConfiguredDevices ?? Array.Empty<ConfiguredDeviceEntry>()).Select(NormalizeDeviceEntry).ToList();
+      var i = list.FindIndex(x => string.Equals(x.DeviceId, entry.DeviceId, StringComparison.Ordinal));
+      if (i >= 0)
+      {
+        var existing = list[i];
+        list[i] = entry with { LastOkAtUtc = existing.LastOkAtUtc, SavedAtUtc = now };
+      }
+      else
+      {
+        list.Add(entry with { SavedAtUtc = now });
+      }
+
+      var keep = list
+        .Where(x => x is not null && !string.IsNullOrWhiteSpace(x.DeviceId) && !string.IsNullOrWhiteSpace(x.DeviceIp))
+        .GroupBy(x => x.DeviceId, StringComparer.Ordinal)
+        .Select(g => g.First())
+        .OrderByDescending(x => x.SavedAtUtc)
+        .Take(20)
+        .ToArray();
+      SaveState(statePath, state with { ConfiguredDevices = keep });
+
+      return Results.Json(new { ok = true, deviceId = entry.DeviceId }, JsonOptions);
+    }).RequireAuthorization();
+
+    app.MapPost("/api/devices/delete", async (HttpContext ctx) =>
+    {
+      using var doc = await JsonDocument.ParseAsync(ctx.Request.Body, cancellationToken: ctx.RequestAborted);
+      var root = doc.RootElement;
+      var deviceId = root.TryGetProperty("deviceId", out var idEl) ? (idEl.GetString() ?? string.Empty).Trim() : string.Empty;
+      if (deviceId.Length == 0) return Results.Json(new { ok = false, error = "deviceId required" }, JsonOptions);
+
+      var state = LoadState(statePath);
+      var list = (state.ConfiguredDevices ?? Array.Empty<ConfiguredDeviceEntry>()).Select(NormalizeDeviceEntry).ToList();
+      var next = list.Where(x => !string.Equals(x.DeviceId, deviceId, StringComparison.Ordinal)).ToArray();
+      SaveState(statePath, state with { ConfiguredDevices = next });
+      return Results.Json(new { ok = true }, JsonOptions);
+    }).RequireAuthorization();
+
+    app.MapPost("/api/devices/connect", async (HttpContext ctx) =>
+    {
+      using var doc = await JsonDocument.ParseAsync(ctx.Request.Body, cancellationToken: ctx.RequestAborted);
+      var root = doc.RootElement;
+      var deviceId = root.TryGetProperty("deviceId", out var idEl) ? (idEl.GetString() ?? string.Empty).Trim() : string.Empty;
+      if (deviceId.Length == 0) return Results.Json(new { ok = false, error = "deviceId required" }, JsonOptions);
+
+      var devices = EnsureConfiguredDevices(saveIfSeeded: true);
+      var dev = devices.FirstOrDefault(d => string.Equals(d.DeviceId, deviceId, StringComparison.Ordinal));
+      if (dev is null) return Results.Json(new { ok = false, error = "not found" }, JsonOptions);
+
+      var now = DateTimeOffset.UtcNow;
+      var type = NormalizeDeviceType(dev.DeviceType);
+      if (type == "WL10")
+      {
+        lock (stateGate)
+        {
+          currentConfig = currentConfig with { DeviceIp = dev.DeviceIp, DevicePort = dev.DevicePort, ReaderMode = dev.ReaderMode, DeviceId = dev.DeviceId };
+        }
+        var cfg = currentConfig;
+        var (ok, err, rttMs) = await ProbeTcpAsync(cfg.DeviceIp, cfg.DevicePort, TimeSpan.FromSeconds(5), ctx.RequestAborted);
+        bool? verifyOk = null;
+        string? verifyError = null;
+        if (ok)
+        {
+          var (vOk, vErr) = await ExecuteSync(verify: true, today: true, supabaseOverride: false, ctx.RequestAborted);
+          verifyOk = vOk;
+          verifyError = vErr;
+          lock (stateGate) autoSyncEnabled = true;
+        }
+
+        var state = LoadState(statePath);
+        var list = (state.ConfiguredDevices ?? Array.Empty<ConfiguredDeviceEntry>()).Select(NormalizeDeviceEntry).ToList();
+        var i = list.FindIndex(x => string.Equals(x.DeviceId, dev.DeviceId, StringComparison.Ordinal));
+        if (i >= 0)
+        {
+          var existing = list[i];
+          list[i] = existing with { LastOkAtUtc = ok ? now : existing.LastOkAtUtc, SavedAtUtc = now };
+          SaveState(statePath, state with { ConfiguredDevices = list.ToArray() });
+        }
+
+        return Results.Json(new { ok, error = err, rttMs, deviceId = cfg.DeviceId, deviceIp = cfg.DeviceIp, devicePort = cfg.DevicePort, readerMode = cfg.ReaderMode, verifyOk, verifyError }, JsonOptions);
+      }
+
+      var (ok2, err2, rtt2) = await ProbeTcpAsync(dev.DeviceIp, dev.DevicePort > 0 ? dev.DevicePort : 80, TimeSpan.FromSeconds(3), ctx.RequestAborted);
+      var state2 = LoadState(statePath);
+      var list2 = (state2.ConfiguredDevices ?? Array.Empty<ConfiguredDeviceEntry>()).Select(NormalizeDeviceEntry).ToList();
+      var j = list2.FindIndex(x => string.Equals(x.DeviceId, dev.DeviceId, StringComparison.Ordinal));
+      if (j >= 0)
+      {
+        var existing = list2[j];
+        list2[j] = existing with { LastOkAtUtc = ok2 ? now : existing.LastOkAtUtc, SavedAtUtc = now };
+        SaveState(statePath, state2 with { ConfiguredDevices = list2.ToArray() });
+      }
+      return Results.Json(new { ok = ok2, error = err2, rttMs = rtt2, deviceId = dev.DeviceId, deviceIp = dev.DeviceIp, devicePort = dev.DevicePort, readerMode = dev.ReaderMode }, JsonOptions);
+    }).RequireAuthorization();
+
+    app.MapPost("/api/devices/disconnect", async (HttpContext ctx) =>
+    {
+      using var doc = await JsonDocument.ParseAsync(ctx.Request.Body, cancellationToken: ctx.RequestAborted);
+      var root = doc.RootElement;
+      var deviceId = root.TryGetProperty("deviceId", out var idEl) ? (idEl.GetString() ?? string.Empty).Trim() : string.Empty;
+      if (deviceId.Length == 0) return Results.Json(new { ok = false, error = "deviceId required" }, JsonOptions);
+      lock (stateGate)
+      {
+        if (string.Equals(currentConfig.DeviceId, deviceId, StringComparison.Ordinal))
+        {
+          autoSyncEnabled = false;
+        }
+      }
       return Results.Json(new { ok = true }, JsonOptions);
     }).RequireAuthorization();
 
@@ -4201,6 +4559,14 @@ static partial class Program
 
     app.MapGet("/api/records/file", (HttpContext ctx) =>
     {
+      AppConfig cfg;
+      lock (stateGate) cfg = currentConfig;
+
+      var deviceIdRaw = ctx.Request.Query.TryGetValue("deviceId", out var dv) ? (dv.ToString() ?? "") : "";
+      var deviceId = deviceIdRaw.Trim();
+      if (deviceId.Length == 0) deviceId = cfg.DeviceId;
+      var configured = EnsureConfiguredDevices(saveIfSeeded: true);
+
       var path = TryResolveAttlogExportPath();
       if (string.IsNullOrWhiteSpace(path)) return Results.Json(new { rows = Array.Empty<object>(), error = "Could not resolve 1_attlog.dat path" }, JsonOptions);
       if (!File.Exists(path))
@@ -4217,30 +4583,103 @@ static partial class Program
         }
       }
 
-      var rows = new List<object>(capacity: 200);
-      foreach (var raw in File.ReadLines(path))
+      static List<object> ReadWl10FileRows(string filePath)
       {
-        var line = (raw ?? string.Empty).Trim();
-        if (line.Length == 0) continue;
-
-        var parts = line.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
-        if (parts.Length < 7) continue;
-
-        var staffId = parts[0].Trim();
-        if (staffId.Length == 0) continue;
-
-        var dtRaw = parts[1].Trim() + " " + parts[2].Trim();
-        _ = DateTime.TryParseExact(dtRaw, "yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture, DateTimeStyles.None, out _);
-
-        rows.Add(new
+        var rows = new List<object>(capacity: 200);
+        foreach (var raw in File.ReadLines(filePath))
         {
-          staff_id = staffId,
-          datetime = dtRaw,
-          verified = parts[3].Trim(),
-          status = parts[4].Trim(),
-          workcode = parts[5].Trim(),
-          reserved = parts[6].Trim(),
-        });
+          var line = (raw ?? string.Empty).Trim();
+          if (line.Length == 0) continue;
+
+          var parts = line.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+          if (parts.Length < 7) continue;
+
+          var staffId = parts[0].Trim();
+          if (staffId.Length == 0) continue;
+
+          var dtRaw = parts[1].Trim() + " " + parts[2].Trim();
+          _ = DateTime.TryParseExact(dtRaw, "yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture, DateTimeStyles.None, out _);
+
+          rows.Add(new
+          {
+            staff_id = staffId,
+            datetime = dtRaw,
+            verified = parts[3].Trim(),
+            status = parts[4].Trim(),
+            workcode = parts[5].Trim(),
+            reserved = parts[6].Trim(),
+          });
+        }
+        return rows;
+      }
+
+      static List<object> ReadW30FileRows(ConfiguredDeviceEntry dev, string baseDir)
+      {
+        var rows = new List<object>(capacity: 200);
+        var w30Dir = (dev.LogDir ?? string.Empty).Trim();
+        if (w30Dir.Length == 0) w30Dir = baseDir;
+        if (w30Dir.Length == 0) w30Dir = Directory.GetCurrentDirectory();
+        if (!Directory.Exists(w30Dir)) return rows;
+
+        var pat = (dev.FilePattern ?? string.Empty).Trim();
+        if (pat.Length == 0) pat = "AttendanceLog*.dat";
+        IEnumerable<FileInfo> files;
+        try { files = new DirectoryInfo(w30Dir).EnumerateFiles(pat, SearchOption.TopDirectoryOnly); }
+        catch { files = Array.Empty<FileInfo>(); }
+        foreach (var f in files.OrderByDescending(x => x.LastWriteTimeUtc).Take(50))
+        {
+          try
+          {
+            foreach (var r in ReadW30AttlogRows(f.FullName))
+            {
+              rows.Add(new
+              {
+                staff_id = r.StaffId,
+                datetime = r.DateTime,
+                verified = r.Verified,
+                status = r.Status,
+                workcode = r.Workcode,
+                reserved = r.Reserved,
+              });
+            }
+          }
+          catch { }
+        }
+        return rows;
+      }
+
+      var baseDir = Path.GetDirectoryName(Path.GetFullPath(path)) ?? string.Empty;
+
+      var wl10Rows = new List<object>(capacity: 0);
+      if (deviceId.Equals("all", StringComparison.OrdinalIgnoreCase) || deviceId.Equals(cfg.DeviceId, StringComparison.Ordinal))
+      {
+        wl10Rows = ReadWl10FileRows(path);
+      }
+
+      var w30Rows = new List<object>(capacity: 0);
+      if (deviceId.Equals("all", StringComparison.OrdinalIgnoreCase))
+      {
+        foreach (var dev in configured.Where(d => d.DeviceType == "W30"))
+        {
+          try { w30Rows.AddRange(ReadW30FileRows(dev, baseDir)); } catch { }
+        }
+      }
+      else
+      {
+        var dev = configured.FirstOrDefault(d => string.Equals(d.DeviceId, deviceId, StringComparison.Ordinal));
+        if (dev is not null && dev.DeviceType == "W30")
+        {
+          w30Rows = ReadW30FileRows(dev, baseDir);
+        }
+      }
+
+      var rows = new List<object>(capacity: wl10Rows.Count + w30Rows.Count);
+      if (wl10Rows.Count > 0) rows.AddRange(wl10Rows);
+      if (w30Rows.Count > 0) rows.AddRange(w30Rows);
+
+      if (rows.Count == 0 && !deviceId.Equals("all", StringComparison.OrdinalIgnoreCase) && !deviceId.Equals(cfg.DeviceId, StringComparison.Ordinal))
+      {
+        return Results.Json(new { rows = rows.ToArray(), error = $"No records for {deviceId}. If this is a WL10 device, click Connect first (WL10 file is shared)." }, JsonOptions);
       }
 
       return Results.Json(new { rows = rows.ToArray() }, JsonOptions);
@@ -5957,6 +6396,40 @@ static partial class Program
     }
   }
 
+  private static IEnumerable<AttlogRow> ReadW30AttlogRows(string path)
+  {
+    foreach (var raw in File.ReadLines(path))
+    {
+      var line = (raw ?? string.Empty).Trim();
+      if (line.Length == 0) continue;
+      var parts = line.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+      if (parts.Length < 2) continue;
+
+      var staffId = parts[0].Trim();
+      if (staffId.Length == 0) continue;
+
+      var dtRaw = parts.Length >= 3 ? (parts[1].Trim() + " " + parts[2].Trim()) : parts[1].Trim();
+      if (dtRaw.Length < 10) continue;
+
+      var status = "0";
+      var reserved = "0";
+      if (parts.Length >= 5)
+      {
+        status = parts[3].Trim();
+        reserved = parts[4].Trim();
+      }
+      else if (parts.Length >= 4)
+      {
+        status = parts[2].Trim();
+        reserved = parts[3].Trim();
+      }
+      if (status.Length == 0) status = "0";
+      if (reserved.Length == 0) reserved = "0";
+
+      yield return new AttlogRow(staffId, dtRaw, "1", status, "1", reserved);
+    }
+  }
+
   private static async Task<(bool Ok, int Count, string? Error)> TryGetSupabaseCountInRange(AppConfig config, string? anonKey, string from, string to, CancellationToken ct)
   {
     var baseUrlRaw = (config.SupabaseUrl ?? string.Empty).Trim();
@@ -7357,6 +7830,11 @@ static partial class Program
           <div class="summarySub">Inspect, filter, and export raw attendance records from device files and Supabase.</div>
         </div>
       </div>
+      <div class="row toolbarRight" style="margin-bottom:10px">
+        <select id="rawDevicePick" style="width:260px;flex:0 0 auto">
+          <option value="all">All devices</option>
+        </select>
+      </div>
       <div class="subTabs" role="tablist" aria-label="Raw data sub-tabs">
         <button class="subTabBtn active" type="button" data-subtab-group="raw" data-subtab="device">Device Records</button>
         <button class="subTabBtn" type="button" data-subtab-group="raw" data-subtab="db">Database Records</button>
@@ -7387,7 +7865,7 @@ static partial class Program
               </thead>
               <tbody id="deviceBody"></tbody>
             </table>
-            <div class="hint">Shows records parsed from SHAB Attendance System\Reference\1_attlog.dat (same columns and order as the file). Use Refresh From Device to pull the latest logs and rewrite 1_attlog.dat.</div>
+            <div class="hint">WL10 reads 1_attlog.dat (6 columns). W30 reads AttendanceLog*.dat (4 columns). Use Sync Device (WL10) or Sync Database (W30 file import) to update.</div>
           </div>
         </div>
       </div>
@@ -7582,7 +8060,7 @@ static partial class Program
             <details id="lastErrBox" style="display:none"><summary>Error details</summary><pre id="lastErr"></pre></details>
 
             <div class="sectionHead"><div class="sectionHeadTitle">Device Connection</div></div>
-            <div class="formGrid">
+            <div class="formGrid" style="display:none">
               <label for="setIp">Device IP</label><input id="setIp" placeholder="Device IP" />
               <label for="setPort">Device Port</label><input id="setPort" placeholder="Port" inputmode="numeric" />
               <label for="setReader">Reader Mode</label>
@@ -7592,10 +8070,22 @@ static partial class Program
                 <option value="com">COM</option>
               </select>
             </div>
-            <div style="height:10px"></div>
-            <div class="row">
-              <button class="btn" id="connectNow" type="button">Connect Now</button>
-              <button class="btn" id="disconnectNow" type="button">Disconnect</button>
+            <div class="row toolbarRight" style="margin:10px 0">
+              <button class="btn" id="devAddDevice" type="button">Add Device</button>
+            </div>
+            <div style="overflow-x:auto;max-width:100%">
+              <table class="prettyTable" style="width:100%;table-layout:fixed">
+                <thead>
+                  <tr>
+                    <th>Device</th>
+                    <th>Device IP</th>
+                    <th>Device Port</th>
+                    <th>Reader Mode</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="devConnBody"></tbody>
+              </table>
             </div>
             <div style="height:8px"></div>
             <div class="hint" id="actionOut"></div>
@@ -8738,12 +9228,198 @@ static partial class Program
     let lastSystemLogLines = [];
     let mandatorySyncTimes = [];
     let anaCalendarMonth = '';
+    let rawDevicePickWired = false;
+
+    function getRawDevicePick() {
+      const x = el('rawDevicePick');
+      const v = (x && x.value) ? String(x.value || '').trim() : '';
+      return v || 'all';
+    }
+
+    function setRawDevicePick(value) {
+      const x = el('rawDevicePick');
+      if (!x) return;
+      x.value = String(value || 'all');
+    }
+
+    function syncRawDevicePickOptions(status) {
+      const x = el('rawDevicePick');
+      if (!x) return;
+      const devices = (status && status.devices && Array.isArray(status.devices)) ? status.devices : [];
+
+      let selected = 'all';
+      try { selected = String(localStorage.getItem('wl10dash.rawDevicePick') || 'all').trim() || 'all'; } catch { selected = 'all'; }
+
+      const opts = ['<option value="all">All devices</option>'];
+      const ids = new Set(['all']);
+      for (const d of devices) {
+        const id = String((d && d.deviceId) || '').trim();
+        const type = String((d && d.type) || '').trim();
+        const ip = String((d && d.ip) || '').trim();
+        if (!id) continue;
+        ids.add(id);
+        const label = (type && ip) ? (type + ' - ' + ip) : (type ? type : id);
+        opts.push('<option value="' + escHtml(id) + '">' + escHtml(label) + '</option>');
+      }
+
+      x.innerHTML = opts.join('');
+      if (!ids.has(selected)) selected = 'all';
+      setRawDevicePick(selected);
+
+      if (!rawDevicePickWired) {
+        rawDevicePickWired = true;
+        x.addEventListener('change', async () => {
+          const v = getRawDevicePick();
+          try { localStorage.setItem('wl10dash.rawDevicePick', v); } catch { }
+          updateRawDeviceActions();
+          if (typeof activeTab !== 'undefined' && activeTab === 'rawData') {
+            if (typeof activeRawSubTab !== 'undefined' && activeRawSubTab === 'device') await refreshDeviceRecords();
+            if (typeof activeRawSubTab !== 'undefined' && activeRawSubTab === 'db') await refreshDbRecords();
+          }
+        });
+      }
+    }
+
+    function updateRawDeviceActions() {
+      const pick = getRawDevicePick();
+      const devRefreshBtn = el('devRefresh');
+      if (devRefreshBtn) {
+        const isW30 = pick.toUpperCase().startsWith('W30-');
+        devRefreshBtn.disabled = isW30;
+        devRefreshBtn.title = isW30 ? 'W30 uses file import. Copy AttendanceLog*.dat then use Sync Database.' : '';
+      }
+    }
+
+    let settingsDevices = [];
+    let settingsDevicesActiveId = '';
+    let settingsDevicesWired = false;
+
+    function renderSettingsDevices() {
+      const body = el('devConnBody');
+      if (!body) return;
+      const rows = Array.isArray(settingsDevices) ? settingsDevices : [];
+      if (rows.length === 0) {
+        body.innerHTML = '<tr><td colspan="5" class="muted">No configured devices.</td></tr>';
+        return;
+      }
+
+      const parts = [];
+      for (const d of rows) {
+        const id = String(d.deviceId || '').trim();
+        const type = String(d.deviceType || '').trim();
+        const ip = String(d.deviceIp || '').trim();
+        const port = String(d.devicePort ?? '').trim();
+        const rm = String(d.readerMode || '').trim();
+        const active = id && settingsDevicesActiveId && id === settingsDevicesActiveId;
+        parts.push(
+          '<tr>' +
+          '<td>' + escHtml((type ? type + ' ' : '') + (id || '-')) + (active ? ' <span class="pill">Active</span>' : '') + '</td>' +
+          '<td class="mono">' + escHtml(ip || '-') + '</td>' +
+          '<td class="mono">' + escHtml(port || '-') + '</td>' +
+          '<td>' + escHtml(rm || '-') + '</td>' +
+          '<td class="row" style="gap:8px;flex-wrap:wrap">' +
+          '<button class="btn" type="button" data-dev-action="connect" data-dev-id="' + escHtml(id) + '">Connect</button>' +
+          '<button class="btn" type="button" data-dev-action="disconnect" data-dev-id="' + escHtml(id) + '">Disconnect</button>' +
+          '<button class="btn" type="button" data-dev-action="edit" data-dev-id="' + escHtml(id) + '">Edit</button>' +
+          '<button class="btn danger" type="button" data-dev-action="delete" data-dev-id="' + escHtml(id) + '">Remove</button>' +
+          '</td>' +
+          '</tr>'
+        );
+      }
+      body.innerHTML = parts.join('');
+    }
+
+    async function refreshSettingsDevices() {
+      const j = await getJson('/api/devices/list', true);
+      if (!j || j.ok === false) return false;
+      settingsDevices = Array.isArray(j.devices) ? j.devices : [];
+      settingsDevicesActiveId = String(j.activeDeviceId || '').trim();
+      renderSettingsDevices();
+      if (!settingsDevicesWired) {
+        settingsDevicesWired = true;
+        const addBtn = el('devAddDevice');
+        if (addBtn) addBtn.addEventListener('click', () => openDeviceModal(null));
+        const body = el('devConnBody');
+        if (body) body.addEventListener('click', async (ev) => {
+          const t = ev.target;
+          if (!t || !t.getAttribute) return;
+          const act = String(t.getAttribute('data-dev-action') || '').trim();
+          const id = String(t.getAttribute('data-dev-id') || '').trim();
+          if (!act || !id) return;
+          ev.preventDefault();
+
+          if (act === 'edit') {
+            const d = (settingsDevices || []).find(x => String(x.deviceId || '').trim() === id) || null;
+            openDeviceModal(d);
+            return;
+          }
+          if (act === 'delete') {
+            if (!confirm('Remove device ' + id + '?')) return;
+            const res = await postJson('/api/devices/delete', { deviceId: id });
+            if (!res || res.ok === false) { notify('Error', 'Remove failed', String((res && res.error) || '')); return; }
+            await refreshSettingsDevices();
+            await refreshStatus();
+            return;
+          }
+          if (act === 'connect') {
+            const res = await postJson('/api/devices/connect', { deviceId: id });
+            if (!res || res.ok === false) { notify('Error', 'Connect failed', String((res && res.error) || '')); return; }
+            await refreshSettingsDevices();
+            await refreshStatus();
+            return;
+          }
+          if (act === 'disconnect') {
+            const res = await postJson('/api/devices/disconnect', { deviceId: id });
+            if (!res || res.ok === false) { notify('Error', 'Disconnect failed', String((res && res.error) || '')); return; }
+            await refreshSettingsDevices();
+            await refreshStatus();
+            return;
+          }
+        });
+      }
+      return true;
+    }
+
+    function openDeviceModal(existing) {
+      const e = existing || {};
+      const isEdit = !!(e && e.deviceId);
+      const title = isEdit ? 'Edit Device' : 'Add Device';
+      const fields = [
+        { k: 'deviceType', label: 'Device Type', type: 'select', val: String(e.deviceType || 'WL10'), opts: [{ v: 'WL10', l: 'WL10' }, { v: 'W30', l: 'W30' }] },
+        { k: 'deviceIp', label: 'Device IP', type: 'text', val: String(e.deviceIp || '') },
+        { k: 'devicePort', label: 'Device Port', type: 'number', val: String((e.devicePort ?? '') || '') },
+        { k: 'readerMode', label: 'Reader Mode', type: 'select', val: String(e.readerMode || 'auto'), opts: [{ v: 'auto', l: 'Auto' }, { v: 'native', l: 'Native' }, { v: 'com', l: 'COM' }, { v: 'file', l: 'File' }] },
+        { k: 'logDir', label: 'Log Folder (W30)', type: 'text', val: String(e.logDir || '') },
+        { k: 'filePattern', label: 'File Pattern (W30)', type: 'text', val: String(e.filePattern || 'AttendanceLog*.dat') },
+      ];
+
+      openModal(title, fields, async (obj) => {
+        const payload = {
+          deviceId: isEdit ? String(e.deviceId || '') : '',
+          deviceType: String(obj.deviceType || 'WL10'),
+          deviceIp: String(obj.deviceIp || '').trim(),
+          devicePort: obj.devicePort === '' || obj.devicePort === null || obj.devicePort === undefined ? 0 : parseInt(String(obj.devicePort), 10),
+          readerMode: String(obj.readerMode || '').trim(),
+          logDir: String(obj.logDir || '').trim(),
+          filePattern: String(obj.filePattern || '').trim(),
+        };
+        const res = await postJson('/api/devices/upsert', payload);
+        if (!res || res.ok === false) { return { ok: false, error: String((res && res.error) || '') }; }
+        await refreshSettingsDevices();
+        await refreshStatus();
+        return { ok: true };
+      });
+    }
 
     async function refreshStatus() {
       const j = await getJson('/api/status');
       if (!j) { setApiOfflineUi(); return false; }
       lastStatus = j;
       hideQuickFix();
+
+      syncRawDevicePickOptions(j);
+      updateRawDeviceActions();
+      if (activeTab === 'settings') { await refreshSettingsDevices(); }
 
       isSuperadmin = !!j.isSuperadmin;
       const staffImportBtn = el('staffImport');
@@ -9635,20 +10311,24 @@ static partial class Program
     ];
 
     async function refreshDeviceRecords() {
-      const j = await getJson('/api/records/file');
+      const pick = getRawDevicePick();
+      const url = '/api/records/file?deviceId=' + encodeURIComponent(pick);
+      const j = await getJson(url);
       lastDeviceRows = j ? (j.rows || []) : [];
       const err = (j && j.error) ? String(j.error || '') : '';
       const rows = (lastDeviceRows || [])
         .slice()
         .sort((a, b) => String(b.datetime ?? '').localeCompare(String(a.datetime ?? '')));
-      const msg = err ? ('No device records. ' + err) : 'No device records. Use Refresh From Device.';
+      const msg = err ? ('No device records. ' + err) : 'No device records.';
       await renderAttlogTable(rows, msg);
     }
 
     async function refreshDbRecords() {
       let j = null;
+      const pick = getRawDevicePick();
+      const url = '/api/db/records?deviceId=' + encodeURIComponent(pick);
       for (let attempt = 0; attempt < 3; attempt++) {
-        j = await getJson('/api/db/records', true);
+        j = await getJson(url, true);
         if (j && j.ok !== false) break;
         await new Promise(r => setTimeout(r, 250));
       }
@@ -11451,6 +12131,11 @@ static partial class Program
 
     const devRefreshBtn = el('devRefresh');
     if (devRefreshBtn) devRefreshBtn.addEventListener('click', async () => {
+      const pick = getRawDevicePick();
+      if (pick.toUpperCase().startsWith('W30-')) {
+        notify('Info', 'W30 uses file import. Copy AttendanceLog*.dat to the Reference folder then use Sync Database.', '');
+        return;
+      }
       devRefreshBtn.disabled = true;
       try {
         logActivity('Raw Data / Device Records', 'Refreshing from device...');
