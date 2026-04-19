@@ -135,16 +135,16 @@ if exist "%MIDDLE_OUT%" del /f /q "%MIDDLE_OUT%" >nul 2>&1
 if exist "%MIDDLE_ERR%" del /f /q "%MIDDLE_ERR%" >nul 2>&1
 type nul > "%MIDDLE_OUT%" 2>nul
 type nul > "%MIDDLE_ERR%" 2>nul
-if not exist "%MIDDLE_OUT%" (
-  set "MIDDLE_OUT=%TEMP%\middleware-stdout.log"
-  type nul > "%MIDDLE_OUT%" 2>nul
-  call :LOG WARNING: Could not create stdout log in Logs folder. Using: %MIDDLE_OUT%
-)
-if not exist "%MIDDLE_ERR%" (
-  set "MIDDLE_ERR=%TEMP%\middleware-stderr.log"
-  type nul > "%MIDDLE_ERR%" 2>nul
-  call :LOG WARNING: Could not create stderr log in Logs folder. Using: %MIDDLE_ERR%
-)
+if exist "%MIDDLE_OUT%" goto OUT_OK
+set "MIDDLE_OUT=%TEMP%\middleware-stdout.log"
+type nul > "%MIDDLE_OUT%" 2>nul
+call :LOG WARNING: Could not create stdout log in Logs folder. Using: %MIDDLE_OUT%
+:OUT_OK
+if exist "%MIDDLE_ERR%" goto ERR_OK
+set "MIDDLE_ERR=%TEMP%\middleware-stderr.log"
+type nul > "%MIDDLE_ERR%" 2>nul
+call :LOG WARNING: Could not create stderr log in Logs folder. Using: %MIDDLE_ERR%
+:ERR_OK
 echo Logs:
 echo   %LOG_FILE%
 echo   %MIDDLE_OUT%
@@ -202,10 +202,10 @@ goto WAIT_LOOP
 :CHECK_READY
 call :CHECK_PORT
 if not errorlevel 1 exit /b 0
-if exist "%MIDDLE_OUT%" (
-  findstr /i /c:"Dashboard running at" "%MIDDLE_OUT%" >nul 2>&1
-  if not errorlevel 1 exit /b 0
-)
+if not exist "%MIDDLE_OUT%" goto CHECK_HTTP_NOW
+findstr /i /c:"Dashboard running at" "%MIDDLE_OUT%" >nul 2>&1
+if not errorlevel 1 exit /b 0
+:CHECK_HTTP_NOW
 call :CHECK_HTTP
 if not errorlevel 1 exit /b 0
 exit /b 1
