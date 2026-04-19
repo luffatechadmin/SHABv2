@@ -135,6 +135,20 @@ if exist "%MIDDLE_OUT%" del /f /q "%MIDDLE_OUT%" >nul 2>&1
 if exist "%MIDDLE_ERR%" del /f /q "%MIDDLE_ERR%" >nul 2>&1
 type nul > "%MIDDLE_OUT%" 2>nul
 type nul > "%MIDDLE_ERR%" 2>nul
+if not exist "%MIDDLE_OUT%" (
+  set "MIDDLE_OUT=%TEMP%\middleware-stdout.log"
+  type nul > "%MIDDLE_OUT%" 2>nul
+  call :LOG WARNING: Could not create stdout log in Logs folder. Using: %MIDDLE_OUT%
+)
+if not exist "%MIDDLE_ERR%" (
+  set "MIDDLE_ERR=%TEMP%\middleware-stderr.log"
+  type nul > "%MIDDLE_ERR%" 2>nul
+  call :LOG WARNING: Could not create stderr log in Logs folder. Using: %MIDDLE_ERR%
+)
+echo Logs:
+echo   %LOG_FILE%
+echo   %MIDDLE_OUT%
+echo   %MIDDLE_ERR%
 
 if /I "%RUN_MODE%"=="console" goto RUN_CONSOLE
 
@@ -192,10 +206,19 @@ if exist "%MIDDLE_OUT%" (
   findstr /i /c:"Dashboard running at" "%MIDDLE_OUT%" >nul 2>&1
   if not errorlevel 1 exit /b 0
 )
+call :CHECK_HTTP
+if not errorlevel 1 exit /b 0
 exit /b 1
 
 :CHECK_PROC
 tasklist /fi "imagename eq WL10Middleware.exe" | find /i "WL10Middleware.exe" >nul 2>&1
+if not errorlevel 1 exit /b 0
+exit /b 1
+
+:CHECK_HTTP
+if not exist "%PS_EXE%" exit /b 1
+"%PS_EXE%" -NoProfile -ExecutionPolicy Bypass -Command ^
+  "try { $r=Invoke-WebRequest -Uri 'http://127.0.0.1:5099/login' -UseBasicParsing -TimeoutSec 1; if ($r.StatusCode -ge 200 -and $r.StatusCode -lt 500) { exit 0 } else { exit 1 } } catch { exit 1 }" >nul 2>&1
 if not errorlevel 1 exit /b 0
 exit /b 1
 
