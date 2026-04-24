@@ -758,3 +758,59 @@ Is64BitOS=True
 Is64BitProc=True
 OSVersion=Microsoft Windows NT 10.0.19045.0
 [Sat 04/25/2026  3:35:03.55] Checking if dashboard is already running (port 5099)...
+[Sat 04/25/2026  4:34:02.18] ============================================================
+[Sat 04/25/2026  4:34:02.18] SHAB Attendance System - Start Dashboard
+[Sat 04/25/2026  4:34:02.19] Version: 2026-04-16
+[Sat 04/25/2026  4:34:02.21] Root: C:\Users\USER\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\
+[Sat 04/25/2026  4:34:02.22] AppDir: C:\Users\USER\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\App\win-x86
+[Sat 04/25/2026  4:34:02.22] User: USER
+[Sat 04/25/2026  4:34:02.24] Machine: DESKTOP-KKLQT7L
+[Sat 04/25/2026  4:34:02.26] RunMode: background
+[Sat 04/25/2026  4:34:02.27] ============================================================
+[Sat 04/25/2026  4:34:02.29] OS_VER: Windows_NT (ver: 2)
+
+Microsoft Windows [Version 10.0.19045.6466]
+PSVersion=5.1.19041.6456
+Is64BitOS=True
+Is64BitProc=True
+OSVersion=Microsoft Windows NT 10.0.19045.0
+[Sat 04/25/2026  4:34:03.93] Checking if dashboard is already running (port 5099)...
+[Sat 04/25/2026  4:34:13.23] Requesting Administrator access for SDK install...
+[Sat 04/25/2026  4:34:17.12] ============================================================
+[Sat 04/25/2026  4:34:17.12] SHAB Attendance System - Start Dashboard
+[Sat 04/25/2026  4:34:17.14] Version: 2026-04-16
+[Sat 04/25/2026  4:34:17.14] Root: C:\Users\USER\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\
+[Sat 04/25/2026  4:34:17.16] AppDir: C:\Users\USER\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\App\win-x86
+[Sat 04/25/2026  4:34:17.17] User: USER
+[Sat 04/25/2026  4:34:17.17] Machine: DESKTOP-KKLQT7L
+[Sat 04/25/2026  4:34:17.19] RunMode: background
+[Sat 04/25/2026  4:34:17.20] ============================================================
+[Sat 04/25/2026  4:34:17.22] OS_VER: Windows_NT (ver: 2)
+
+Microsoft Windows [Version 10.0.19045.6466]
+PSVersion=5.1.19041.6456
+Is64BitOS=True
+Is64BitProc=True
+OSVersion=Microsoft Windows NT 10.0.19045.0
+[Sat 04/25/2026  4:34:17.45] Checking if dashboard is already running (port 5099)...
+[Sat 04/25/2026  4:34:24.45] ZKTeco SDK not detected. Installing now - requires Administrator...
+[Sat 04/25/2026  4:34:29.85] ZKTeco SDK detected (or dll present).
+[Sat 04/25/2026  4:34:29.87] Preparing app files and security settings...
+Security prep app path: C:\Users\USER\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\App\win-x86
+Unblocked files: 339
+IsAdmin: True
+Defender exclusion attempted.
+[Sat 04/25/2026  4:34:32.52] WL10_STATE_PATH=C:\Users\USER\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\Data\state.json
+[Sat 04/25/2026  4:34:32.55] WL10_ATTLOG_EXPORT_PATH=C:\Users\USER\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\Reference\1_attlog.dat
+[Sat 04/25/2026  4:34:32.58] WL10_ATTLOG_FILE_PATH=C:\Users\USER\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\Reference\1_attlog.dat
+[Sat 04/25/2026  4:34:32.58] Dotnet check OK (or self-contained runtime detected).
+[Sat 04/25/2026  4:34:32.60] Creating desktop shortcuts...
+[Sat 04/25/2026  4:34:33.15] Shortcut created: C:\Users\USER\Desktop\SHAB Attendance Dashboard.lnk
+[Sat 04/25/2026  4:34:33.17] Launching SHAB Attendance Dashboard...
+[Sat 04/25/2026  4:34:33.17] Middleware: WL10Middleware.exe --dashboard --dashboard-port 5099
+[Sat 04/25/2026  4:34:33.20] LogFile: C:\Users\USER\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\Logs\attendance-middleware.log
+[Sat 04/25/2026  4:34:33.22] MiddlewareStdout: C:\Users\USER\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\Logs\middleware-stdout.log
+[Sat 04/25/2026  4:34:33.22] MiddlewareStderr: C:\Users\USER\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\Logs\middleware-stderr.log
+[Sat 04/25/2026  4:34:33.23] Starting middleware in background...
+[Sat 04/25/2026  4:34:33.25] Waiting for dashboard to be ready (port 5099)...
+[Sat 04/25/2026  4:34:33.25] Waiting... (up to 180 seconds)
