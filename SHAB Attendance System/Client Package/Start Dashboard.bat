@@ -59,7 +59,23 @@ echo SHAB Attendance System - Start Dashboard
 echo Version: %SHAB_START_VERSION%
 echo ============================================================
 
-if not exist "%APP_DIR%\WL10Middleware.exe" call :LOG ERROR: WL10Middleware.exe not found in: %APP_DIR% & echo ERROR: WL10Middleware.exe not found in: & echo   %APP_DIR% & echo. & pause & exit /b 1
+set "MW_EXE=SHABMiddleware.exe"
+if not exist "%APP_DIR%\%MW_EXE%" set "MW_EXE=WL10Middleware.exe"
+if not exist "%APP_DIR%\%MW_EXE%" (
+  call :LOG ERROR: Middleware EXE not found in: %APP_DIR%
+  echo ERROR: Middleware EXE not found in:
+  echo   %APP_DIR%
+  echo.
+  echo NOTE: In this workflow, the published App binaries are not stored in Git.
+  echo You must publish the middleware to create %APP_DIR%\SHABMiddleware.exe
+  echo.
+  echo If you have the source repo on this PC, run:
+  echo   dotnet publish "%ROOT%..\SHAB Attendance Middleware\SHABMiddleware.csproj" -c Release -p:SHAB_BUILD_ARCH=x86 -p:PublishDir="%APP_DIR%\"
+  echo.
+  pause
+  exit /b 1
+)
+set "MW_NAME=%~nMW_EXE%"
 
 cd /d "%APP_DIR%"
 
@@ -69,11 +85,22 @@ call :LOG Checking if dashboard is already running (port 5099)...
 if defined FORCE_RESTART (
   echo Restart requested. Stopping existing middleware...
   call :LOG Restart requested. Stopping existing middleware...
+  taskkill /IM SHABMiddleware.exe /F >nul 2>nul
   taskkill /IM WL10Middleware.exe /F >nul 2>nul
   timeout /t 1 /nobreak >nul
 )
 call :CHECK_PORT
-if not errorlevel 1 set "READY=1" & goto OPEN_BROWSER
+if not errorlevel 1 (
+  call :CHECK_RUNNING_PATH
+  if defined FORCE_RESTART (
+    call :LOG Port is open but an old dashboard process was detected. Restarting...
+    taskkill /IM SHABMiddleware.exe /F >nul 2>nul
+    taskkill /IM WL10Middleware.exe /F >nul 2>nul
+    timeout /t 1 /nobreak >nul
+  ) else (
+    set "READY=1" & goto OPEN_BROWSER
+  )
+)
 
 call :CHECK_ZKEMKEEPER
 if not errorlevel 1 goto SDK_OK
@@ -126,7 +153,7 @@ call :CREATE_SHORTCUT
 echo.
 echo Launching SHAB Attendance Dashboard...
 call :LOG Launching SHAB Attendance Dashboard...
-call :LOG Middleware: WL10Middleware.exe --dashboard --dashboard-port 5099
+call :LOG Middleware: %MW_EXE% --dashboard --dashboard-port 5099
 call :LOG LogFile: %LOG_FILE%
 call :LOG MiddlewareStdout: %MIDDLE_OUT%
 call :LOG MiddlewareStderr: %MIDDLE_ERR%
@@ -153,7 +180,12 @@ echo   %MIDDLE_ERR%
 if /I "%RUN_MODE%"=="console" goto RUN_CONSOLE
 
 call :LOG Starting middleware in background...
-start "SHAB Attendance Middleware" /min cmd /c "\"%CD%\WL10Middleware.exe\" --dashboard --dashboard-port 5099 1>\"%MIDDLE_OUT%\" 2>\"%MIDDLE_ERR%\""
+if exist "%PS_EXE%" (
+  "%PS_EXE%" -NoProfile -ExecutionPolicy Bypass -Command ^
+    "$p=Start-Process -WindowStyle Minimized -WorkingDirectory '%CD%' -FilePath (Join-Path '%CD%' '%MW_EXE%') -ArgumentList @('--dashboard','--dashboard-port','5099') -RedirectStandardOutput '%MIDDLE_OUT%' -RedirectStandardError '%MIDDLE_ERR%' -PassThru; if($p){ Write-Output ('Started PID=' + $p.Id) }" >>"%LOG_FILE%" 2>>&1
+) else (
+  start "SHAB Attendance Middleware" /min cmd /c "\"%CD%\%MW_EXE%\" --dashboard --dashboard-port 5099 1>\"%MIDDLE_OUT%\" 2>\"%MIDDLE_ERR%\""
+)
 goto STARTED_OK
 
 :RUN_CONSOLE
@@ -161,7 +193,7 @@ echo.
 echo Running middleware in foreground (console mode)...
 echo Close this window to stop the dashboard.
 call :LOG Running middleware in foreground (console mode)...
-WL10Middleware.exe --dashboard --dashboard-port 5099
+%MW_EXE% --dashboard --dashboard-port 5099
 set "MW_EXIT=%errorlevel%"
 call :LOG Middleware exited (console mode). ExitCode=%MW_EXIT%
 echo.
@@ -211,7 +243,7 @@ if not errorlevel 1 exit /b 0
 exit /b 1
 
 :CHECK_PROC
-tasklist /fi "imagename eq WL10Middleware.exe" | find /i "WL10Middleware.exe" >nul 2>&1
+tasklist /fi "imagename eq %MW_EXE%" | find /i "%MW_EXE%" >nul 2>&1
 if not errorlevel 1 exit /b 0
 exit /b 1
 
@@ -229,7 +261,6 @@ echo Opening browser: %DASH_URL%
 call :LOG Dashboard reachable. Opening browser: %DASH_URL%
 call :OPEN_URL "%DASH_URL%"
 echo.
-echo Default login: superadmin / abcd1234
 call :LOG Done.
 endlocal
 exit /b 0
@@ -250,6 +281,7 @@ echo.
 echo Port status:
 netstat -ano | findstr /R /C:":5099 .*LISTENING"
 echo.
+tasklist /fi "imagename eq SHABMiddleware.exe"
 tasklist /fi "imagename eq WL10Middleware.exe"
 echo.
 echo Desktop path:
@@ -257,7 +289,8 @@ echo   %DESKTOP_DIR%
 echo.
 call :LOG Port status:
 netstat -ano | findstr /R /C:":5099 .*LISTENING" >>"%LOG_FILE%" 2>>&1
-call :LOG Tasklist for WL10Middleware.exe:
+call :LOG Tasklist for middleware:
+tasklist /fi "imagename eq SHABMiddleware.exe" >>"%LOG_FILE%" 2>>&1
 tasklist /fi "imagename eq WL10Middleware.exe" >>"%LOG_FILE%" 2>>&1
 call :LOG Desktop path: %DESKTOP_DIR%
 call :LOG HTTP probe:
@@ -275,11 +308,10 @@ if not "%ERR_SIZE%"=="0" start "" notepad.exe "%MIDDLE_ERR%"
 :NOT_READY_AFTER_ERR_OPEN
 for %%A in ("%LOG_FILE%") do set "LOG_SIZE=%%~zA"
 for %%A in ("%LOG_FILE%") do set "LOG_SIZE=%%~zA"
-if "%LOG_SIZE%"=="0" echo NOTE: Log file is empty. Windows Defender or SmartScreen may be blocking WL10Middleware.exe. & echo Try: Right-click WL10Middleware.exe ^> Properties ^> Unblock, then run again.
+if "%LOG_SIZE%"=="0" echo NOTE: Log file is empty. Windows Defender or SmartScreen may be blocking the middleware EXE. & echo Try: Right-click the EXE in %APP_DIR% ^> Properties ^> Unblock, then run again.
 echo.
 pause
 echo.
-echo Default login: superadmin / abcd1234
 endlocal
 exit /b 1
 
@@ -304,11 +336,10 @@ call :LOG Recent crash events (Application log):
 call :LOG_EVENT_ERRORS
 if exist "%LOG_FILE%" echo Log file: & echo   %LOG_FILE% & echo. & start "" notepad.exe "%LOG_FILE%"
 for %%A in ("%LOG_FILE%") do set "LOG_SIZE=%%~zA"
-if "%LOG_SIZE%"=="0" echo NOTE: Log file is empty. Windows Defender or SmartScreen may be blocking WL10Middleware.exe. & echo Try: Right-click WL10Middleware.exe ^> Properties ^> Unblock, then run again.
+if "%LOG_SIZE%"=="0" echo NOTE: Log file is empty. Windows Defender or SmartScreen may be blocking the middleware EXE. & echo Try: Right-click the EXE in %APP_DIR% ^> Properties ^> Unblock, then run again.
 echo.
 pause
 echo.
-echo Default login: superadmin / abcd1234
 endlocal
 exit /b 1
 
@@ -341,6 +372,20 @@ if not errorlevel 1 exit /b 0
 netstat -ano | findstr /R /C:":5099 .*LISTENING" >nul 2>&1
 if not errorlevel 1 exit /b 0
 exit /b 1
+
+:CHECK_RUNNING_PATH
+if not exist "%PS_EXE%" exit /b 0
+setlocal EnableExtensions
+set "EXPECTED=%CD%\%MW_EXE%"
+for /f "usebackq delims=" %%P in (`"%PS_EXE%" -NoProfile -ExecutionPolicy Bypass -Command "$n=@('%MW_NAME%','WL10Middleware','SHABMiddleware') | Select-Object -Unique; foreach($x in $n){ $p=(Get-Process -Name $x -ErrorAction SilentlyContinue | Select-Object -First 1); if($p){ if($p.Path){ Write-Output ($x + '|' + $p.Path) } else { Write-Output ($x + '|') }; break } }"` ) do set "FOUND=%%P"
+if not defined FOUND endlocal & exit /b 0
+for /f "tokens=1* delims=|" %%A in ("%FOUND%") do (
+  call :LOG Running process name: %%A
+  call :LOG Running process path: %%B
+  if /I "%%A"=="WL10Middleware" endlocal & set "FORCE_RESTART=1" & exit /b 0
+  if /I "%%B"=="%EXPECTED%" endlocal & exit /b 0
+)
+endlocal & set "FORCE_RESTART=1" & exit /b 0
 
 :CHECK_ZKEMKEEPER
 reg query "HKCR\zkemkeeper.CZKEM" /reg:32 >nul 2>&1

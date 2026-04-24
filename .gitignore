@@ -15,3 +15,14 @@ Reference/Sample Logs/*.dat
 # Local publish artifacts (do not commit)
 .tmp_wl10_publish_*/
 .tmp_*/
+
+# Client Package runtime data (do not commit)
+SHAB Attendance System/Client Package/Logs/
+SHAB Attendance System/Client Package/Data/
+SHAB Attendance System/Client Package/Exports/
+
+# Client Package published app binaries (publish per release/PC; do not commit)
+SHAB Attendance System/Client Package/App/
+
+# Root logs (local-only)
+Logs/

@@ -5,6 +5,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <PublishSingleFile>false</PublishSingleFile>
+    <AssemblyName>SHABMiddleware</AssemblyName>
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(SHAB_BUILD_ARCH)' == 'x86'">
