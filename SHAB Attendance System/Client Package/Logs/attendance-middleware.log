@@ -728,3 +728,33 @@ Is64BitProc=True
 OSVersion=Microsoft Windows NT 10.0.19045.0
 [Sun 04/19/2026 15:53:32.48] Checking if dashboard is already running (port 5099)...
 [Sun 04/19/2026 15:53:39.98] Recent crash events (Application log):
+(missing) "C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\Logs\middleware-stdout.log"
+[Sat 04/25/2026  3:34:33.18] Middleware stderr (tail):
+(missing) "C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\Logs\middleware-stderr.log"
+[Sat 04/25/2026  3:34:33.21] Desktop path: C:\Users\admin\Desktop
+[Sat 04/25/2026  3:34:33.21] Recent crash events (Application log):
+[Sat 04/25/2026  3:34:51.38] SHAB Attendance System - Start Dashboard
+[Sat 04/25/2026  3:34:51.39] Version: 2026-04-16
+[Sat 04/25/2026  3:34:51.40] Root: C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\
+[Sat 04/25/2026  3:34:51.41] AppDir: C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\App\win-x86
+[Sat 04/25/2026  3:34:51.46] Tasklist for WL10Middleware.exe:
+INFO: No tasks are running which match the specified criteria.
+[Sat 04/25/2026  3:34:51.59] Desktop path: C:\Users\admin\Desktop
+[Sat 04/25/2026  3:34:51.60] HTTP probe:
+HTTP_ERROR System.Net.WebException The operation has timed out.
+[Sat 04/25/2026  3:34:54.29] Recent crash events (Application log):
+[Sat 04/25/2026  3:34:54.58] Middleware stdout (tail):
+(missing) "C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\Logs\middleware-stdout.log"
+[Sat 04/25/2026  3:34:54.61] Middleware stderr (tail):
+(missing) "C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\Logs\middleware-stderr.log"
+[Sat 04/25/2026  3:35:03.18] Machine: OLV51-LIDDESK
+[Sat 04/25/2026  3:35:03.18] RunMode: background
+[Sat 04/25/2026  3:35:03.20] ============================================================
+[Sat 04/25/2026  3:35:03.21] OS_VER: Windows_NT (ver: 2)
+
+Microsoft Windows [Version 10.0.19045.5965]
+PSVersion=5.1.19041.5965
+Is64BitOS=True
+Is64BitProc=True
+OSVersion=Microsoft Windows NT 10.0.19045.0
+[Sat 04/25/2026  3:35:03.55] Checking if dashboard is already running (port 5099)...
