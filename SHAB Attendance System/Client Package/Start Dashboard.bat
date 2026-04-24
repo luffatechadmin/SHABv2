@@ -182,10 +182,18 @@ if /I "%RUN_MODE%"=="console" goto RUN_CONSOLE
 call :LOG Starting middleware in background...
 if exist "%PS_EXE%" (
   "%PS_EXE%" -NoProfile -ExecutionPolicy Bypass -Command ^
-    "$p=Start-Process -WindowStyle Minimized -WorkingDirectory '%CD%' -FilePath (Join-Path '%CD%' '%MW_EXE%') -ArgumentList @('--dashboard','--dashboard-port','5099') -RedirectStandardOutput '%MIDDLE_OUT%' -RedirectStandardError '%MIDDLE_ERR%' -PassThru; if($p){ Write-Output ('Started PID=' + $p.Id) }" >>"%LOG_FILE%" 2>>&1
+    "try { $exe=(Join-Path '%CD%' '%MW_EXE%'); $p=Start-Process -WindowStyle Minimized -WorkingDirectory '%CD%' -FilePath $exe -ArgumentList @('--dashboard','--dashboard-port','5099') -RedirectStandardOutput '%MIDDLE_OUT%' -RedirectStandardError '%MIDDLE_ERR%' -PassThru -ErrorAction Stop; if($p){ Write-Output ('Started PID=' + $p.Id) }; exit 0 } catch { Write-Output ('Start-Process failed: ' + $_.Exception.Message); exit 1 }" >>"%LOG_FILE%" 2>>&1
+  if errorlevel 1 (
+    call :LOG WARNING: Start-Process failed. Falling back to cmd start.
+    goto START_BG_FALLBACK
+  )
 ) else (
-  start "SHAB Attendance Middleware" /min cmd /c "\"%CD%\%MW_EXE%\" --dashboard --dashboard-port 5099 1>\"%MIDDLE_OUT%\" 2>\"%MIDDLE_ERR%\""
+  goto START_BG_FALLBACK
 )
+goto STARTED_OK
+
+:START_BG_FALLBACK
+start "SHAB Attendance Middleware" /min cmd /c "\"%CD%\%MW_EXE%\" --dashboard --dashboard-port 5099 1>\"%MIDDLE_OUT%\" 2>\"%MIDDLE_ERR%\""
 goto STARTED_OK
 
 :RUN_CONSOLE
@@ -209,6 +217,9 @@ endlocal & exit /b %MW_EXIT%
 :STARTED_OK
 echo Waiting for dashboard to be ready...
 call :LOG Waiting for dashboard to be ready (port 5099)...
+timeout /t 2 /nobreak >nul
+call :CHECK_PROC
+if errorlevel 1 goto START_FAILED
 set /a TRIES_MAX=180
 set /a tries=%TRIES_MAX%
 set /a tick=0
@@ -318,6 +329,9 @@ exit /b 1
 :START_FAILED
 echo Middleware process did not start.
 echo This is usually caused by antivirus blocking the EXE, missing permissions, or a missing dependency.
+echo If the log shows "Access is denied", try:
+echo - Right-click %APP_DIR%\%MW_EXE% ^> Properties ^> Unblock
+echo - Run Start Dashboard.bat as Administrator
 call :LOG ERROR: Middleware process did not start.
 call :LOG Middleware stdout (tail):
 call :TAIL "%MIDDLE_OUT%"

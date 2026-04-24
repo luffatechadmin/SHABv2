@@ -814,3 +814,45 @@ Defender exclusion attempted.
 [Sat 04/25/2026  4:34:33.23] Starting middleware in background...
 [Sat 04/25/2026  4:34:33.25] Waiting for dashboard to be ready (port 5099)...
 [Sat 04/25/2026  4:34:33.25] Waiting... (up to 180 seconds)
+[Sat 04/25/2026  5:44:30.98] ============================================================
+[Sat 04/25/2026  5:44:31.20] Port status:
+[Sat 04/25/2026  5:44:31.24] Tasklist for middleware:
+INFO: No tasks are running which match the specified criteria.
+INFO: No tasks are running which match the specified criteria.
+[Sat 04/25/2026  5:44:31.43] Desktop path: C:\Users\admin\Desktop
+[Sat 04/25/2026  5:44:31.45] HTTP probe:
+HTTP_ERROR System.Net.WebException The operation has timed out.
+[Sat 04/25/2026  5:44:33.87] Recent crash events (Application log):
+[Sat 04/25/2026  5:44:34.16] Middleware stdout (tail):
+[Sat 04/25/2026  5:44:34.59] Middleware stderr (tail):
+[Sat 04/25/2026  5:44:55.24] Version: 2026-04-16
+[Sat 04/25/2026  5:44:55.24] Root: C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\
+PSVersion=5.1.19041.5965
+Is64BitOS=True
+Is64BitProc=True
+OSVersion=Microsoft Windows NT 10.0.19045.0
+[Sat 04/25/2026  5:44:55.57] LogFile: C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\Logs\attendance-middleware.log
+[Sat 04/25/2026  5:44:55.57] MiddlewareStdout: C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\Logs\middleware-stdout.log
+[Sat 04/25/2026  5:44:55.62] Tasklist for middleware:
+INFO: No tasks are running which match the specified criteria.
+INFO: No tasks are running which match the specified criteria.
+[Sat 04/25/2026  5:44:55.82] Desktop path: C:\Users\admin\Desktop
+[Sat 04/25/2026  5:44:55.84] HTTP probe:
+HTTP_ERROR System.Net.WebException The operation has timed out.
+[Sat 04/25/2026  5:44:58.26] Recent crash events (Application log):
+[Sat 04/25/2026  5:44:58.53] Middleware stdout (tail):
+[Sat 04/25/2026  5:44:58.87] Middleware stderr (tail):
+[Sat 04/25/2026  5:45:08.79] ERROR: Middleware process did not start.
+[Sat 04/25/2026  5:45:08.80] Middleware stdout (tail):
+[Sat 04/25/2026  5:45:09.08] Middleware stderr (tail):
+[Sat 04/25/2026  5:45:09.36] Desktop path: C:\Users\admin\Desktop
+[Sat 04/25/2026  5:45:09.37] Recent crash events (Application log):
+Start-Process : This command cannot be run due to the error: Access is denied.
+At line:1 char:4
++ $p=Start-Process -WindowStyle Minimized -WorkingDirectory 'C:\Users\a ...
++    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : InvalidOperation: (:) [Start-Process], InvalidOperationException
+    + FullyQualifiedErrorId : InvalidOperationException,Microsoft.PowerShell.Commands.StartProcessCommand
+ 
+[Sat 04/25/2026  5:45:21.53] Waiting for dashboard to be ready (port 5099)...
+[Sat 04/25/2026  5:45:21.55] Waiting... (up to 180 seconds)
