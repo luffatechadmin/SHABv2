@@ -832,6 +832,8 @@ static partial class Program
       var deviceTotal = (Program.DevicePunches ?? Array.Empty<Punch>()).Length;
       var isSuperadmin = string.Equals(ctx.User.FindFirstValue("role") ?? string.Empty, "superadmin", StringComparison.Ordinal);
       var configured = EnsureConfiguredDevices(saveIfSeeded: true);
+      var latestState = LoadState(statePath);
+      var processedFiles = (latestState.ProcessedFiles ?? Array.Empty<ProcessedFileEntry>()).ToArray();
       var devices = configured.Select(d => new
       {
         type = d.DeviceType,
@@ -842,6 +844,14 @@ static partial class Program
         logDir = d.LogDir,
         filePattern = d.FilePattern,
         lastOkAtUtc = d.LastOkAtUtc?.ToString("O"),
+        savedAtUtc = d.SavedAtUtc == default ? null : d.SavedAtUtc.ToString("O"),
+        processedFilesCount = processedFiles.Count(p => string.Equals(p.DeviceId, d.DeviceId, StringComparison.Ordinal)),
+        lastProcessedAtUtc = processedFiles
+          .Where(p => string.Equals(p.DeviceId, d.DeviceId, StringComparison.Ordinal))
+          .OrderByDescending(p => p.ProcessedAtUtc)
+          .Select(p => (DateTimeOffset?)p.ProcessedAtUtc)
+          .FirstOrDefault()
+          ?.ToString("O"),
         active = string.Equals(d.DeviceId, cfg.DeviceId, StringComparison.Ordinal)
       }).ToArray();
 
@@ -4583,7 +4593,7 @@ static partial class Program
         }
       }
 
-      static List<object> ReadWl10FileRows(string filePath)
+      static List<object> ReadWl10FileRows(string filePath, string wl10DeviceId)
       {
         var rows = new List<object>(capacity: 200);
         foreach (var raw in File.ReadLines(filePath))
@@ -4602,6 +4612,7 @@ static partial class Program
 
           rows.Add(new
           {
+            device_id = wl10DeviceId,
             staff_id = staffId,
             datetime = dtRaw,
             verified = parts[3].Trim(),
@@ -4634,6 +4645,7 @@ static partial class Program
             {
               rows.Add(new
               {
+                device_id = dev.DeviceId,
                 staff_id = r.StaffId,
                 datetime = r.DateTime,
                 verified = r.Verified,
@@ -4653,7 +4665,7 @@ static partial class Program
       var wl10Rows = new List<object>(capacity: 0);
       if (deviceId.Equals("all", StringComparison.OrdinalIgnoreCase) || deviceId.Equals(cfg.DeviceId, StringComparison.Ordinal))
       {
-        wl10Rows = ReadWl10FileRows(path);
+        wl10Rows = ReadWl10FileRows(path, cfg.DeviceId);
       }
 
       var w30Rows = new List<object>(capacity: 0);
@@ -6099,8 +6111,7 @@ static partial class Program
 
   private static object GetPcNetworkInfo(string deviceIp)
   {
-    var ips = new List<System.Net.IPAddress>();
-    var labels = new List<string>();
+    var addrs = new List<(string name, System.Net.IPAddress ip)>();
     try
     {
       foreach (var ni in System.Net.NetworkInformation.NetworkInterface.GetAllNetworkInterfaces())
@@ -6115,22 +6126,27 @@ static partial class Program
           if (ua.Address.AddressFamily != System.Net.Sockets.AddressFamily.InterNetwork) continue;
           var ip = ua.Address;
           if (System.Net.IPAddress.IsLoopback(ip)) continue;
-          ips.Add(ip);
-          labels.Add($"{ni.Name}:{ip}");
+          addrs.Add((ni.Name, ip));
         }
       }
     }
     catch { }
 
+    var labels = addrs.Select(x => $"{x.name}:{x.ip}").Distinct().Take(6).ToArray();
+    var best = addrs.Count > 0 ? addrs[0] : default;
+    var bestIp = addrs.Count > 0 ? best.ip.ToString() : string.Empty;
+    var bestLabel = addrs.Count > 0 ? $"{best.name}:{best.ip}" : string.Empty;
+    var bestInterfaceName = addrs.Count > 0 ? best.name : string.Empty;
+
     bool? same24 = null;
     try
     {
-      if (System.Net.IPAddress.TryParse(deviceIp, out var dev) && dev.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork && ips.Count > 0)
+      if (System.Net.IPAddress.TryParse(deviceIp, out var dev) && dev.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork && addrs.Count > 0)
       {
         var d = dev.GetAddressBytes();
-        same24 = ips.Any(p =>
+        same24 = addrs.Any(p =>
         {
-          var b = p.GetAddressBytes();
+          var b = p.ip.GetAddressBytes();
           return b.Length == 4 && d.Length == 4 && b[0] == d[0] && b[1] == d[1] && b[2] == d[2];
         });
       }
@@ -6139,9 +6155,11 @@ static partial class Program
 
     return new
     {
-      ipv4 = labels.Distinct().Take(6).ToArray(),
+      ipv4 = labels,
       sameSubnet24 = same24,
-      bestIpv4 = ips.Count > 0 ? ips[0].ToString() : string.Empty,
+      bestIpv4 = bestIp,
+      bestLabel,
+      bestInterfaceName,
     };
   }
 
@@ -7142,8 +7160,14 @@ static partial class Program
     .iconBtn{display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;padding:0;border-radius:10px;border:1px solid var(--border2);background:var(--btn);color:var(--text);cursor:pointer}
     .iconBtn:hover{background:var(--btnH);border-color:var(--border2)}
     .iconBtn svg{width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+    .iconBtn.sm{width:28px;height:28px;border-radius:9px}
+    .iconBtn.danger{border-color:rgba(220,38,38,.35);color:var(--bad)}
+    .iconBtn.danger:hover{border-color:rgba(220,38,38,.55)}
     .actionIcons{display:flex;align-items:center;justify-content:flex-start;gap:6px}
     .actionSep{width:1px;height:18px;background:var(--border2);opacity:.8}
+    .devConnTable .actionIcons{justify-content:flex-end;flex-wrap:nowrap}
+    .devConnTable td:last-child{overflow:visible}
+    .settingsDeviceTable td{white-space:nowrap}
     .dlIconBtn{display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;padding:0;border-radius:10px;border:1px solid var(--border2);background:var(--btn);color:var(--text);cursor:pointer}
     .dlIconBtn:hover{background:var(--btnH);border-color:var(--border2)}
     .dlIconBtn svg{width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
@@ -7855,6 +7879,7 @@ static partial class Program
             <table class="prettyTable">
               <thead>
                 <tr>
+                  <th>Device</th>
                   <th>Staff ID</th>
                   <th>Date &amp; Time</th>
                   <th>Verified</th>
@@ -7990,70 +8015,37 @@ static partial class Program
         <div class="grid" style="margin:0">
           <div class="card">
             <div class="cardHead"><div class="cardHeadTitle">Device Settings</div></div>
-
-            <div class="kpis kpis1">
-              <div class="kpi">
-                <div class="summaryRow">
-                  <div class="kTitle">Connection Sync</div>
-                  <div id="reach" class="pill">Checking...</div>
-                </div>
-                <div class="kMeta">IP <strong id="ip"></strong></div>
-                <div class="kMeta">Port <strong id="port"></strong> • Reader <strong id="readerMode"></strong></div>
-              </div>
-            </div>
-
-            <div class="kpis kpis2" style="margin-top:14px">
-              <div class="kpi">
-                <div class="kTitle">Today Device</div>
-                <div class="kVal" id="totalTodayDevice">-</div>
-                <div class="kMeta">Unique staff <strong id="uniqueTodayDevice">-</strong></div>
-              </div>
-              <div class="kpi">
-                <div class="kTitle">Last Sync</div>
-                <div class="kVal" id="lastSyncKpi">-</div>
-                <div class="kMeta" id="lastSyncDateKpi">Update on -</div>
-                <div class="kMeta">Read <strong id="lastResKpi">-</strong></div>
-              </div>
+            <div class="hint">Shows all configured devices saved on this PC. Active device is the one used for Sync Device and live connection checks.</div>
+            <div style="height:10px"></div>
+            <div style="overflow-x:auto;max-width:100%">
+              <table class="prettyTable settingsDeviceTable" style="width:100%;table-layout:fixed">
+                <thead>
+                  <tr>
+                    <th style="width:240px">Device</th>
+                    <th style="width:180px">IP:Port</th>
+                    <th style="width:120px">Reader</th>
+                    <th>W30 Log Folder</th>
+                    <th style="width:180px">Last OK</th>
+                  </tr>
+                </thead>
+                <tbody id="settingsDevicesBody"></tbody>
+              </table>
             </div>
 
             <div class="sectionHead"><div class="sectionHeadTitle">Device Sync Summary</div></div>
-            <div class="subCards">
-              <div class="subCard">
-                <div class="subTitle">Status</div>
-                <div class="subVal" id="deviceSyncStatusWrap"><span id="deviceSyncStatus" class="pill">Unknown</span></div>
-              </div>
-              <div class="subCard">
-                <div class="subTitle">Table</div>
-                <div class="subVal mono" id="deviceSyncTable"></div>
-              </div>
-              <div class="subCard">
-                <div class="subTitle">Auto Sync</div>
-                <div class="subVal" id="auto"></div>
-              </div>
-              <div class="subCard">
-                <div class="subTitle">Next Sync</div>
-                <div class="subVal" id="intervalWithUnit"></div>
-              </div>
-              <div class="subCard">
-                <div class="subTitle">Last Read</div>
-                <div class="subVal" id="lastRes"></div>
-              </div>
-              <div class="subCard">
-                <div class="subTitle">Last Sync</div>
-                <div class="subVal mono" id="lastSyncAt"></div>
-              </div>
-              <div class="subCard">
-                <div class="subTitle">Total Records</div>
-                <div class="subVal" id="runCount"></div>
-              </div>
-              <div class="subCard">
-                <div class="subTitle">Local Database Date</div>
-                <div class="subVal mono" id="localWm"></div>
-              </div>
-            </div>
-            <div style="height:10px"></div>
-            <div class="hint">
-              Last Sync is when the middleware finished its last sync run. Local Database Date is the timestamp of the newest punch saved locally (used for incremental reads), so it is usually the same as or slightly earlier than Last Sync.
+            <div style="overflow-x:auto;max-width:100%">
+              <table class="prettyTable settingsDeviceTable" style="width:100%;table-layout:fixed">
+                <thead>
+                  <tr>
+                    <th style="width:240px">Device</th>
+                    <th style="width:120px">Mode</th>
+                    <th style="width:180px">Last Sync</th>
+                    <th style="width:140px">Last Read</th>
+                    <th>Notes</th>
+                  </tr>
+                </thead>
+                <tbody id="settingsDeviceSyncBody"></tbody>
+              </table>
             </div>
             <div style="height:8px"></div>
             <div class="muted" id="lastErrBrief"></div>
@@ -8070,18 +8062,22 @@ static partial class Program
                 <option value="com">COM</option>
               </select>
             </div>
-            <div class="row toolbarRight" style="margin:10px 0">
+            <div class="row toolbarRight" style="margin:10px 0;gap:8px">
+              <select id="devAddType" style="width:140px;flex:0 0 auto">
+                <option value="WL10">WL10</option>
+                <option value="W30">W30</option>
+              </select>
               <button class="btn" id="devAddDevice" type="button">Add Device</button>
             </div>
             <div style="overflow-x:auto;max-width:100%">
-              <table class="prettyTable" style="width:100%;table-layout:fixed">
+              <table class="prettyTable devConnTable" style="width:100%;table-layout:fixed">
                 <thead>
                   <tr>
-                    <th>Device</th>
-                    <th>Device IP</th>
-                    <th>Device Port</th>
-                    <th>Reader Mode</th>
-                    <th>Actions</th>
+                    <th style="width:260px">Device</th>
+                    <th style="width:180px">IP:Port</th>
+                    <th style="width:120px">Reader</th>
+                    <th>W30 Log Folder</th>
+                    <th style="width:170px">Actions</th>
                   </tr>
                 </thead>
                 <tbody id="devConnBody"></tbody>
@@ -8089,8 +8085,8 @@ static partial class Program
             </div>
             <div style="height:8px"></div>
             <div class="hint" id="actionOut"></div>
-            <div style="height:10px"></div>
-            <ul class="bulletList" id="connInfo"></ul>
+            <div class="sectionHead"><div class="sectionHeadTitle">Desktop Info</div></div>
+            <ul class="bulletList" id="desktopInfo"></ul>
 
             <div class="sectionHead"><div class="sectionHeadTitle">Sync &amp; Dashboard</div></div>
             <div class="hint">Mandatory Sync times are fixed times when a sync run is required.</div>
@@ -9284,7 +9280,10 @@ static partial class Program
       const pick = getRawDevicePick();
       const devRefreshBtn = el('devRefresh');
       if (devRefreshBtn) {
-        const isW30 = pick.toUpperCase().startsWith('W30-');
+        const devs = (lastStatus && Array.isArray(lastStatus.devices)) ? lastStatus.devices : [];
+        const match = (pick && pick !== 'all') ? devs.find(d => String((d && d.deviceId) || '').trim() === pick) : null;
+        const t = match ? String((match && match.type) || '').trim().toUpperCase() : '';
+        const isW30 = t === 'W30';
         devRefreshBtn.disabled = isW30;
         devRefreshBtn.title = isW30 ? 'W30 uses file import. Copy AttendanceLog*.dat then use Sync Database.' : '';
       }
@@ -9310,19 +9309,23 @@ static partial class Program
         const ip = String(d.deviceIp || '').trim();
         const port = String(d.devicePort ?? '').trim();
         const rm = String(d.readerMode || '').trim();
+        const logDir = String(d.logDir || '').trim();
         const active = id && settingsDevicesActiveId && id === settingsDevicesActiveId;
+        const ipPort = (ip && port) ? (ip + ':' + port) : (ip || port || '-');
+        const w30Dir = (String(type || '').trim().toUpperCase() === 'W30') ? (logDir || '(Reference)') : '-';
         parts.push(
           '<tr>' +
           '<td>' + escHtml((type ? type + ' ' : '') + (id || '-')) + (active ? ' <span class="pill">Active</span>' : '') + '</td>' +
-          '<td class="mono">' + escHtml(ip || '-') + '</td>' +
-          '<td class="mono">' + escHtml(port || '-') + '</td>' +
+          '<td class="mono">' + escHtml(ipPort) + '</td>' +
           '<td>' + escHtml(rm || '-') + '</td>' +
-          '<td class="row" style="gap:8px;flex-wrap:wrap">' +
-          '<button class="btn" type="button" data-dev-action="connect" data-dev-id="' + escHtml(id) + '">Connect</button>' +
-          '<button class="btn" type="button" data-dev-action="disconnect" data-dev-id="' + escHtml(id) + '">Disconnect</button>' +
-          '<button class="btn" type="button" data-dev-action="edit" data-dev-id="' + escHtml(id) + '">Edit</button>' +
-          '<button class="btn danger" type="button" data-dev-action="delete" data-dev-id="' + escHtml(id) + '">Remove</button>' +
-          '</td>' +
+          '<td class="mono">' + escHtml(w30Dir) + '</td>' +
+          '<td><div class="actionIcons">' +
+          '<button class="iconBtn sm" type="button" data-dev-action="connect" data-dev-id="' + escHtml(id) + '" title="Connect" aria-label="Connect"' + (active ? ' disabled' : '') + '><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M8 12l2.5 2.5L16 9"/></svg></button>' +
+          '<button class="iconBtn sm" type="button" data-dev-action="disconnect" data-dev-id="' + escHtml(id) + '" title="Disconnect" aria-label="Disconnect"' + (!active ? ' disabled' : '') + '><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9 9l6 6"/><path d="M15 9l-6 6"/></svg></button>' +
+          '<span class="actionSep"></span>' +
+          '<button class="iconBtn sm" type="button" data-dev-action="edit" data-dev-id="' + escHtml(id) + '" title="Edit" aria-label="Edit"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/></svg></button>' +
+          '<button class="iconBtn sm danger" type="button" data-dev-action="delete" data-dev-id="' + escHtml(id) + '" title="Remove" aria-label="Remove"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/></svg></button>' +
+          '</div></td>' +
           '</tr>'
         );
       }
@@ -9338,19 +9341,22 @@ static partial class Program
       if (!settingsDevicesWired) {
         settingsDevicesWired = true;
         const addBtn = el('devAddDevice');
-        if (addBtn) addBtn.addEventListener('click', () => openDeviceModal(null));
+        if (addBtn) addBtn.addEventListener('click', () => {
+          const addType = String(el('devAddType')?.value || 'WL10').trim() || 'WL10';
+          openDeviceModal(null, addType);
+        });
         const body = el('devConnBody');
         if (body) body.addEventListener('click', async (ev) => {
-          const t = ev.target;
-          if (!t || !t.getAttribute) return;
-          const act = String(t.getAttribute('data-dev-action') || '').trim();
-          const id = String(t.getAttribute('data-dev-id') || '').trim();
+          const btn = ev.target && ev.target.closest ? ev.target.closest('button[data-dev-action]') : null;
+          if (!btn) return;
+          const act = String(btn.getAttribute('data-dev-action') || '').trim();
+          const id = String(btn.getAttribute('data-dev-id') || '').trim();
           if (!act || !id) return;
           ev.preventDefault();
 
           if (act === 'edit') {
             const d = (settingsDevices || []).find(x => String(x.deviceId || '').trim() === id) || null;
-            openDeviceModal(d);
+            openDeviceModal(d, '');
             return;
           }
           if (act === 'delete') {
@@ -9380,35 +9386,102 @@ static partial class Program
       return true;
     }
 
-    function openDeviceModal(existing) {
+    function openDeviceModal(existing, preferType) {
       const e = existing || {};
       const isEdit = !!(e && e.deviceId);
       const title = isEdit ? 'Edit Device' : 'Add Device';
+      const initialType = String(e.deviceType || preferType || 'WL10').trim() || 'WL10';
+      const init = {
+        deviceType: initialType,
+        deviceId: String(e.deviceId || '').trim(),
+        deviceIp: String(e.deviceIp || '').trim(),
+        devicePort: String((e.devicePort ?? '') || '').trim(),
+        readerMode: String(e.readerMode || '').trim(),
+        logDir: String(e.logDir || '').trim(),
+        filePattern: String(e.filePattern || '').trim(),
+      };
+      if (!init.readerMode) init.readerMode = (initialType.toUpperCase() === 'W30') ? 'file' : 'auto';
+      if (!init.devicePort && initialType.toUpperCase() === 'WL10') init.devicePort = '4370';
+      if (!init.filePattern && initialType.toUpperCase() === 'W30') init.filePattern = 'AttendanceLog*.dat';
+
       const fields = [
-        { k: 'deviceType', label: 'Device Type', type: 'select', val: String(e.deviceType || 'WL10'), opts: [{ v: 'WL10', l: 'WL10' }, { v: 'W30', l: 'W30' }] },
-        { k: 'deviceIp', label: 'Device IP', type: 'text', val: String(e.deviceIp || '') },
-        { k: 'devicePort', label: 'Device Port', type: 'number', val: String((e.devicePort ?? '') || '') },
-        { k: 'readerMode', label: 'Reader Mode', type: 'select', val: String(e.readerMode || 'auto'), opts: [{ v: 'auto', l: 'Auto' }, { v: 'native', l: 'Native' }, { v: 'com', l: 'COM' }, { v: 'file', l: 'File' }] },
-        { k: 'logDir', label: 'Log Folder (W30)', type: 'text', val: String(e.logDir || '') },
-        { k: 'filePattern', label: 'File Pattern (W30)', type: 'text', val: String(e.filePattern || 'AttendanceLog*.dat') },
+        { key: 'deviceType', label: 'Device Type', kind: 'select', options: ['WL10', 'W30'], default: initialType },
+        { key: 'deviceId', label: 'Device ID', placeholder: 'WL10-192.168.1.170', default: init.deviceId },
+        { key: 'deviceIp', label: 'Device IP', placeholder: '192.168.1.170', default: init.deviceIp },
+        { key: 'devicePort', label: 'Device Port', type: 'number', placeholder: '4370', default: init.devicePort },
+        { key: 'readerMode', label: 'Reader Mode', kind: 'select', options: ['auto', 'native', 'com', 'file'], default: init.readerMode },
+        { key: 'logDir', label: 'W30 Log Folder (blank = Reference)', placeholder: '', default: init.logDir },
+        { key: 'filePattern', label: 'W30 File Pattern', placeholder: 'AttendanceLog*.dat', default: init.filePattern },
       ];
 
-      openModal(title, fields, async (obj) => {
+      let autoId = !init.deviceId;
+      if (!autoId && init.deviceIp && init.deviceType) {
+        const expected = String(init.deviceType || '').trim().toUpperCase() + '-' + init.deviceIp;
+        if (init.deviceId.toUpperCase() === expected.toUpperCase()) autoId = true;
+      }
+
+      openModal(title, fields, init, async (obj) => {
         const payload = {
-          deviceId: isEdit ? String(e.deviceId || '') : '',
-          deviceType: String(obj.deviceType || 'WL10'),
+          deviceId: String(obj.deviceId || '').trim(),
+          deviceType: String(obj.deviceType || 'WL10').trim(),
           deviceIp: String(obj.deviceIp || '').trim(),
           devicePort: obj.devicePort === '' || obj.devicePort === null || obj.devicePort === undefined ? 0 : parseInt(String(obj.devicePort), 10),
           readerMode: String(obj.readerMode || '').trim(),
           logDir: String(obj.logDir || '').trim(),
           filePattern: String(obj.filePattern || '').trim(),
         };
+        if (isEdit && !payload.deviceId) payload.deviceId = String(e.deviceId || '').trim();
         const res = await postJson('/api/devices/upsert', payload);
-        if (!res || res.ok === false) { return { ok: false, error: String((res && res.error) || '') }; }
+        if (!res || res.ok === false) throw new Error(String((res && res.error) || 'Save failed'));
         await refreshSettingsDevices();
         await refreshStatus();
-        return { ok: true };
       });
+
+      const typeEl = el('modal_deviceType');
+      const idEl = el('modal_deviceId');
+      const ipEl = el('modal_deviceIp');
+      const portEl = el('modal_devicePort');
+      const rmEl = el('modal_readerMode');
+      const dirEl = el('modal_logDir');
+      const patEl = el('modal_filePattern');
+
+      function refreshDeviceModalDefaults() {
+        const type = String(typeEl && typeEl.value ? typeEl.value : 'WL10').trim().toUpperCase();
+        const ip = String(ipEl && ipEl.value ? ipEl.value : '').trim();
+        if (rmEl) {
+          if (type === 'W30') rmEl.value = 'file';
+          else if (!rmEl.value || String(rmEl.value).trim().toLowerCase() === 'file') rmEl.value = 'auto';
+        }
+        if (portEl) {
+          const raw = String(portEl.value || '').trim();
+          if (!raw) {
+            if (type === 'WL10') portEl.value = '4370';
+          }
+        }
+        if (patEl) {
+          const raw = String(patEl.value || '').trim();
+          if (type === 'W30' && !raw) patEl.value = 'AttendanceLog*.dat';
+        }
+        if (dirEl) {
+          dirEl.disabled = type !== 'W30';
+        }
+        if (patEl) {
+          patEl.disabled = type !== 'W30';
+        }
+        if (idEl) {
+          const cur = String(idEl.value || '').trim();
+          if (!cur) autoId = true;
+          if (autoId) {
+            const next = (type || 'WL10') + '-' + (ip || 'unknown');
+            idEl.value = next;
+          }
+        }
+      }
+
+      if (idEl) idEl.addEventListener('input', () => { autoId = false; });
+      if (typeEl) typeEl.addEventListener('change', refreshDeviceModalDefaults);
+      if (ipEl) ipEl.addEventListener('input', refreshDeviceModalDefaults);
+      refreshDeviceModalDefaults();
     }
 
     async function refreshStatus() {
@@ -9443,6 +9516,73 @@ static partial class Program
       if (sheetMonthlyBulkDownloadBtn) sheetMonthlyBulkDownloadBtn.style.display = (isSuperadmin && monthlySelectedStaff && monthlySelectedStaff.size > 0) ? '' : 'none';
       const sheetMonthlySelectAll = el('sheetMonthlySelectAll');
       if (sheetMonthlySelectAll) sheetMonthlySelectAll.style.display = isSuperadmin ? '' : 'none';
+
+      try {
+        const devBody = el('settingsDevicesBody');
+        if (devBody) {
+          const devs = (j && Array.isArray(j.devices)) ? j.devices : [];
+          if (!devs.length) {
+            devBody.innerHTML = '<tr><td colspan="5" class="muted">No configured devices.</td></tr>';
+          } else {
+            devBody.innerHTML = devs.map(d => {
+              const id = String((d && d.deviceId) || '').trim();
+              const type = String((d && d.type) || '').trim();
+              const ip = String((d && d.ip) || '').trim();
+              const port = String((d && d.port) ?? '').trim();
+              const rm = String((d && d.readerMode) || '').trim();
+              const active = !!(d && d.active);
+              const ipPort = (ip && port) ? (ip + ':' + port) : (ip || port || '-');
+              const logDir = String((d && d.logDir) || '').trim();
+              const w30Dir = (type && type.toUpperCase() === 'W30') ? (logDir || '(Reference)') : '-';
+              const okAt = (d && d.lastOkAtUtc) ? fmt(String(d.lastOkAtUtc || '')) : '-';
+              return '<tr>' +
+                '<td>' + escHtml((type ? type + ' ' : '') + (id || '-')) + (active ? ' <span class="pill">Active</span>' : '') + '</td>' +
+                '<td class="mono">' + escHtml(ipPort) + '</td>' +
+                '<td>' + escHtml(rm || '-') + '</td>' +
+                '<td class="mono">' + escHtml(w30Dir) + '</td>' +
+                '<td class="mono">' + escHtml(okAt) + '</td>' +
+              '</tr>';
+            }).join('');
+          }
+        }
+
+        const syncBody = el('settingsDeviceSyncBody');
+        if (syncBody) {
+          const devs = (j && Array.isArray(j.devices)) ? j.devices : [];
+          if (!devs.length) {
+            syncBody.innerHTML = '<tr><td colspan="5" class="muted">No configured devices.</td></tr>';
+          } else {
+            const activeId = String((j && j.device && j.device.deviceId) || '').trim();
+            const lastSyncAt = (j && j.sync) ? (j.sync.lastSyncFinishedAtUtc || j.sync.lastSyncStartedAtUtc || '') : '';
+            const lastReadAt = (j && j.sync) ? (j.sync.lastLocalWatermarkUtc || '') : '';
+            syncBody.innerHTML = devs.map(d => {
+              const id = String((d && d.deviceId) || '').trim();
+              const type = String((d && d.type) || '').trim().toUpperCase();
+              const active = id && activeId && id === activeId;
+              const mode = type === 'W30' ? 'Import' : (type === 'WL10' ? 'Sync Device' : '-');
+              const lastSync = type === 'W30'
+                ? ((d && d.lastProcessedAtUtc) ? fmt(String(d.lastProcessedAtUtc || '')) : '-')
+                : (active ? fmt(String(lastSyncAt || '')) : '-');
+              const lastRead = (type === 'WL10' && active) ? fmt(String(lastReadAt || '')) : '-';
+              let notes = '';
+              if (type === 'W30') {
+                const c = (d && Number.isFinite(Number(d.processedFilesCount))) ? Number(d.processedFilesCount) : 0;
+                const pat = String((d && d.filePattern) || '').trim();
+                notes = 'Processed files: ' + String(c) + (pat ? (' • ' + pat) : '');
+              } else if (type === 'WL10' && active) {
+                notes = 'Read punches: ' + String((j && j.sync && (j.sync.lastRunPunchCount ?? 0)) ?? 0) + ' • Total cached: ' + String((j && j.sync && (j.sync.deviceRecordsTotal ?? 0)) ?? 0);
+              }
+              return '<tr>' +
+                '<td>' + escHtml((type ? type + ' ' : '') + (id || '-')) + (active ? ' <span class="pill">Active</span>' : '') + '</td>' +
+                '<td>' + escHtml(mode) + '</td>' +
+                '<td class="mono">' + escHtml(lastSync) + '</td>' +
+                '<td class="mono">' + escHtml(lastRead) + '</td>' +
+                '<td class="mono">' + escHtml(notes || '-') + '</td>' +
+              '</tr>';
+            }).join('');
+          }
+        }
+      } catch { }
 
       const ipEl = el('ip'); if (ipEl) ipEl.textContent = j.device.ip;
       const portEl = el('port'); if (portEl) portEl.textContent = j.device.port;
@@ -9556,25 +9696,20 @@ static partial class Program
       setValIfNotFocused('supaPubKey', (j.supabase && j.supabase.anonKey) ? j.supabase.anonKey : '');
       setValIfNotFocused('supaKey', (j.supabase && j.supabase.serviceRoleKey) ? j.supabase.serviceRoleKey : '');
       setValIfNotFocused('supaJwt', '');
-      const connInfo = el('connInfo');
-      if (connInfo) {
-        const devReaderRaw = String(j.device.readerMode || '').trim();
-        const devReader = !devReaderRaw ? '-' : (devReaderRaw.toLowerCase() === 'com' ? 'COM' : (devReaderRaw.charAt(0).toUpperCase() + devReaderRaw.slice(1)));
-        const devLine = 'Device IP: ' + (j.device.ip || '-') + ':' + (j.device.port || '-') + ' (Reader: ' + devReader + ')';
-
-        let desktopLabel = '';
-        if (j.pc && Array.isArray(j.pc.ipv4) && j.pc.ipv4.length) desktopLabel = String(j.pc.ipv4[0] || '').trim();
+      const desktopInfo = el('desktopInfo');
+      if (desktopInfo) {
+        const bestLabel = (j.pc && j.pc.bestLabel) ? String(j.pc.bestLabel || '').trim() : '';
+        const bestName = (j.pc && j.pc.bestInterfaceName) ? String(j.pc.bestInterfaceName || '').trim() : '';
         const best = (j.pc && j.pc.bestIpv4) ? String(j.pc.bestIpv4) : '';
-        if (!desktopLabel && best) desktopLabel = best;
-        const desktopLine = 'Desktop IP: ' + (desktopLabel || '-');
-
+        const iface = bestName || (bestLabel.includes(':') ? bestLabel.split(':')[0] : '');
+        const desktopLine = 'Desktop IP: ' + (bestLabel || best || '-');
+        const ifaceLine = 'Active Network: ' + (iface || '-');
         const dashPort = (j.dashboard && j.dashboard.port) ? String(j.dashboard.port) : (window.location.port || '5099');
         const dashHost = best || '127.0.0.1';
         const dashLine = 'Dashboard URL: http://' + dashHost + ':' + dashPort + '/';
         try { if (best) localStorage.setItem('wl10dash.bestIpv4', best); } catch { }
-
-        connInfo.innerHTML =
-          '<li>' + escHtml(devLine) + '</li>' +
+        desktopInfo.innerHTML =
+          '<li>' + escHtml(ifaceLine) + '</li>' +
           '<li>' + escHtml(desktopLine) + '</li>' +
           '<li>' + escHtml(dashLine) + '</li>';
       }
@@ -10003,7 +10138,7 @@ static partial class Program
         const box = el('deviceLoadBox');
         if (box) box.style.display = 'none';
         const tr = document.createElement('tr');
-        tr.innerHTML = '<td colspan="6" class="muted">' + escHtml(emptyText) + '</td>';
+        tr.innerHTML = '<td colspan="7" class="muted">' + escHtml(emptyText) + '</td>';
         body.appendChild(tr);
         return;
       }
@@ -10028,6 +10163,7 @@ static partial class Program
           const row = rows[k];
           const tr = document.createElement('tr');
           tr.innerHTML =
+            '<td>' + escHtml(row.device_id ?? '') + '</td>' +
             '<td>' + escHtml(row.staff_id ?? '') + '</td>' +
             '<td>' + escHtml(row.datetime ?? '') + '</td>' +
             '<td>' + escHtml(row.verified ?? '') + '</td>' +
@@ -10099,10 +10235,11 @@ static partial class Program
     }
 
     function toAttlogCsv(rows) {
-      const header = ['staff_id', 'datetime', 'verified', 'status', 'workcode', 'reserved'];
+      const header = ['device_id', 'staff_id', 'datetime', 'verified', 'status', 'workcode', 'reserved'];
       const out = [header.join(',')];
       for (const r of (rows || [])) {
         const vals = [
+          r.device_id ?? '',
           r.staff_id ?? '',
           r.datetime ?? '',
           r.verified ?? '',
