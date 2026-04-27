@@ -175,6 +175,12 @@ static partial class Program
 
   private static string? TryResolveAttlogExportPath()
   {
+    var deviceId = (Environment.GetEnvironmentVariable("WL10_DEVICE_ID") ?? string.Empty).Trim();
+    return TryResolveAttlogExportPath(deviceId);
+  }
+
+  private static string? TryResolveAttlogExportPath(string? deviceId)
+  {
     var exportPath = (Environment.GetEnvironmentVariable("WL10_ATTLOG_EXPORT_PATH") ?? "").Trim();
     var filePath = (Environment.GetEnvironmentVariable("WL10_ATTLOG_FILE_PATH") ?? "").Trim();
     var p = exportPath.Length > 0 ? exportPath : filePath;
@@ -229,9 +235,31 @@ static partial class Program
         return null;
       }
 
+      static string SafeFileName(string raw)
+      {
+        var s = (raw ?? string.Empty).Trim();
+        if (s.Length == 0) return "device";
+        var bad = Path.GetInvalidFileNameChars();
+        var sb = new StringBuilder(capacity: s.Length);
+        foreach (var ch in s)
+        {
+          sb.Append(bad.Contains(ch) ? '_' : ch);
+        }
+        var norm = sb.ToString().Trim('_', ' ');
+        if (norm.Length == 0) norm = "device";
+        if (norm.Length > 80) norm = norm[..80];
+        return norm;
+      }
+
       var refDir = FindReferenceDir(Directory.GetCurrentDirectory());
       refDir ??= FindReferenceDir(AppContext.BaseDirectory);
-      if (refDir is not null) return Path.Combine(refDir, "1_attlog.dat");
+      if (refDir is not null)
+      {
+        var id = (deviceId ?? string.Empty).Trim();
+        var isWl10 = id.Length == 0 || id.StartsWith("WL10", StringComparison.OrdinalIgnoreCase);
+        if (isWl10) return Path.Combine(refDir, "1_attlog.dat");
+        return Path.Combine(refDir, $"attlog_{SafeFileName(id)}.dat");
+      }
     }
     catch { }
 
@@ -307,13 +335,22 @@ static partial class Program
     if (!string.IsNullOrWhiteSpace(env)) return env;
 
     var legacy = Path.Combine(AppContext.BaseDirectory, "state.json");
-    static bool TryEnsureWritable(string path)
+    static bool TryEnsureAtomicWritable(string path)
     {
       try
       {
         var dir = Path.GetDirectoryName(path);
         if (!string.IsNullOrWhiteSpace(dir)) Directory.CreateDirectory(dir);
         using var fs = File.Open(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.Read);
+        var tmp = path + ".tmpcheck";
+        try
+        {
+          using var tfs = new FileStream(tmp, FileMode.Create, FileAccess.Write, FileShare.ReadWrite);
+        }
+        finally
+        {
+          try { if (File.Exists(tmp)) File.Delete(tmp); } catch { }
+        }
         return true;
       }
       catch
@@ -323,7 +360,10 @@ static partial class Program
     }
     try
     {
-      var dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "WL10Middleware");
+      var local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+      var legacyDir = Path.Combine(local, "WL10Middleware");
+      var curDir = Path.Combine(local, "SHABMiddleware");
+      var dir = Directory.Exists(legacyDir) ? legacyDir : curDir;
       Directory.CreateDirectory(dir);
       var stable = Path.Combine(dir, "state.json");
       try
@@ -334,8 +374,23 @@ static partial class Program
         }
       }
       catch { }
-      if (TryEnsureWritable(stable)) return stable;
-      if (TryEnsureWritable(legacy)) return legacy;
+      var stableOk = TryEnsureAtomicWritable(stable);
+      var legacyOk = TryEnsureAtomicWritable(legacy);
+
+      if (stableOk) return stable;
+      if (legacyOk)
+      {
+        try
+        {
+          if (File.Exists(stable) && !File.Exists(legacy))
+          {
+            File.Copy(stable, legacy);
+          }
+        }
+        catch { }
+        return legacy;
+      }
+
       return stable;
     }
     catch
@@ -363,6 +418,7 @@ static partial class Program
         await RunDashboard(config, statePath, args);
         return 0;
       }
+      Console.WriteLine("Dashboard is not running in this mode. To start the web UI, run with: --dashboard (default port 5099).");
 
       if (clearAttendance)
       {
@@ -850,7 +906,7 @@ static partial class Program
         {
           var line = rawLine.Trim();
           if (line.Length == 0) continue;
-          if (line.StartsWith("#", StringComparison.Ordinal)) continue;
+          if (line.StartsWith('#')) continue;
           if (line.StartsWith("export ", StringComparison.OrdinalIgnoreCase)) line = line["export ".Length..].Trim();
 
           var eq = line.IndexOf('=', StringComparison.Ordinal);
@@ -1062,7 +1118,7 @@ static partial class Program
     }
 
     DevicePunches = MergePunches(DevicePunches, punches, max: 5000);
-    var exportPath = TryResolveAttlogExportPath();
+    var exportPath = TryResolveAttlogExportPath(config.DeviceId);
 
     var exportMode = (Environment.GetEnvironmentVariable("WL10_ATTLOG_EXPORT_MODE") ?? "full").Trim();
     if (exportMode.Equals("full", StringComparison.OrdinalIgnoreCase))
@@ -1332,6 +1388,24 @@ static partial class Program
         }
       }
 
+      static void WriteInPlace(string path, string content)
+      {
+        var dir = Path.GetDirectoryName(path);
+        if (!string.IsNullOrWhiteSpace(dir)) Directory.CreateDirectory(dir);
+        EnsureWritableFile(path);
+
+        if (!File.Exists(path))
+        {
+          File.WriteAllText(path, content, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+          return;
+        }
+
+        using var fs = new FileStream(path, FileMode.Open, FileAccess.Write, FileShare.ReadWrite);
+        fs.SetLength(0);
+        using var sw = new StreamWriter(fs, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+        sw.Write(content);
+      }
+
       var payload = JsonSerializer.Serialize(state, JsonOptions);
       try
       {
@@ -1339,6 +1413,14 @@ static partial class Program
       }
       catch (Exception ex1)
       {
+        try
+        {
+          WriteInPlace(statePath, payload);
+          try { Console.Error.WriteLine($"SaveState fallback: wrote state file in-place '{statePath}' because atomic write failed: {ex1.Message}"); } catch { }
+          return;
+        }
+        catch { }
+
         var alt = AltPath(statePath);
         try
         {
@@ -1347,6 +1429,14 @@ static partial class Program
         }
         catch (Exception ex2)
         {
+          try
+          {
+            WriteInPlace(alt, payload);
+            try { Console.Error.WriteLine($"SaveState fallback: wrote alt state file in-place '{alt}' because atomic writes failed: {ex2.Message}"); } catch { }
+            return;
+          }
+          catch { }
+
           try { Console.Error.WriteLine($"SaveState failed ({statePath}): {ex1.Message}"); } catch { }
           try { Console.Error.WriteLine($"SaveState alt failed ({alt}): {ex2.Message}"); } catch { }
         }
@@ -1581,6 +1671,15 @@ static partial class Program
     return string.Join(" ", s.Select(c => ((int)c).ToString("X2", CultureInfo.InvariantCulture)));
   }
 
+  private static string ResolveDeviceId(AppConfig config)
+  {
+    var id = (config.DeviceId ?? string.Empty).Trim();
+    if (id.Length > 0) return id;
+    var ip = (config.DeviceIp ?? string.Empty).Trim();
+    if (ip.Length > 0) return $"WL10-{ip}";
+    return "WL10";
+  }
+
   private static string MapStaffId(AppConfig config, string normalizedFromDevice)
   {
     var v = (normalizedFromDevice ?? string.Empty).Trim();
@@ -1717,9 +1816,9 @@ static partial class Program
         rawCount++;
 
         var staffNumber = ExtractStaffNumber(config, staffIdRaw);
+        var maxN = config.MaxStaffNumber > 0 ? config.MaxStaffNumber : 999;
         if (staffNumber is null && workCode > 0)
         {
-          var maxN = config.MaxStaffNumber > 0 ? config.MaxStaffNumber : 999;
           if (workCode >= 1 && workCode <= maxN) staffNumber = workCode;
         }
         if (staffNumber is null)
@@ -1883,7 +1982,7 @@ static partial class Program
         }
 
         var eventDate = localDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
-        results.Add(new Punch(staffId, occurredAtUtc, eventDate, config.DeviceId, inOutMode));
+        results.Add(new Punch(staffId, occurredAtUtc, eventDate, ResolveDeviceId(config), inOutMode));
         keptCount++;
       }
 
@@ -2693,9 +2792,9 @@ static partial class Program
       rawCount++;
 
       var staffNumber = ExtractStaffNumber(config, staffIdRaw);
+      var maxN = config.MaxStaffNumber > 0 ? config.MaxStaffNumber : 999;
       if (staffNumber is null && workCode > 0)
       {
-        var maxN = config.MaxStaffNumber > 0 ? config.MaxStaffNumber : 999;
         if (workCode >= 1 && workCode <= maxN) staffNumber = workCode;
       }
       if (staffNumber is null)
@@ -2820,7 +2919,7 @@ static partial class Program
       }
 
       var eventDate = localDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
-      results.Add(new Punch(staffId, occurredAtUtc, eventDate, config.DeviceId, inOutMode));
+      results.Add(new Punch(staffId, occurredAtUtc, eventDate, ResolveDeviceId(config), inOutMode));
       keptCount++;
     }
 
@@ -3312,7 +3411,7 @@ static partial class Program
 
     private static uint EncodeZkTime(DateTime t)
     {
-      var d = ((t.Year % 100) * 12 * 31 + ((t.Month - 1) * 31) + t.Day - 1) * (24 * 60 * 60)
+      var d = (t.Year % 100 * 12 * 31 + (t.Month - 1) * 31 + t.Day - 1) * (24 * 60 * 60)
         + (t.Hour * 60 + t.Minute) * 60
         + t.Second;
       return (uint)d;

@@ -1,0 +1,6 @@
+root = true
+
+[*.cs]
+dotnet_analyzer_diagnostic.severity = silent
+dotnet_analyzer_diagnostic.category-Style.severity = silent
+dotnet_analyzer_diagnostic.category-CodeQuality.severity = silent

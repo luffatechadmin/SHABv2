@@ -1,0 +1,110 @@
+{
+  "lastSeenOccurredAtUtc": "2026-04-26T10:11:02+00:00",
+  "dashboardSettings": null,
+  "devicePunches": [
+    {
+      "staffId": "1",
+      "occurredAtUtc": "2026-04-26T10:11:02+00:00",
+      "eventDate": "2026-04-26",
+      "deviceId": "W30-192.168.1.177",
+      "verifyMode": 0
+    },
+    {
+      "staffId": "2",
+      "occurredAtUtc": "2026-04-26T10:10:58+00:00",
+      "eventDate": "2026-04-26",
+      "deviceId": "W30-192.168.1.177",
+      "verifyMode": 0
+    },
+    {
+      "staffId": "2",
+      "occurredAtUtc": "2026-04-25T17:49:08+00:00",
+      "eventDate": "2026-04-26",
+      "deviceId": "W30-192.168.1.177",
+      "verifyMode": 0
+    },
+    {
+      "staffId": "1",
+      "occurredAtUtc": "2026-04-25T17:47:06+00:00",
+      "eventDate": "2026-04-26",
+      "deviceId": "W30-192.168.1.177",
+      "verifyMode": 1
+    },
+    {
+      "staffId": "1",
+      "occurredAtUtc": "2026-04-25T16:03:09+00:00",
+      "eventDate": "2026-04-26",
+      "deviceId": "W30-192.168.1.177",
+      "verifyMode": 0
+    },
+    {
+      "staffId": "1",
+      "occurredAtUtc": "2026-04-25T15:57:00+00:00",
+      "eventDate": "2026-04-25",
+      "deviceId": "W30-192.168.1.177",
+      "verifyMode": 0
+    },
+    {
+      "staffId": "1",
+      "occurredAtUtc": "2026-04-25T10:02:22+00:00",
+      "eventDate": "2026-04-25",
+      "deviceId": "W30-192.168.1.177",
+      "verifyMode": 1
+    },
+    {
+      "staffId": "1",
+      "occurredAtUtc": "2026-04-24T21:22:10+00:00",
+      "eventDate": "2026-04-25",
+      "deviceId": "W30-192.168.1.177",
+      "verifyMode": 0
+    },
+    {
+      "staffId": "1",
+      "occurredAtUtc": "2026-04-18T22:04:49+00:00",
+      "eventDate": "2026-04-19",
+      "deviceId": "W30-192.168.1.177",
+      "verifyMode": 0
+    },
+    {
+      "staffId": "1",
+      "occurredAtUtc": "2026-04-17T06:46:05+00:00",
+      "eventDate": "2026-04-17",
+      "deviceId": "W30-192.168.1.177",
+      "verifyMode": 0
+    },
+    {
+      "staffId": "1",
+      "occurredAtUtc": "2026-04-16T13:57:07+00:00",
+      "eventDate": "2026-04-16",
+      "deviceId": "W30-192.168.1.177",
+      "verifyMode": 1
+    },
+    {
+      "staffId": "1",
+      "occurredAtUtc": "2026-04-16T11:12:39+00:00",
+      "eventDate": "2026-04-16",
+      "deviceId": "W30-192.168.1.177",
+      "verifyMode": 0
+    }
+  ],
+  "shiftPatterns": null,
+  "devicePresets": null,
+  "pollingPresets": null,
+  "dbPresets": null,
+  "syncScheduleLocalTimes": null,
+  "dashboardRefreshSeconds": 600,
+  "processedFiles": null,
+  "configuredDevices": [
+    {
+      "deviceId": "W30-192.168.1.177",
+      "deviceType": "W30",
+      "deviceIp": "192.168.1.177",
+      "devicePort": 4370,
+      "readerMode": "auto",
+      "logDir": "",
+      "filePattern": "",
+      "lastOkAtUtc": "2026-04-26T10:47:03.5137159+00:00",
+      "savedAtUtc": "2026-04-26T10:47:03.5137159+00:00"
+    }
+  ]
+}

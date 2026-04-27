@@ -349,7 +349,6 @@ static partial class Program
 
     var bind = (Environment.GetEnvironmentVariable("WL10_DASHBOARD_BIND") ?? "0.0.0.0").Trim();
     if (string.Equals(bind, "localhost", StringComparison.OrdinalIgnoreCase)) bind = "127.0.0.1";
-    if (string.Equals(bind, "127.0.0.1", StringComparison.OrdinalIgnoreCase)) bind = "0.0.0.0";
     var portFromArg = GetArgValue(args, "--dashboard-port");
     var portFromEnv = (Environment.GetEnvironmentVariable("WL10_DASHBOARD_PORT") ?? "").Trim();
     var port = 5099;
@@ -357,15 +356,59 @@ static partial class Program
     else if (!string.IsNullOrWhiteSpace(portFromEnv) && int.TryParse(portFromEnv, out var p2)) port = p2;
 
     var urls = $"http://{bind}:{port}";
+    var uiHost = bind;
+    if (string.Equals(uiHost, "0.0.0.0", StringComparison.OrdinalIgnoreCase)) uiHost = "127.0.0.1";
+    var uiUrl = $"http://{uiHost}:{port}";
+
+    static bool CanBindTo(string bind, int port)
+    {
+      try
+      {
+        IPAddress ip;
+        if (string.Equals(bind, "0.0.0.0", StringComparison.OrdinalIgnoreCase)) ip = IPAddress.Any;
+        else if (string.Equals(bind, "127.0.0.1", StringComparison.OrdinalIgnoreCase)) ip = IPAddress.Loopback;
+        else if (!IPAddress.TryParse(bind, out ip)) ip = IPAddress.Any;
+
+        var listener = new TcpListener(ip, port);
+        listener.Start();
+        listener.Stop();
+        return true;
+      }
+      catch
+      {
+        return false;
+      }
+    }
+
+    if (!CanBindTo(bind, port))
+    {
+      Console.Error.WriteLine($"[ERROR] Dashboard port {port} is already in use. Stop the process listening on {port} and re-run.");
+      Environment.Exit(1);
+    }
 
     var originalOut = Console.Out;
     var originalErr = Console.Error;
     TextWriter? fileWriter = null;
     try
     {
-      var logDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "WL10Middleware", "Logs");
-      Directory.CreateDirectory(logDir);
-      var logPath = Path.Combine(logDir, "middleware.log");
+      var logPathFromEnv = (Environment.GetEnvironmentVariable("WL10_LOG_PATH") ?? string.Empty).Trim();
+      var logDirFromEnv = (Environment.GetEnvironmentVariable("WL10_LOG_DIR") ?? string.Empty).Trim();
+      var local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+      var legacyDir = Path.Combine(local, "WL10Middleware", "Logs");
+      var curDir = Path.Combine(local, "SHABMiddleware", "Logs");
+      var logDir = Directory.Exists(legacyDir) ? legacyDir : curDir;
+      if (logDirFromEnv.Length > 0)
+      {
+        try { logDir = Path.GetFullPath(logDirFromEnv); } catch { }
+      }
+      var logPath = logPathFromEnv.Length > 0 ? logPathFromEnv : Path.Combine(logDir, "middleware.log");
+      try { logPath = Path.GetFullPath(logPath); } catch { }
+      try
+      {
+        var dir = Path.GetDirectoryName(logPath);
+        if (!string.IsNullOrWhiteSpace(dir)) Directory.CreateDirectory(dir);
+      }
+      catch { }
       var sw = new StreamWriter(new FileStream(logPath, FileMode.Append, FileAccess.Write, FileShare.ReadWrite), Encoding.UTF8) { AutoFlush = true };
       fileWriter = TextWriter.Synchronized(new TimestampTextWriter(sw));
     }
@@ -443,6 +486,38 @@ static partial class Program
         startingPollIntervalSeconds = poll.PollIntervalSeconds;
         if (startingPollIntervalSeconds == 600) startingPollIntervalSeconds = 3600;
         startingAutoSyncEnabled = poll.AutoSyncEnabled;
+      }
+
+      var w30 = (state.ConfiguredDevices ?? Array.Empty<ConfiguredDeviceEntry>())
+        .Select(NormalizeDeviceEntry)
+        .Where(d => d.DeviceType == "W30")
+        .OrderByDescending(d => d.SavedAtUtc)
+        .FirstOrDefault();
+      if (w30 is not null && !string.IsNullOrWhiteSpace(w30.DeviceIp) && w30.DevicePort > 0 && w30.DevicePort <= 65535)
+      {
+        startingConfig = startingConfig with { DeviceIp = w30.DeviceIp, DevicePort = w30.DevicePort, ReaderMode = w30.ReaderMode, DeviceId = w30.DeviceId };
+      }
+      else
+      {
+        var w30EnabledRaw = (Environment.GetEnvironmentVariable("WL10_W30_ENABLED") ?? "").Trim();
+        var w30Enabled = w30EnabledRaw.Length == 0
+          || w30EnabledRaw.Equals("1", StringComparison.OrdinalIgnoreCase)
+          || w30EnabledRaw.Equals("true", StringComparison.OrdinalIgnoreCase)
+          || w30EnabledRaw.Equals("yes", StringComparison.OrdinalIgnoreCase)
+          || w30EnabledRaw.Equals("on", StringComparison.OrdinalIgnoreCase);
+        if (w30Enabled)
+        {
+          var ip = (Environment.GetEnvironmentVariable("WL10_W30_IP") ?? "192.168.1.177").Trim();
+          if (ip.Length == 0) ip = "192.168.1.177";
+          var id = (Environment.GetEnvironmentVariable("WL10_W30_DEVICE_ID") ?? $"W30-{ip}").Trim();
+          if (id.Length == 0) id = $"W30-{ip}";
+          var portRaw = (Environment.GetEnvironmentVariable("WL10_W30_PORT") ?? "4370").Trim();
+          _ = int.TryParse(portRaw, NumberStyles.Integer, CultureInfo.InvariantCulture, out var w30Port);
+          if (w30Port <= 0 || w30Port > 65535) w30Port = 4370;
+          var rm = (Environment.GetEnvironmentVariable("WL10_W30_READER_MODE") ?? "auto").Trim();
+          if (rm.Length == 0) rm = "auto";
+          startingConfig = startingConfig with { DeviceIp = ip, DevicePort = w30Port, ReaderMode = rm, DeviceId = id };
+        }
       }
 
       syncScheduleLocalTimes = (state.SyncScheduleLocalTimes ?? Array.Empty<string>())
@@ -673,6 +748,77 @@ static partial class Program
       }
     }
 
+    async Task<(bool ok, string? error)> ExecuteSyncForDevice(ConfiguredDeviceEntry dev, bool verify, bool today, bool? supabaseOverride, CancellationToken ct)
+    {
+      if (!await syncGate.WaitAsync(0, ct)) return (false, "sync already running");
+      try
+      {
+        AppConfig cfg;
+        lock (stateGate) cfg = currentConfig;
+        var supabaseConfigured = !string.IsNullOrWhiteSpace(cfg.SupabaseUrl)
+          && !string.IsNullOrWhiteSpace(cfg.SupabaseServiceRoleKey)
+          && !string.IsNullOrWhiteSpace(cfg.SupabaseAttendanceTable);
+        var wantsSupabase = supabaseOverride ?? cfg.SupabaseSyncEnabled;
+        var doSupabase = wantsSupabase && supabaseConfigured
+          && !string.IsNullOrWhiteSpace(cfg.SupabaseUrl)
+          && !string.IsNullOrWhiteSpace(cfg.SupabaseServiceRoleKey)
+          && !string.IsNullOrWhiteSpace(cfg.SupabaseAttendanceTable);
+        var cfgForRun = cfg with
+        {
+          DeviceIp = dev.DeviceIp,
+          DevicePort = dev.DevicePort,
+          ReaderMode = dev.ReaderMode,
+          DeviceId = dev.DeviceId,
+          SupabaseSyncEnabled = doSupabase
+        };
+
+        runtime.LastSyncStartedAtUtc = DateTimeOffset.UtcNow;
+        runtime.LastSyncFinishedAtUtc = null;
+        runtime.LastSyncError = null;
+        runtime.LastSyncResult = "running";
+        if (doSupabase)
+        {
+          runtime.LastSupabaseSyncStartedAtUtc = runtime.LastSyncStartedAtUtc;
+          runtime.LastSupabaseSyncFinishedAtUtc = null;
+          runtime.LastSupabaseSyncError = null;
+          runtime.LastSupabaseSyncResult = "running";
+          runtime.LastSupabaseUpsertedCount = 0;
+        }
+
+        try
+        {
+          await RunOnce(cfgForRun, statePath, verify, today);
+          runtime.LastSyncResult = "ok";
+          if (doSupabase)
+          {
+            runtime.LastSupabaseSyncResult = "ok";
+            runtime.LastSupabaseUpsertedCount = LastRunUpsertedCount;
+          }
+          return (true, null);
+        }
+        catch (Exception ex)
+        {
+          runtime.LastSyncResult = "error";
+          runtime.LastSyncError = ex.ToString();
+          if (doSupabase)
+          {
+            runtime.LastSupabaseSyncResult = "error";
+            runtime.LastSupabaseSyncError = ex.ToString();
+          }
+          return (false, ex.Message);
+        }
+        finally
+        {
+          runtime.LastSyncFinishedAtUtc = DateTimeOffset.UtcNow;
+          if (doSupabase) runtime.LastSupabaseSyncFinishedAtUtc = runtime.LastSyncFinishedAtUtc;
+        }
+      }
+      finally
+      {
+        syncGate.Release();
+      }
+    }
+
     var builder = WebApplication.CreateBuilder();
     builder.WebHost.UseUrls(urls);
     builder.Logging.ClearProviders();
@@ -800,8 +946,13 @@ static partial class Program
       ctx.Response.Headers.CacheControl = "no-store, no-cache, must-revalidate, max-age=0";
       ctx.Response.Headers.Pragma = "no-cache";
       ctx.Response.ContentType = "text/html; charset=utf-8";
+      if (ctx.User?.Identity?.IsAuthenticated != true)
+      {
+        await ctx.Response.WriteAsync(LoginHtml());
+        return;
+      }
       await ctx.Response.WriteAsync(DashboardHtml());
-    }).RequireAuthorization();
+    }).AllowAnonymous();
 
     app.MapGet("/api/status", async (HttpContext ctx) =>
     {
@@ -1201,8 +1352,146 @@ static partial class Program
         if (raw == "0") supabaseOverride = false;
         else if (raw == "1") supabaseOverride = true;
       }
-      var (ok, error) = await ExecuteSync(verify, today, supabaseOverride, ctx.RequestAborted);
-      return Results.Json(new { ok, error }, JsonOptions);
+      var deviceIdRaw = ctx.Request.Query.TryGetValue("deviceId", out var dv) ? (dv.ToString() ?? string.Empty) : string.Empty;
+      var deviceId = deviceIdRaw.Trim();
+      if (deviceId.Length == 0)
+      {
+        var (ok, error) = await ExecuteSync(verify, today, supabaseOverride, ctx.RequestAborted);
+        return Results.Json(new { ok, error }, JsonOptions);
+      }
+
+      var configured = EnsureConfiguredDevices(saveIfSeeded: true);
+      var targets = new List<ConfiguredDeviceEntry>(capacity: 8);
+      if (deviceId.Equals("all", StringComparison.OrdinalIgnoreCase))
+      {
+        targets.AddRange(configured);
+      }
+      else
+      {
+        var dev = configured.FirstOrDefault(d => string.Equals(d.DeviceId, deviceId, StringComparison.Ordinal));
+        if (dev is null) return Results.Json(new { ok = false, error = "device not found" }, JsonOptions);
+        targets.Add(dev);
+      }
+
+      var results = new List<object>(capacity: targets.Count);
+      var allOk = true;
+      foreach (var dev in targets)
+      {
+        var (ok, error) = await ExecuteSyncForDevice(dev, verify, today, supabaseOverride, ctx.RequestAborted);
+        if (!ok) allOk = false;
+        results.Add(new { deviceId = dev.DeviceId, ok, error });
+      }
+      return Results.Json(new { ok = allOk, results = results.ToArray() }, JsonOptions);
+    }).RequireAuthorization();
+
+    app.MapPost("/api/attlog/cleanup", (HttpContext ctx) =>
+    {
+      var configured = EnsureConfiguredDevices(saveIfSeeded: true);
+      var wl10Id = configured.FirstOrDefault(d => string.Equals(d.DeviceType, "WL10", StringComparison.Ordinal))?.DeviceId ?? string.Empty;
+      if (ctx.Request.Query.TryGetValue("deviceId", out var q))
+      {
+        var raw = (q.ToString() ?? string.Empty).Trim();
+        if (raw.Length > 0) wl10Id = raw;
+      }
+      if (wl10Id.Length == 0) wl10Id = "WL10";
+
+      var wl10Path = TryResolveAttlogExportPath(wl10Id) ?? TryResolveAttlogExportPath("WL10");
+      if (string.IsNullOrWhiteSpace(wl10Path)) return Results.Json(new { ok = false, error = "Could not resolve WL10 export path" }, JsonOptions);
+      if (!File.Exists(wl10Path)) return Results.Json(new { ok = false, error = $"File not found: {wl10Path}" }, JsonOptions);
+
+      var baseDir = Directory.GetCurrentDirectory();
+      try { baseDir = Path.GetDirectoryName(Path.GetFullPath(wl10Path)) ?? baseDir; } catch { }
+
+      static string StrongKey(string staffId, string dt, string status)
+      {
+        return (staffId ?? string.Empty).Trim() + "|" + (dt ?? string.Empty).Trim() + "|" + (status ?? string.Empty).Trim();
+      }
+
+      static string WeakKey(string dt, string status)
+      {
+        return (dt ?? string.Empty).Trim() + "|" + (status ?? string.Empty).Trim();
+      }
+
+      var w30StrongKeys = new HashSet<string>(StringComparer.Ordinal);
+      var w30WeakKeys = new HashSet<string>(StringComparer.Ordinal);
+      foreach (var dev in configured.Where(d => string.Equals(d.DeviceType, "W30", StringComparison.Ordinal)))
+      {
+        try
+        {
+          var w30Dir = (dev.LogDir ?? string.Empty).Trim();
+          if (w30Dir.Length == 0) w30Dir = baseDir;
+          if (w30Dir.Length == 0) w30Dir = Directory.GetCurrentDirectory();
+          if (!Directory.Exists(w30Dir)) continue;
+
+          var pat = (dev.FilePattern ?? string.Empty).Trim();
+          if (pat.Length == 0) pat = "AttendanceLog*.dat;attlog_W30-*.dat";
+
+          IEnumerable<FileInfo> files;
+          try
+          {
+            var searchOpt = SearchOption.TopDirectoryOnly;
+            if (string.IsNullOrWhiteSpace((dev.LogDir ?? string.Empty).Trim()))
+            {
+              var tail = Path.GetFileName(w30Dir.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+              if (tail.Equals("Reference", StringComparison.OrdinalIgnoreCase)) searchOpt = SearchOption.AllDirectories;
+            }
+            files = EnumerateW30Files(w30Dir, pat, searchOpt);
+          }
+          catch { files = Array.Empty<FileInfo>(); }
+
+          foreach (var f in files.OrderByDescending(x => x.LastWriteTimeUtc).Take(120))
+          {
+            foreach (var r in ReadW30AttlogRows(f.FullName))
+            {
+              w30StrongKeys.Add(StrongKey(r.StaffId, r.DateTime, r.Status));
+              w30WeakKeys.Add(WeakKey(r.DateTime, r.Status));
+              if (w30StrongKeys.Count > 200_000 || w30WeakKeys.Count > 200_000) break;
+            }
+            if (w30StrongKeys.Count > 200_000 || w30WeakKeys.Count > 200_000) break;
+          }
+        }
+        catch { }
+      }
+
+      var removedMatches = 0;
+      var removedDupes = 0;
+      var kept = new List<string>(capacity: 2048);
+      var seen = new HashSet<string>(StringComparer.Ordinal);
+      foreach (var raw in File.ReadLines(wl10Path))
+      {
+        var line = (raw ?? string.Empty).Trim();
+        if (line.Length == 0) continue;
+
+        var parts = line.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length < 7) continue;
+
+        var staffId = parts[0].Trim();
+        var dtRaw = parts[1].Trim() + " " + parts[2].Trim();
+        var status = parts[4].Trim();
+        var strong = StrongKey(staffId, dtRaw, status);
+        var weak = WeakKey(dtRaw, status);
+        if (w30StrongKeys.Contains(strong) || w30WeakKeys.Contains(weak)) { removedMatches++; continue; }
+        if (!seen.Add(line)) { removedDupes++; continue; }
+        kept.Add(line);
+      }
+
+      try
+      {
+        File.WriteAllLines(wl10Path, kept, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+      }
+      catch (Exception ex)
+      {
+        return Results.Json(new { ok = false, error = ex.Message }, JsonOptions);
+      }
+
+      return Results.Json(new
+      {
+        ok = true,
+        path = wl10Path,
+        removedW30Matches = removedMatches,
+        removedDuplicates = removedDupes,
+        kept = kept.Count
+      }, JsonOptions);
     }).RequireAuthorization();
 
     app.MapPost("/api/settings", async (HttpContext ctx) =>
@@ -1573,7 +1862,7 @@ static partial class Program
 
       try
       {
-        var path = TryResolveAttlogExportPath();
+        var path = TryResolveAttlogExportPath(cfg.DeviceId);
         if (string.IsNullOrWhiteSpace(path)) throw new InvalidOperationException("Could not resolve 1_attlog.dat path");
         if (!File.Exists(path)) throw new InvalidOperationException($"File not found: {path}");
 
@@ -1662,14 +1951,19 @@ static partial class Program
               var dir = (dev.LogDir ?? string.Empty).Trim();
               if (dir.Length == 0) dir = baseDir.Length > 0 ? baseDir : Directory.GetCurrentDirectory();
               var pat = (dev.FilePattern ?? string.Empty).Trim();
-              if (pat.Length == 0) pat = "AttendanceLog*.dat";
+              if (pat.Length == 0) pat = "AttendanceLog*.dat;attlog_W30-*.dat";
               if (!Directory.Exists(dir)) continue;
 
               List<(FileInfo file, string key)> candidates;
               try
               {
-                candidates = new DirectoryInfo(dir)
-                  .EnumerateFiles(pat, SearchOption.TopDirectoryOnly)
+                var searchOpt = SearchOption.TopDirectoryOnly;
+                if (string.IsNullOrWhiteSpace((dev.LogDir ?? string.Empty).Trim()))
+                {
+                  var tail = Path.GetFileName(dir.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+                  if (tail.Equals("Reference", StringComparison.OrdinalIgnoreCase)) searchOpt = SearchOption.AllDirectories;
+                }
+                candidates = EnumerateW30Files(dir, pat, searchOpt)
                   .Select(f =>
                   {
                     var full = f.FullName;
@@ -2050,6 +2344,7 @@ static partial class Program
       var t = (raw ?? string.Empty).Trim();
       if (t.Length == 0) return "WL10";
       if (t.Equals("WL10", StringComparison.OrdinalIgnoreCase)) return "WL10";
+      if (t.Equals("WL30", StringComparison.OrdinalIgnoreCase)) return "WL10";
       if (t.Equals("W30", StringComparison.OrdinalIgnoreCase)) return "W30";
       return t.ToUpperInvariant();
     }
@@ -2069,12 +2364,12 @@ static partial class Program
       var id = (d.DeviceId ?? string.Empty).Trim();
       if (id.Length == 0) id = DefaultDeviceId(type, ip);
       var rm = (d.ReaderMode ?? string.Empty).Trim();
-      if (rm.Length == 0) rm = type == "W30" ? "file" : "auto";
+      if (rm.Length == 0) rm = "auto";
       var dir = (d.LogDir ?? string.Empty).Trim();
       var pat = (d.FilePattern ?? string.Empty).Trim();
-      if (type == "W30" && pat.Length == 0) pat = "AttendanceLog*.dat";
+      if (type == "W30" && string.Equals(rm, "file", StringComparison.OrdinalIgnoreCase) && pat.Length == 0) pat = "AttendanceLog*.dat";
       var port = d.DevicePort;
-      if (type == "WL10" && port <= 0) port = 4370;
+      if ((type == "WL10" || type == "W30") && port <= 0) port = 4370;
       return d with { DeviceId = id, DeviceType = type, DeviceIp = ip, DevicePort = port, ReaderMode = rm, LogDir = dir, FilePattern = pat };
     }
 
@@ -2083,31 +2378,114 @@ static partial class Program
       var now = DateTimeOffset.UtcNow;
       var state = LoadState(statePath);
       var list = (state.ConfiguredDevices ?? Array.Empty<ConfiguredDeviceEntry>()).ToList();
-      if (list.Count > 0) return list.Select(NormalizeDeviceEntry).ToArray();
+      var normalizedList = list
+        .Select(NormalizeDeviceEntry)
+        .Where(x => x is not null && !string.IsNullOrWhiteSpace(x.DeviceId) && !string.IsNullOrWhiteSpace(x.DeviceIp))
+        .GroupBy(x => x.DeviceId, StringComparer.Ordinal)
+        .Select(g => g.OrderByDescending(x => x.LastOkAtUtc ?? x.SavedAtUtc).First())
+        .ToList();
 
       AppConfig cfg;
       lock (stateGate) cfg = currentConfig;
-      list.Add(new ConfiguredDeviceEntry(cfg.DeviceId, "WL10", cfg.DeviceIp, cfg.DevicePort, cfg.ReaderMode, "", "", null, now));
 
       var w30EnabledRaw = (Environment.GetEnvironmentVariable("WL10_W30_ENABLED") ?? "").Trim();
-      var w30Enabled = w30EnabledRaw.Length == 0
-        || w30EnabledRaw.Equals("1", StringComparison.OrdinalIgnoreCase)
+      var w30Enabled = w30EnabledRaw.Equals("1", StringComparison.OrdinalIgnoreCase)
         || w30EnabledRaw.Equals("true", StringComparison.OrdinalIgnoreCase)
         || w30EnabledRaw.Equals("yes", StringComparison.OrdinalIgnoreCase)
         || w30EnabledRaw.Equals("on", StringComparison.OrdinalIgnoreCase);
-      if (w30Enabled)
+      var hadSavedDevices = normalizedList.Count > 0;
+      var seeded = false;
+      var needsSave = false;
+
+      static bool HasW30LogEvidence(string startDir)
+      {
+        if (string.IsNullOrWhiteSpace(startDir)) return false;
+        try
+        {
+          var dir = startDir;
+          for (var i = 0; i < 10 && !string.IsNullOrWhiteSpace(dir); i++)
+          {
+            var refDir = Path.Combine(dir, "Reference");
+            if (Directory.Exists(refDir))
+            {
+              try
+              {
+                if (Directory.EnumerateFiles(refDir, "attlog_W30-*.dat", SearchOption.TopDirectoryOnly).Any()) return true;
+              }
+              catch { }
+            }
+            var parent = Directory.GetParent(dir);
+            if (parent is null) break;
+            dir = parent.FullName;
+          }
+        }
+        catch { }
+        return false;
+      }
+
+      var w30HasEvidence = HasW30LogEvidence(Directory.GetCurrentDirectory()) || HasW30LogEvidence(AppContext.BaseDirectory);
+      var wantsW30 = w30Enabled || w30HasEvidence;
+      if (wantsW30)
       {
         var ip = (Environment.GetEnvironmentVariable("WL10_W30_IP") ?? "192.168.1.177").Trim();
         if (ip.Length == 0) ip = "192.168.1.177";
         var id = (Environment.GetEnvironmentVariable("WL10_W30_DEVICE_ID") ?? $"W30-{ip}").Trim();
         if (id.Length == 0) id = $"W30-{ip}";
+        var port = 0;
+        var portRaw = (Environment.GetEnvironmentVariable("WL10_W30_PORT") ?? "4370").Trim();
+        _ = int.TryParse(portRaw, NumberStyles.Integer, CultureInfo.InvariantCulture, out port);
+        var rm = (Environment.GetEnvironmentVariable("WL10_W30_READER_MODE") ?? "auto").Trim();
+        if (rm.Length == 0) rm = "auto";
         var dir = (Environment.GetEnvironmentVariable("WL10_W30_LOG_DIR") ?? "").Trim();
         var pat = (Environment.GetEnvironmentVariable("WL10_W30_FILE_PATTERN") ?? "AttendanceLog*.dat").Trim();
-        list.Add(new ConfiguredDeviceEntry(id, "W30", ip, 0, "file", dir, pat, null, now));
+        var w30Seed = NormalizeDeviceEntry(new ConfiguredDeviceEntry(id, "W30", ip, port, rm, dir, pat, null, now));
+        var hasW30 = normalizedList.Any(x =>
+          string.Equals(x.DeviceType, "W30", StringComparison.Ordinal)
+          && string.Equals(x.DeviceIp, w30Seed.DeviceIp, StringComparison.Ordinal)
+          && x.DevicePort == w30Seed.DevicePort
+        );
+        if (!hasW30)
+        {
+          normalizedList.Add(w30Seed);
+          seeded = true;
+        }
       }
 
-      var normalized = list.Select(NormalizeDeviceEntry).ToArray();
-      if (saveIfSeeded)
+      var inferredType = (cfg.DeviceId ?? string.Empty).Trim().StartsWith("W30-", StringComparison.OrdinalIgnoreCase) ? "W30" : "WL10";
+      var activeSeed = NormalizeDeviceEntry(new ConfiguredDeviceEntry(cfg.DeviceId ?? string.Empty, inferredType, cfg.DeviceIp ?? string.Empty, cfg.DevicePort, cfg.ReaderMode ?? string.Empty, "", "", null, now));
+      var hasActive = normalizedList.Any(x =>
+        string.Equals(x.DeviceType, activeSeed.DeviceType, StringComparison.Ordinal)
+        && string.Equals(x.DeviceIp, activeSeed.DeviceIp, StringComparison.Ordinal)
+        && x.DevicePort == activeSeed.DevicePort
+      );
+      if (!wantsW30 && !hadSavedDevices && normalizedList.Count == 0 && !hasActive)
+      {
+        normalizedList.Add(activeSeed);
+        seeded = true;
+      }
+
+      var normalizedRaw = normalizedList
+        .Where(x => !string.IsNullOrWhiteSpace(x.DeviceIp) && x.DevicePort > 0)
+        .GroupBy(x => $"{x.DeviceIp}|{x.DevicePort}", StringComparer.Ordinal)
+        .Select(g =>
+        {
+          var w30 = g.FirstOrDefault(x => string.Equals(x.DeviceType, "W30", StringComparison.Ordinal));
+          if (w30 is not null) return w30;
+          return g.OrderByDescending(x => x.LastOkAtUtc ?? x.SavedAtUtc).First();
+        })
+        .GroupBy(x => x.DeviceId, StringComparer.Ordinal)
+        .Select(g => g.OrderByDescending(x => x.LastOkAtUtc ?? x.SavedAtUtc).First())
+        .OrderByDescending(x => x.LastOkAtUtc ?? x.SavedAtUtc)
+        .Take(20)
+        .ToArray();
+
+      var hasAnyW30 = normalizedRaw.Any(x => string.Equals(x.DeviceType, "W30", StringComparison.Ordinal));
+      var normalized = hasAnyW30
+        ? normalizedRaw.Where(x => !(string.Equals(x.DeviceType, "WL10", StringComparison.Ordinal) && x.LastOkAtUtc is null)).ToArray()
+        : normalizedRaw;
+      if (normalized.Length != normalizedRaw.Length) needsSave = true;
+
+      if (saveIfSeeded && (seeded || needsSave))
       {
         SaveState(statePath, state with { ConfiguredDevices = normalized });
       }
@@ -2117,12 +2495,9 @@ static partial class Program
     app.MapGet("/api/devices/list", (HttpContext ctx) =>
     {
       var devices = EnsureConfiguredDevices(saveIfSeeded: true);
-      AppConfig cfg;
-      lock (stateGate) cfg = currentConfig;
       return Results.Json(new
       {
         ok = true,
-        activeDeviceId = cfg.DeviceId,
         devices = devices.Select(d => new
         {
           deviceId = d.DeviceId,
@@ -2207,23 +2582,13 @@ static partial class Program
 
       var now = DateTimeOffset.UtcNow;
       var type = NormalizeDeviceType(dev.DeviceType);
-      if (type == "WL10")
+      if (type == "WL10" || type == "W30")
       {
-        lock (stateGate)
+        if (string.Equals(dev.ReaderMode, "file", StringComparison.OrdinalIgnoreCase))
         {
-          currentConfig = currentConfig with { DeviceIp = dev.DeviceIp, DevicePort = dev.DevicePort, ReaderMode = dev.ReaderMode, DeviceId = dev.DeviceId };
+          return Results.Json(new { ok = false, error = "This device is configured for file import. Set Reader Mode to auto/native/com to connect over TCP." }, JsonOptions);
         }
-        var cfg = currentConfig;
-        var (ok, err, rttMs) = await ProbeTcpAsync(cfg.DeviceIp, cfg.DevicePort, TimeSpan.FromSeconds(5), ctx.RequestAborted);
-        bool? verifyOk = null;
-        string? verifyError = null;
-        if (ok)
-        {
-          var (vOk, vErr) = await ExecuteSync(verify: true, today: true, supabaseOverride: false, ctx.RequestAborted);
-          verifyOk = vOk;
-          verifyError = vErr;
-          lock (stateGate) autoSyncEnabled = true;
-        }
+        var (ok, err, rttMs) = await ProbeTcpAsync(dev.DeviceIp, dev.DevicePort, TimeSpan.FromSeconds(5), ctx.RequestAborted);
 
         var state = LoadState(statePath);
         var list = (state.ConfiguredDevices ?? Array.Empty<ConfiguredDeviceEntry>()).Select(NormalizeDeviceEntry).ToList();
@@ -2235,7 +2600,7 @@ static partial class Program
           SaveState(statePath, state with { ConfiguredDevices = list.ToArray() });
         }
 
-        return Results.Json(new { ok, error = err, rttMs, deviceId = cfg.DeviceId, deviceIp = cfg.DeviceIp, devicePort = cfg.DevicePort, readerMode = cfg.ReaderMode, verifyOk, verifyError }, JsonOptions);
+        return Results.Json(new { ok, error = err, rttMs, deviceId = dev.DeviceId, deviceIp = dev.DeviceIp, devicePort = dev.DevicePort, readerMode = dev.ReaderMode }, JsonOptions);
       }
 
       var (ok2, err2, rtt2) = await ProbeTcpAsync(dev.DeviceIp, dev.DevicePort > 0 ? dev.DevicePort : 80, TimeSpan.FromSeconds(3), ctx.RequestAborted);
@@ -2257,13 +2622,6 @@ static partial class Program
       var root = doc.RootElement;
       var deviceId = root.TryGetProperty("deviceId", out var idEl) ? (idEl.GetString() ?? string.Empty).Trim() : string.Empty;
       if (deviceId.Length == 0) return Results.Json(new { ok = false, error = "deviceId required" }, JsonOptions);
-      lock (stateGate)
-      {
-        if (string.Equals(currentConfig.DeviceId, deviceId, StringComparison.Ordinal))
-        {
-          autoSyncEnabled = false;
-        }
-      }
       return Results.Json(new { ok = true }, JsonOptions);
     }).RequireAuthorization();
 
@@ -4577,22 +4935,6 @@ static partial class Program
       if (deviceId.Length == 0) deviceId = cfg.DeviceId;
       var configured = EnsureConfiguredDevices(saveIfSeeded: true);
 
-      var path = TryResolveAttlogExportPath();
-      if (string.IsNullOrWhiteSpace(path)) return Results.Json(new { rows = Array.Empty<object>(), error = "Could not resolve 1_attlog.dat path" }, JsonOptions);
-      if (!File.Exists(path))
-      {
-        try
-        {
-          var dir = Path.GetDirectoryName(Path.GetFullPath(path));
-          if (!string.IsNullOrWhiteSpace(dir)) Directory.CreateDirectory(dir);
-          File.WriteAllText(path, string.Empty, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
-        }
-        catch
-        {
-          return Results.Json(new { rows = Array.Empty<object>(), error = $"File not found: {path}" }, JsonOptions);
-        }
-      }
-
       static List<object> ReadWl10FileRows(string filePath, string wl10DeviceId)
       {
         var rows = new List<object>(capacity: 200);
@@ -4627,15 +4969,25 @@ static partial class Program
       static List<object> ReadW30FileRows(ConfiguredDeviceEntry dev, string baseDir)
       {
         var rows = new List<object>(capacity: 200);
+        var seen = new HashSet<string>(StringComparer.Ordinal);
         var w30Dir = (dev.LogDir ?? string.Empty).Trim();
         if (w30Dir.Length == 0) w30Dir = baseDir;
         if (w30Dir.Length == 0) w30Dir = Directory.GetCurrentDirectory();
         if (!Directory.Exists(w30Dir)) return rows;
 
         var pat = (dev.FilePattern ?? string.Empty).Trim();
-        if (pat.Length == 0) pat = "AttendanceLog*.dat";
+        if (pat.Length == 0) pat = "AttendanceLog*.dat;attlog_W30-*.dat";
         IEnumerable<FileInfo> files;
-        try { files = new DirectoryInfo(w30Dir).EnumerateFiles(pat, SearchOption.TopDirectoryOnly); }
+        try
+        {
+          var searchOpt = SearchOption.TopDirectoryOnly;
+          if (string.IsNullOrWhiteSpace((dev.LogDir ?? string.Empty).Trim()))
+          {
+            var tail = Path.GetFileName(w30Dir.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+            if (tail.Equals("Reference", StringComparison.OrdinalIgnoreCase)) searchOpt = SearchOption.AllDirectories;
+          }
+          files = EnumerateW30Files(w30Dir, pat, searchOpt);
+        }
         catch { files = Array.Empty<FileInfo>(); }
         foreach (var f in files.OrderByDescending(x => x.LastWriteTimeUtc).Take(50))
         {
@@ -4643,6 +4995,8 @@ static partial class Program
           {
             foreach (var r in ReadW30AttlogRows(f.FullName))
             {
+              var k = (r.StaffId ?? string.Empty) + "|" + (r.DateTime ?? string.Empty) + "|" + (r.Status ?? string.Empty);
+              if (!seen.Add(k)) continue;
               rows.Add(new
               {
                 device_id = dev.DeviceId,
@@ -4660,12 +5014,78 @@ static partial class Program
         return rows;
       }
 
-      var baseDir = Path.GetDirectoryName(Path.GetFullPath(path)) ?? string.Empty;
+      static List<object> ReadW30MemoryRows(string w30DeviceId)
+      {
+        var rows = new List<object>(capacity: 200);
+        foreach (var p in Program.DevicePunches.Where(x => string.Equals(x.DeviceId, w30DeviceId, StringComparison.Ordinal)))
+        {
+          var local = p.OccurredAtUtc.ToLocalTime();
+          rows.Add(new
+          {
+            device_id = w30DeviceId,
+            staff_id = p.StaffId,
+            datetime = local.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture),
+            verified = p.VerifyMode == 255 ? "" : p.VerifyMode.ToString(CultureInfo.InvariantCulture),
+            status = "",
+            workcode = "",
+            reserved = "",
+          });
+        }
+        return rows;
+      }
 
       var wl10Rows = new List<object>(capacity: 0);
-      if (deviceId.Equals("all", StringComparison.OrdinalIgnoreCase) || deviceId.Equals(cfg.DeviceId, StringComparison.Ordinal))
+      var wl10Ids = configured
+        .Where(d => string.Equals(d.DeviceType, "WL10", StringComparison.Ordinal))
+        .Select(d => (d.DeviceId ?? string.Empty).Trim())
+        .Where(id => id.Length > 0)
+        .Distinct(StringComparer.Ordinal)
+        .ToArray();
+      var wl10DeviceId = (Environment.GetEnvironmentVariable("WL10_DEVICE_ID") ?? string.Empty).Trim();
+      if (wl10DeviceId.Length == 0) wl10DeviceId = wl10Ids.FirstOrDefault() ?? string.Empty;
+      if (wl10DeviceId.Length == 0)
       {
-        wl10Rows = ReadWl10FileRows(path, cfg.DeviceId);
+        var wl10Ip = (Environment.GetEnvironmentVariable("WL10_IP") ?? string.Empty).Trim();
+        if (wl10Ip.Length > 0) wl10DeviceId = $"WL10-{wl10Ip}";
+      }
+      if (wl10DeviceId.Length == 0) wl10DeviceId = "WL10";
+
+      var needsWl10 = deviceId.Equals("all", StringComparison.OrdinalIgnoreCase) || wl10Ids.Contains(deviceId);
+      string? wl10Path = null;
+      if (needsWl10)
+      {
+        var wl10RowsDeviceId = wl10Ids.Contains(deviceId) ? deviceId : wl10DeviceId;
+        wl10Path = TryResolveAttlogExportPath(wl10RowsDeviceId);
+        if (string.IsNullOrWhiteSpace(wl10Path)) return Results.Json(new { rows = Array.Empty<object>(), error = "Could not resolve 1_attlog.dat path" }, JsonOptions);
+        if (!File.Exists(wl10Path))
+        {
+          try
+          {
+            var dir = Path.GetDirectoryName(Path.GetFullPath(wl10Path));
+            if (!string.IsNullOrWhiteSpace(dir)) Directory.CreateDirectory(dir);
+            File.WriteAllText(wl10Path, string.Empty, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+          }
+          catch
+          {
+            return Results.Json(new { rows = Array.Empty<object>(), error = $"File not found: {wl10Path}" }, JsonOptions);
+          }
+        }
+        wl10Rows = ReadWl10FileRows(wl10Path, wl10RowsDeviceId);
+      }
+
+      var baseDir = Directory.GetCurrentDirectory();
+      if (!string.IsNullOrWhiteSpace(wl10Path))
+      {
+        try { baseDir = Path.GetDirectoryName(Path.GetFullPath(wl10Path)) ?? baseDir; } catch { }
+      }
+      else
+      {
+        try
+        {
+          var fallback = TryResolveAttlogExportPath("WL10");
+          if (!string.IsNullOrWhiteSpace(fallback)) baseDir = Path.GetDirectoryName(Path.GetFullPath(fallback)) ?? baseDir;
+        }
+        catch { }
       }
 
       var w30Rows = new List<object>(capacity: 0);
@@ -4685,11 +5105,55 @@ static partial class Program
         }
       }
 
+      if (deviceId.Equals("all", StringComparison.OrdinalIgnoreCase))
+      {
+        var keys = new HashSet<string>(StringComparer.Ordinal);
+        var merged = new List<object>(capacity: w30Rows.Count + 256);
+        foreach (var r in w30Rows)
+        {
+          var d = (dynamic)r;
+          var k = (string)d.device_id + "|" + (string)d.staff_id + "|" + (string)d.datetime;
+          if (keys.Add(k)) merged.Add(r);
+        }
+        foreach (var dev in configured.Where(d => d.DeviceType == "W30"))
+        {
+          foreach (var r in ReadW30MemoryRows(dev.DeviceId))
+          {
+            var d = (dynamic)r;
+            var k = (string)d.device_id + "|" + (string)d.staff_id + "|" + (string)d.datetime;
+            if (keys.Add(k)) merged.Add(r);
+          }
+        }
+        w30Rows = merged;
+      }
+      else
+      {
+        var dev = configured.FirstOrDefault(d => string.Equals(d.DeviceId, deviceId, StringComparison.Ordinal));
+        if (dev is not null && dev.DeviceType == "W30")
+        {
+          var keys = new HashSet<string>(StringComparer.Ordinal);
+          var merged = new List<object>(capacity: w30Rows.Count + 128);
+          foreach (var r in w30Rows)
+          {
+            var d = (dynamic)r;
+            var k = (string)d.device_id + "|" + (string)d.staff_id + "|" + (string)d.datetime;
+            if (keys.Add(k)) merged.Add(r);
+          }
+          foreach (var r in ReadW30MemoryRows(dev.DeviceId))
+          {
+            var d = (dynamic)r;
+            var k = (string)d.device_id + "|" + (string)d.staff_id + "|" + (string)d.datetime;
+            if (keys.Add(k)) merged.Add(r);
+          }
+          w30Rows = merged;
+        }
+      }
+
       var rows = new List<object>(capacity: wl10Rows.Count + w30Rows.Count);
       if (wl10Rows.Count > 0) rows.AddRange(wl10Rows);
       if (w30Rows.Count > 0) rows.AddRange(w30Rows);
 
-      if (rows.Count == 0 && !deviceId.Equals("all", StringComparison.OrdinalIgnoreCase) && !deviceId.Equals(cfg.DeviceId, StringComparison.Ordinal))
+      if (rows.Count == 0 && !deviceId.Equals("all", StringComparison.OrdinalIgnoreCase) && !wl10Ids.Contains(deviceId))
       {
         return Results.Json(new { rows = rows.ToArray(), error = $"No records for {deviceId}. If this is a WL10 device, click Connect first (WL10 file is shared)." }, JsonOptions);
       }
@@ -5319,7 +5783,7 @@ static partial class Program
           return Results.Json(new
           {
             ok = false,
-            error = "ZKTeco SDK is 32-bit and cannot be loaded by a 64-bit process. Run WL10Middleware as x86.",
+            error = "ZKTeco SDK is 32-bit and cannot be loaded by a 64-bit process. Run SHABMiddleware as x86.",
             hint = @"If running from source: set SHAB_BUILD_ARCH=x86 then restart. If using client package: use win-x86 build.",
             trace
           }, JsonOptions);
@@ -5605,7 +6069,7 @@ static partial class Program
           return Results.Json(new
           {
             ok = false,
-            error = "ZKTeco SDK is 32-bit and cannot be loaded by a 64-bit process. Run WL10Middleware as x86.",
+            error = "ZKTeco SDK is 32-bit and cannot be loaded by a 64-bit process. Run SHABMiddleware as x86.",
             hint = @"If running from source: set SHAB_BUILD_ARCH=x86 then restart. If using client package: use win-x86 build.",
             trace
           }, JsonOptions);
@@ -6080,7 +6544,7 @@ static partial class Program
       }
     });
 
-    Console.WriteLine($"Dashboard running at {urls}");
+    Console.WriteLine($"Dashboard running at {uiUrl}");
     Console.WriteLine("Dashboard login configured. Override credentials with WL10_DASHBOARD_USER and WL10_DASHBOARD_PASSWORD.");
 
     await app.RunAsync();
@@ -6138,6 +6602,51 @@ static partial class Program
     var bestLabel = addrs.Count > 0 ? $"{best.name}:{best.ip}" : string.Empty;
     var bestInterfaceName = addrs.Count > 0 ? best.name : string.Empty;
 
+    static string? TryGetWifiSsid()
+    {
+      try
+      {
+        if (!OperatingSystem.IsWindows()) return null;
+        var psi = new ProcessStartInfo
+        {
+          FileName = "netsh",
+          Arguments = "wlan show interfaces",
+          UseShellExecute = false,
+          RedirectStandardOutput = true,
+          RedirectStandardError = true,
+          CreateNoWindow = true,
+        };
+        using var p = Process.Start(psi);
+        if (p is null) return null;
+        var text = p.StandardOutput.ReadToEnd();
+        if (!p.WaitForExit(1500))
+        {
+          try { p.Kill(entireProcessTree: true); } catch { }
+          return null;
+        }
+        foreach (var raw in (text ?? string.Empty).Split('\n'))
+        {
+          var line = (raw ?? string.Empty).Trim();
+          if (line.Length == 0) continue;
+          if (line.StartsWith("SSID", StringComparison.OrdinalIgnoreCase) && !line.StartsWith("BSSID", StringComparison.OrdinalIgnoreCase))
+          {
+            var idx = line.IndexOf(':');
+            if (idx < 0) continue;
+            var v = line[(idx + 1)..].Trim();
+            if (v.Length == 0) continue;
+            if (v.Equals("N/A", StringComparison.OrdinalIgnoreCase)) continue;
+            return v;
+          }
+        }
+        return null;
+      }
+      catch
+      {
+        return null;
+      }
+    }
+    var wifiSsid = TryGetWifiSsid();
+
     bool? same24 = null;
     try
     {
@@ -6160,6 +6669,7 @@ static partial class Program
       bestIpv4 = bestIp,
       bestLabel,
       bestInterfaceName,
+      wifiSsid,
     };
   }
 
@@ -6414,37 +6924,232 @@ static partial class Program
     }
   }
 
+  private static readonly object W30StaffRosterGate = new();
+  private static DateTimeOffset W30StaffRosterLoadedAtUtc = default;
+  private static long W30StaffRosterCsvLastWriteUtcTicks = 0L;
+  private static string? W30StaffRosterCsvPath = null;
+  private static string[] W30StaffRosterIds = Array.Empty<string>();
+  private static HashSet<string> W30StaffRosterIdSet = new(StringComparer.Ordinal);
+
+  private static string[] ParseCsvLine(string? line)
+  {
+    var s = line ?? string.Empty;
+    var res = new List<string>();
+    var sb = new StringBuilder();
+    var inQ = false;
+    for (var i = 0; i < s.Length; i++)
+    {
+      var c = s[i];
+      if (inQ)
+      {
+        if (c == '"')
+        {
+          if (i + 1 < s.Length && s[i + 1] == '"') { sb.Append('"'); i++; }
+          else inQ = false;
+        }
+        else sb.Append(c);
+      }
+      else
+      {
+        if (c == '"') inQ = true;
+        else if (c == ',') { res.Add(sb.ToString()); sb.Clear(); }
+        else sb.Append(c);
+      }
+    }
+    res.Add(sb.ToString());
+    return res.Select(x => (x ?? string.Empty).Trim()).ToArray();
+  }
+
+  private static void RefreshW30StaffRosterIfNeeded()
+  {
+    var now = DateTimeOffset.UtcNow;
+    var stale = W30StaffRosterLoadedAtUtc == default || (now - W30StaffRosterLoadedAtUtc) > TimeSpan.FromMinutes(2);
+    var staffPath = ResolveStaffCsvPath();
+    long lastWrite = 0L;
+    if (!string.IsNullOrWhiteSpace(staffPath) && File.Exists(staffPath))
+    {
+      try { lastWrite = File.GetLastWriteTimeUtc(staffPath).Ticks; } catch { lastWrite = 0L; }
+    }
+
+    var pathChanged = !string.Equals((W30StaffRosterCsvPath ?? string.Empty).Trim(), (staffPath ?? string.Empty).Trim(), StringComparison.OrdinalIgnoreCase);
+    var fileChanged = lastWrite != W30StaffRosterCsvLastWriteUtcTicks;
+    if (!stale && !pathChanged && !fileChanged) return;
+
+    var idsAll = new List<(string Id, bool Active)>(capacity: 256);
+    try
+    {
+      if (!string.IsNullOrWhiteSpace(staffPath) && File.Exists(staffPath))
+      {
+        var first = true;
+        foreach (var raw in File.ReadLines(staffPath))
+        {
+          var line = raw ?? string.Empty;
+          if (first) { first = false; continue; }
+          if (string.IsNullOrWhiteSpace(line)) continue;
+          var parts = ParseCsvLine(line);
+          if (parts.Length < 5) continue;
+          var id = (parts[0] ?? string.Empty).Trim();
+          if (id.Length == 0) continue;
+          var status = (parts[4] ?? string.Empty).Trim();
+          var active = status.Length == 0 || string.Equals(status, "Active", StringComparison.OrdinalIgnoreCase);
+          idsAll.Add((id, active));
+        }
+      }
+    }
+    catch { }
+
+    var anyActive = idsAll.Any(x => x.Active);
+    var ids = (anyActive ? idsAll.Where(x => x.Active) : idsAll).Select(x => x.Id).Distinct(StringComparer.Ordinal).ToArray();
+    if (ids.Length > 0 && ids.All(x => int.TryParse(x, NumberStyles.Integer, CultureInfo.InvariantCulture, out _)))
+    {
+      ids = ids
+        .Select(x => int.Parse(x, NumberStyles.Integer, CultureInfo.InvariantCulture))
+        .OrderBy(x => x)
+        .Select(x => x.ToString(CultureInfo.InvariantCulture))
+        .ToArray();
+    }
+    else
+    {
+      ids = ids.OrderBy(x => x, StringComparer.Ordinal).ToArray();
+    }
+
+    W30StaffRosterCsvPath = staffPath;
+    W30StaffRosterCsvLastWriteUtcTicks = lastWrite;
+    W30StaffRosterLoadedAtUtc = now;
+    W30StaffRosterIds = ids;
+    W30StaffRosterIdSet = new HashSet<string>(ids, StringComparer.Ordinal);
+  }
+
+  private static string MapW30StaffId(string staffId)
+  {
+    var id = (staffId ?? string.Empty).Trim();
+    if (id.Length == 0) return id;
+    string[] roster;
+    HashSet<string> rosterSet;
+    lock (W30StaffRosterGate)
+    {
+      RefreshW30StaffRosterIfNeeded();
+      roster = W30StaffRosterIds;
+      rosterSet = W30StaffRosterIdSet;
+    }
+    if (roster.Length == 0) return id;
+    if (rosterSet.Contains(id)) return id;
+    if (!int.TryParse(id, NumberStyles.Integer, CultureInfo.InvariantCulture, out var n)) return id;
+    if (n < 1 || n > roster.Length) return id;
+    return roster[n - 1];
+  }
+
+  private static string[] SplitFilePatterns(string? raw)
+  {
+    var s = (raw ?? string.Empty).Trim();
+    if (s.Length == 0) return Array.Empty<string>();
+    var parts = s.Split(new[] { ';', ',', '|' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+    if (parts.Length > 0) return parts;
+    return new[] { s };
+  }
+
+  private static IEnumerable<FileInfo> EnumerateW30Files(string dir, string patternRaw, SearchOption searchOpt)
+  {
+    var patterns = SplitFilePatterns(patternRaw);
+    if (patterns.Length == 0) patterns = new[] { "AttendanceLog*.dat", "attlog_W30-*.dat" };
+
+    var list = new List<FileInfo>(capacity: 64);
+    var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+    void Add(string pat)
+    {
+      if (string.IsNullOrWhiteSpace(pat)) return;
+      try
+      {
+        foreach (var f in new DirectoryInfo(dir).EnumerateFiles(pat, searchOpt))
+        {
+          if (seen.Add(f.FullName)) list.Add(f);
+        }
+      }
+      catch { }
+    }
+
+    foreach (var p in patterns) Add(p);
+    if (list.Count == 0)
+    {
+      Add("AttendanceLog*.dat");
+      Add("attlog_W30-*.dat");
+    }
+
+    return list;
+  }
+
   private static IEnumerable<AttlogRow> ReadW30AttlogRows(string path)
   {
     foreach (var raw in File.ReadLines(path))
     {
       var line = (raw ?? string.Empty).Trim();
       if (line.Length == 0) continue;
+      line = line.Replace('|', ' ').Replace(',', ' ').Replace(';', ' ').Replace('\t', ' ');
       var parts = line.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
       if (parts.Length < 2) continue;
 
-      var staffId = parts[0].Trim();
+      var staffId = parts[0].Trim().Trim('"');
       if (staffId.Length == 0) continue;
 
-      var dtRaw = parts.Length >= 3 ? (parts[1].Trim() + " " + parts[2].Trim()) : parts[1].Trim();
+      static bool LooksLikeDate(string s) => s.Contains('-', StringComparison.Ordinal) || s.Contains('/', StringComparison.Ordinal);
+      static bool LooksLikeTime(string s) => s.Contains(':', StringComparison.Ordinal);
+
+      var p1 = parts[1].Trim().Trim('"');
+      var dtRaw = p1;
+      var nextIdx = 2;
+      if (parts.Length >= 3)
+      {
+        var p2 = parts[2].Trim().Trim('"');
+        if (LooksLikeDate(p1) && LooksLikeTime(p2))
+        {
+          dtRaw = p1 + " " + p2;
+          nextIdx = 3;
+        }
+      }
       if (dtRaw.Length < 10) continue;
 
-      var status = "0";
-      var reserved = "0";
-      if (parts.Length >= 5)
+      if (DateTime.TryParseExact(dtRaw, "yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture, DateTimeStyles.None, out var dt))
       {
-        status = parts[3].Trim();
-        reserved = parts[4].Trim();
+        dtRaw = dt.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
       }
-      else if (parts.Length >= 4)
+
+      static bool IsBit(string s)
       {
-        status = parts[2].Trim();
-        reserved = parts[3].Trim();
+        var v = (s ?? string.Empty).Trim();
+        return v == "0" || v == "1";
+      }
+
+      var status = "0";
+      var verified = "1";
+      var workcode = "1";
+      if (parts.Length > nextIdx)
+      {
+        var c1 = parts[nextIdx].Trim().Trim('"');
+        var c2 = parts.Length > nextIdx + 1 ? parts[nextIdx + 1].Trim().Trim('"') : string.Empty;
+        var c3 = parts.Length > nextIdx + 2 ? parts[nextIdx + 2].Trim().Trim('"') : string.Empty;
+
+        if (!IsBit(c1) && IsBit(c2) && IsBit(c3))
+        {
+          workcode = c1.Length == 0 ? "1" : c1;
+          status = c2.Length == 0 ? "0" : c2;
+          verified = c3.Length == 0 ? "1" : c3;
+          if (workcode.Length > 0 && !string.Equals(workcode, staffId, StringComparison.Ordinal))
+          {
+            staffId = workcode;
+          }
+        }
+        else
+        {
+          status = c1.Length == 0 ? "0" : c1;
+          verified = c2.Length == 0 ? "1" : c2;
+        }
       }
       if (status.Length == 0) status = "0";
-      if (reserved.Length == 0) reserved = "0";
+      if (verified.Length == 0) verified = "1";
 
-      yield return new AttlogRow(staffId, dtRaw, "1", status, "1", reserved);
+      staffId = MapW30StaffId(staffId);
+      yield return new AttlogRow(staffId, dtRaw, verified, status, workcode, "0");
     }
   }
 
@@ -6985,6 +7690,9 @@ static partial class Program
     .btn:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
     .btn:disabled{opacity:.55;cursor:not-allowed;box-shadow:none}
     .btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+    .btn.sm{padding:6px 8px;border-radius:9px;font-size:11px}
+    .btn.danger{background:rgba(220,38,38,.08);border-color:rgba(220,38,38,.35);color:#b91c1c}
+    .btn.danger:hover{background:rgba(220,38,38,.12);border-color:rgba(220,38,38,.45);box-shadow:0 0 0 3px rgba(220,38,38,.12)}
     main{max-width:none;margin:0;padding:0;overflow-x:hidden}
     .tabs{display:none}
     .tabBtn{padding:9px 12px;border-radius:12px;border:1px solid var(--border);background:var(--panel);color:var(--text);cursor:pointer;font-size:12px;transition:background .12s ease,border-color .12s ease,transform .05s ease,box-shadow .12s ease}
@@ -7048,6 +7756,10 @@ static partial class Program
     .summaryWrap .card{background:#ffffff;border-color:#e5e7eb;color:#0f172a;box-shadow:0 2px 18px rgba(15,23,42,.06)}
     .summaryWrap .kTitle,.summaryWrap .hint,.summaryWrap .kv,.summaryWrap th{color:#64748b}
     .summaryWrap .title{font-size:14px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:#0f172a;margin:0 0 12px}
+    #tab-settings .settingsDeviceCard{background:linear-gradient(180deg,#ffffff,#f8fafc);border-color:rgba(148,163,184,.55)}
+    #tab-settings .settingsDeviceCard .cardHead{background:linear-gradient(90deg,rgba(22,58,112,.14),rgba(43,183,169,.10))}
+    #tab-settings .settingsDbCard{background:linear-gradient(180deg,#f1f5f9,#e2e8f0);border-color:rgba(100,116,139,.38)}
+    #tab-settings .settingsDbCard .cardHead{background:linear-gradient(90deg,rgba(30,64,175,.16),rgba(5,150,105,.12))}
     .summaryWrap .val{color:#0f172a}
     .summaryHeader{display:flex;align-items:flex-end;justify-content:space-between;gap:12px;margin-bottom:14px}
     .summaryTitle{font-size:22px;font-weight:800;letter-spacing:-.02em;margin:0;line-height:1.1}
@@ -7167,7 +7879,11 @@ static partial class Program
     .actionSep{width:1px;height:18px;background:var(--border2);opacity:.8}
     .devConnTable .actionIcons{justify-content:flex-end;flex-wrap:nowrap}
     .devConnTable td:last-child{overflow:visible}
-    .settingsDeviceTable td{white-space:nowrap}
+    .settingsDeviceTable th,.settingsDeviceTable td,.devConnTable th,.devConnTable td{white-space:normal;overflow:visible;text-overflow:clip;overflow-wrap:anywhere;word-break:break-word}
+    .settingsDeviceTable td.mono,.devConnTable td.mono{white-space:normal}
+    .settingsDeviceTable thead th,.devConnTable thead th{position:static}
+    .tableWrap{width:100%;max-width:100%;overflow-x:auto}
+    .twoRowText{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;overflow-wrap:anywhere;word-break:break-word;line-height:1.25}
     .dlIconBtn{display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;padding:0;border-radius:10px;border:1px solid var(--border2);background:var(--btn);color:var(--text);cursor:pointer}
     .dlIconBtn:hover{background:var(--btnH);border-color:var(--border2)}
     .dlIconBtn svg{width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
@@ -7367,11 +8083,11 @@ static partial class Program
     .dateInput{height:38px;padding:8px 10px;border-radius:12px;border:1px solid var(--border2);background:#ffffff;font-family:inherit;font-size:12px}
     .filterBar .btn{height:38px}
 
-    .prettyTable{width:100%;border-collapse:separate;border-spacing:0;font-size:12.5px}
-    .prettyTable thead th{position:sticky;top:0;background:linear-gradient(90deg,rgba(22,58,112,.10),rgba(43,183,169,.10));border-bottom:1px solid var(--border);padding:12px 12px;text-align:left;color:#0f172a;font-weight:900}
+    .prettyTable{width:100%;max-width:100%;border-collapse:separate;border-spacing:0;font-size:12.5px}
+    .prettyTable thead th{position:sticky;top:0;background:linear-gradient(90deg,rgba(22,58,112,.10),rgba(43,183,169,.10));border-bottom:1px solid var(--border);padding:5px 8px;text-align:left;color:#0f172a;font-weight:900;line-height:1}
     .prettyTable thead th:first-child{border-top-left-radius:14px}
     .prettyTable thead th:last-child{border-top-right-radius:14px}
-    .prettyTable tbody td{padding:12px 12px;border-bottom:1px solid rgba(226,232,240,.9);background:#fff}
+    .prettyTable tbody td{padding:9px 10px;border-bottom:1px solid rgba(226,232,240,.9);background:#fff;vertical-align:top}
     .prettyTable tbody tr:hover td{background:rgba(22,58,112,.03)}
     .prettyTable tbody tr:last-child td:first-child{border-bottom-left-radius:14px}
     .prettyTable tbody tr:last-child td:last-child{border-bottom-right-radius:14px}
@@ -7871,6 +8587,7 @@ static partial class Program
             <div class="row toolbarRight" style="margin-bottom:8px">
               <button class="btn" id="devCsv" type="button">Download Table</button>
               <button class="btn primary" id="devRefresh" type="button">Sync Device</button>
+              <button class="btn" id="devCleanup" type="button">Clean Export</button>
             </div>
             <div id="deviceLoadBox" class="loadRow" style="display:none">
               <div class="ring" id="deviceLoadRing" style="--pct:0%"><div class="ringText" id="deviceLoadPct">0%</div></div>
@@ -7890,7 +8607,7 @@ static partial class Program
               </thead>
               <tbody id="deviceBody"></tbody>
             </table>
-            <div class="hint">WL10 reads 1_attlog.dat (6 columns). W30 reads AttendanceLog*.dat (4 columns). Use Sync Device (WL10) or Sync Database (W30 file import) to update.</div>
+            <div class="hint">Sync Device syncs the device(s) selected above.</div>
           </div>
         </div>
       </div>
@@ -8013,35 +8730,44 @@ static partial class Program
 
       <div class="subTabPanel active" data-subtab-group="settings" id="subtab-settings-connection">
         <div class="grid" style="margin:0">
-          <div class="card">
+          <div class="card settingsDeviceCard" style="grid-column:1/-1">
             <div class="cardHead"><div class="cardHeadTitle">Device Settings</div></div>
-            <div class="hint">Shows all configured devices saved on this PC. Active device is the one used for Sync Device and live connection checks.</div>
+            <div class="hint">Shows all configured devices saved on this PC.</div>
             <div style="height:10px"></div>
-            <div style="overflow-x:auto;max-width:100%">
-              <table class="prettyTable settingsDeviceTable" style="width:100%;table-layout:fixed">
+            <div class="row toolbarRight" style="margin:10px 0;gap:8px">
+              <select id="devAddType" style="width:140px;flex:0 0 auto">
+                <option value="WL10">WL10</option>
+                <option value="W30">W30</option>
+              </select>
+              <button class="btn" id="devAddDevice" type="button">Add Device</button>
+            </div>
+            <div class="tableWrap">
+              <table class="prettyTable devConnTable" style="width:100%;table-layout:fixed">
                 <thead>
                   <tr>
-                    <th style="width:240px">Device</th>
+                    <th style="width:260px">Device</th>
                     <th style="width:180px">IP:Port</th>
-                    <th style="width:120px">Reader</th>
-                    <th>W30 Log Folder</th>
-                    <th style="width:180px">Last OK</th>
+                    <th>Status</th>
+                    <th style="width:220px">Actions</th>
                   </tr>
                 </thead>
-                <tbody id="settingsDevicesBody"></tbody>
+                <tbody id="devConnBody"></tbody>
               </table>
             </div>
+            <div style="height:8px"></div>
+            <div class="hint" id="actionOut"></div>
 
             <div class="sectionHead"><div class="sectionHeadTitle">Device Sync Summary</div></div>
-            <div style="overflow-x:auto;max-width:100%">
+            <div class="tableWrap">
               <table class="prettyTable settingsDeviceTable" style="width:100%;table-layout:fixed">
                 <thead>
                   <tr>
                     <th style="width:240px">Device</th>
+                    <th style="width:90px">Type</th>
                     <th style="width:120px">Mode</th>
-                    <th style="width:180px">Last Sync</th>
-                    <th style="width:140px">Last Read</th>
+                    <th style="width:180px">Last Activity</th>
                     <th>Notes</th>
+                    <th style="width:160px">Actions</th>
                   </tr>
                 </thead>
                 <tbody id="settingsDeviceSyncBody"></tbody>
@@ -8050,41 +8776,6 @@ static partial class Program
             <div style="height:8px"></div>
             <div class="muted" id="lastErrBrief"></div>
             <details id="lastErrBox" style="display:none"><summary>Error details</summary><pre id="lastErr"></pre></details>
-
-            <div class="sectionHead"><div class="sectionHeadTitle">Device Connection</div></div>
-            <div class="formGrid" style="display:none">
-              <label for="setIp">Device IP</label><input id="setIp" placeholder="Device IP" />
-              <label for="setPort">Device Port</label><input id="setPort" placeholder="Port" inputmode="numeric" />
-              <label for="setReader">Reader Mode</label>
-              <select id="setReader">
-                <option value="auto">Auto</option>
-                <option value="native">Native</option>
-                <option value="com">COM</option>
-              </select>
-            </div>
-            <div class="row toolbarRight" style="margin:10px 0;gap:8px">
-              <select id="devAddType" style="width:140px;flex:0 0 auto">
-                <option value="WL10">WL10</option>
-                <option value="W30">W30</option>
-              </select>
-              <button class="btn" id="devAddDevice" type="button">Add Device</button>
-            </div>
-            <div style="overflow-x:auto;max-width:100%">
-              <table class="prettyTable devConnTable" style="width:100%;table-layout:fixed">
-                <thead>
-                  <tr>
-                    <th style="width:260px">Device</th>
-                    <th style="width:180px">IP:Port</th>
-                    <th style="width:120px">Reader</th>
-                    <th>W30 Log Folder</th>
-                    <th style="width:170px">Actions</th>
-                  </tr>
-                </thead>
-                <tbody id="devConnBody"></tbody>
-              </table>
-            </div>
-            <div style="height:8px"></div>
-            <div class="hint" id="actionOut"></div>
             <div class="sectionHead"><div class="sectionHeadTitle">Desktop Info</div></div>
             <ul class="bulletList" id="desktopInfo"></ul>
 
@@ -8122,7 +8813,7 @@ static partial class Program
             </div>
           </div>
 
-          <div class="card">
+          <div class="card settingsDbCard" style="grid-column:1/-1">
             <div class="cardHead"><div class="cardHeadTitle">Database Settings</div></div>
 
             <div class="kpis kpis1">
@@ -8902,18 +9593,17 @@ static partial class Program
         }
 
         const st = lastStatus || {};
-        const deviceOk = !!(st.device && st.device.reachable);
         const supaOk = !!(st.supabase && st.supabase.configured && st.supabase.syncEnabled);
+        const anyDevices = Array.isArray(st.devices) && st.devices.length > 0;
+        if (!anyDevices) {
+          logActivity('System', 'Auto sync skipped (' + String(reason || 'auto') + '): no configured devices.', 'WARN');
+          return;
+        }
 
         let url = '';
         let label = '';
-        if (deviceOk && supaOk) { url = '/api/sync?today=1'; label = 'device + supabase'; }
-        else if (deviceOk && !supaOk) { url = '/api/sync?today=1&supabase=0'; label = 'device-only'; }
-        else if (!deviceOk && supaOk) { url = '/api/supabase/update'; label = 'supabase-only'; }
-        else {
-          logActivity('System', 'Auto sync skipped (' + String(reason || 'auto') + '): no device and no supabase.', 'WARN');
-          return;
-        }
+        if (supaOk) { url = '/api/sync?today=1&deviceId=all'; label = 'all devices + supabase'; }
+        else { url = '/api/sync?today=1&supabase=0&deviceId=all'; label = 'all devices (device-only)'; }
 
         logActivity('System', 'Auto sync started (' + label + ', ' + String(reason || 'auto') + ')...');
         const res = await fetch(url, { method: 'POST', credentials: 'same-origin' });
@@ -9243,14 +9933,19 @@ static partial class Program
       if (!x) return;
       const devices = (status && status.devices && Array.isArray(status.devices)) ? status.devices : [];
 
-      let selected = 'all';
-      try { selected = String(localStorage.getItem('wl10dash.rawDevicePick') || 'all').trim() || 'all'; } catch { selected = 'all'; }
+      let selected = '';
+      try { selected = String(localStorage.getItem('wl10dash.rawDevicePick') || '').trim(); } catch { selected = ''; }
+      if (!selected) {
+        const activeId = (status && status.device && status.device.deviceId) ? String(status.device.deviceId || '').trim() : '';
+        selected = activeId || 'all';
+      }
 
-      const opts = ['<option value="all">All devices</option>'];
+      const opts = ['<option value="all">All devices (combined)</option>'];
       const ids = new Set(['all']);
       for (const d of devices) {
         const id = String((d && d.deviceId) || '').trim();
-        const type = String((d && d.type) || '').trim();
+        let type = String((d && d.type) || '').trim();
+        if (type.toUpperCase() === 'WL30') type = 'WL10';
         const ip = String((d && d.ip) || '').trim();
         if (!id) continue;
         ids.add(id);
@@ -9282,24 +9977,42 @@ static partial class Program
       if (devRefreshBtn) {
         const devs = (lastStatus && Array.isArray(lastStatus.devices)) ? lastStatus.devices : [];
         const match = (pick && pick !== 'all') ? devs.find(d => String((d && d.deviceId) || '').trim() === pick) : null;
-        const t = match ? String((match && match.type) || '').trim().toUpperCase() : '';
-        const isW30 = t === 'W30';
-        devRefreshBtn.disabled = isW30;
-        devRefreshBtn.title = isW30 ? 'W30 uses file import. Copy AttendanceLog*.dat then use Sync Database.' : '';
+        const rm = match ? String((match && match.readerMode) || '').trim().toLowerCase() : '';
+        const isFile = rm === 'file';
+        devRefreshBtn.disabled = isFile;
+        devRefreshBtn.title = isFile ? 'This device is configured for file import. Set Reader Mode to auto/native/com to use Sync Device.' : '';
       }
     }
 
     let settingsDevices = [];
     let settingsDevicesActiveId = '';
     let settingsDevicesWired = false;
+    let settingsDeviceSyncWired = false;
 
     function renderSettingsDevices() {
       const body = el('devConnBody');
       if (!body) return;
       const rows = Array.isArray(settingsDevices) ? settingsDevices : [];
       if (rows.length === 0) {
-        body.innerHTML = '<tr><td colspan="5" class="muted">No configured devices.</td></tr>';
+        body.innerHTML = '<tr><td colspan="4" class="muted">No configured devices.</td></tr>';
         return;
+      }
+
+      const displayNameById = {};
+      const idsByType = {};
+      for (const d of rows) {
+        let type = String(d.deviceType || '').trim().toUpperCase() || 'WL10';
+        if (type === 'WL30') type = 'WL10';
+        const id = String(d.deviceId || '').trim();
+        if (!id) continue;
+        if (!idsByType[type]) idsByType[type] = [];
+        idsByType[type].push(id);
+      }
+      for (const type of Object.keys(idsByType)) {
+        const ids = (idsByType[type] || []).slice().sort((a, b) => String(a).localeCompare(String(b)));
+        for (let i = 0; i < ids.length; i++) {
+          displayNameById[ids[i]] = type + '-' + String(i + 1);
+        }
       }
 
       const parts = [];
@@ -9309,22 +10022,25 @@ static partial class Program
         const ip = String(d.deviceIp || '').trim();
         const port = String(d.devicePort ?? '').trim();
         const rm = String(d.readerMode || '').trim();
-        const logDir = String(d.logDir || '').trim();
-        const active = id && settingsDevicesActiveId && id === settingsDevicesActiveId;
         const ipPort = (ip && port) ? (ip + ':' + port) : (ip || port || '-');
-        const w30Dir = (String(type || '').trim().toUpperCase() === 'W30') ? (logDir || '(Reference)') : '-';
+        const okAt = d.lastOkAtUtc ? fmt(String(d.lastOkAtUtc || '')) : '-';
+        const typeUpper = String(type || '').trim().toUpperCase();
+        const disp = (displayNameById[id] || ((typeUpper || 'Device') + '-?'));
+        const row1Parts = [];
+        row1Parts.push('Reader: ' + (rm || '-'));
+        const statusLine1 = row1Parts.join(' · ');
+        const statusLine2 = 'Last Connection: ' + (okAt || '-');
+        const deviceLabelHtml = escHtml(disp);
         parts.push(
           '<tr>' +
-          '<td>' + escHtml((type ? type + ' ' : '') + (id || '-')) + (active ? ' <span class="pill">Active</span>' : '') + '</td>' +
-          '<td class="mono">' + escHtml(ipPort) + '</td>' +
-          '<td>' + escHtml(rm || '-') + '</td>' +
-          '<td class="mono">' + escHtml(w30Dir) + '</td>' +
+          '<td><div class="twoRowText">' + deviceLabelHtml + '</div></td>' +
+          '<td class="mono"><div class="twoRowText">' + escHtml(ipPort) + '</div></td>' +
+          '<td><div class="twoRowText">' + escHtml(statusLine1) + '<br>' + escHtml(statusLine2) + '</div></td>' +
           '<td><div class="actionIcons">' +
-          '<button class="iconBtn sm" type="button" data-dev-action="connect" data-dev-id="' + escHtml(id) + '" title="Connect" aria-label="Connect"' + (active ? ' disabled' : '') + '><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M8 12l2.5 2.5L16 9"/></svg></button>' +
-          '<button class="iconBtn sm" type="button" data-dev-action="disconnect" data-dev-id="' + escHtml(id) + '" title="Disconnect" aria-label="Disconnect"' + (!active ? ' disabled' : '') + '><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9 9l6 6"/><path d="M15 9l-6 6"/></svg></button>' +
-          '<span class="actionSep"></span>' +
-          '<button class="iconBtn sm" type="button" data-dev-action="edit" data-dev-id="' + escHtml(id) + '" title="Edit" aria-label="Edit"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/></svg></button>' +
-          '<button class="iconBtn sm danger" type="button" data-dev-action="delete" data-dev-id="' + escHtml(id) + '" title="Remove" aria-label="Remove"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/></svg></button>' +
+          '<button class="btn sm primary" type="button" data-dev-action="sync" data-dev-id="' + escHtml(id) + '">Sync</button>' +
+          '<button class="btn sm" type="button" data-dev-action="test" data-dev-id="' + escHtml(id) + '">Test</button>' +
+          '<button class="btn sm" type="button" data-dev-action="edit" data-dev-id="' + escHtml(id) + '">Edit</button>' +
+          '<button class="btn sm danger" type="button" data-dev-action="delete" data-dev-id="' + escHtml(id) + '">Remove</button>' +
           '</div></td>' +
           '</tr>'
         );
@@ -9336,7 +10052,6 @@ static partial class Program
       const j = await getJson('/api/devices/list', true);
       if (!j || j.ok === false) return false;
       settingsDevices = Array.isArray(j.devices) ? j.devices : [];
-      settingsDevicesActiveId = String(j.activeDeviceId || '').trim();
       renderSettingsDevices();
       if (!settingsDevicesWired) {
         settingsDevicesWired = true;
@@ -9367,17 +10082,19 @@ static partial class Program
             await refreshStatus();
             return;
           }
-          if (act === 'connect') {
+          if (act === 'test') {
             const res = await postJson('/api/devices/connect', { deviceId: id });
-            if (!res || res.ok === false) { notify('Error', 'Connect failed', String((res && res.error) || '')); return; }
+            if (!res || res.ok === false) { notify('Error', 'Test failed', String((res && res.error) || '')); return; }
             await refreshSettingsDevices();
             await refreshStatus();
+            notify('Success', 'Connection test ok.', 'ok');
             return;
           }
-          if (act === 'disconnect') {
-            const res = await postJson('/api/devices/disconnect', { deviceId: id });
-            if (!res || res.ok === false) { notify('Error', 'Disconnect failed', String((res && res.error) || '')); return; }
-            await refreshSettingsDevices();
+          if (act === 'sync') {
+            const res = await fetch('/api/sync?today=1&supabase=0&deviceId=' + encodeURIComponent(id), { method: 'POST', credentials: 'same-origin' });
+            if (res.status === 401) { notify('Error', 'Unauthorized (please login again).', 'bad'); return; }
+            if (!res.ok) { notify('Error', 'Sync failed', (await res.text()) || ''); return; }
+            notify('Success', 'Device synced.', 'ok');
             await refreshStatus();
             return;
           }
@@ -9390,7 +10107,8 @@ static partial class Program
       const e = existing || {};
       const isEdit = !!(e && e.deviceId);
       const title = isEdit ? 'Edit Device' : 'Add Device';
-      const initialType = String(e.deviceType || preferType || 'WL10').trim() || 'WL10';
+      const rawType = String(e.deviceType || preferType || 'WL10').trim().toUpperCase() || 'WL10';
+      const initialType = rawType === 'WL30' ? 'WL10' : (rawType === 'W30' ? 'W30' : 'WL10');
       const init = {
         deviceType: initialType,
         deviceId: String(e.deviceId || '').trim(),
@@ -9400,9 +10118,9 @@ static partial class Program
         logDir: String(e.logDir || '').trim(),
         filePattern: String(e.filePattern || '').trim(),
       };
-      if (!init.readerMode) init.readerMode = (initialType.toUpperCase() === 'W30') ? 'file' : 'auto';
-      if (!init.devicePort && initialType.toUpperCase() === 'WL10') init.devicePort = '4370';
-      if (!init.filePattern && initialType.toUpperCase() === 'W30') init.filePattern = 'AttendanceLog*.dat';
+      if (!init.readerMode) init.readerMode = 'auto';
+      if (!init.devicePort && (initialType.toUpperCase() === 'WL10' || initialType.toUpperCase() === 'W30')) init.devicePort = '4370';
+      if (!init.filePattern && initialType.toUpperCase() === 'W30' && init.readerMode.toLowerCase() === 'file') init.filePattern = 'AttendanceLog*.dat';
 
       const fields = [
         { key: 'deviceType', label: 'Device Type', kind: 'select', options: ['WL10', 'W30'], default: initialType },
@@ -9448,25 +10166,29 @@ static partial class Program
       function refreshDeviceModalDefaults() {
         const type = String(typeEl && typeEl.value ? typeEl.value : 'WL10').trim().toUpperCase();
         const ip = String(ipEl && ipEl.value ? ipEl.value : '').trim();
+        const rmVal = rmEl ? String(rmEl.value || '').trim().toLowerCase() : '';
         if (rmEl) {
-          if (type === 'W30') rmEl.value = 'file';
-          else if (!rmEl.value || String(rmEl.value).trim().toLowerCase() === 'file') rmEl.value = 'auto';
+          if (!rmVal) rmEl.value = 'auto';
+          else if (type !== 'W30' && rmVal === 'file') rmEl.value = 'auto';
         }
         if (portEl) {
           const raw = String(portEl.value || '').trim();
           if (!raw) {
-            if (type === 'WL10') portEl.value = '4370';
+            if (type === 'WL10' || type === 'W30') portEl.value = '4370';
           }
         }
         if (patEl) {
           const raw = String(patEl.value || '').trim();
-          if (type === 'W30' && !raw) patEl.value = 'AttendanceLog*.dat';
+          const rmNow = rmEl ? String(rmEl.value || '').trim().toLowerCase() : '';
+          if (type === 'W30' && rmNow === 'file' && !raw) patEl.value = 'AttendanceLog*.dat';
         }
         if (dirEl) {
-          dirEl.disabled = type !== 'W30';
+          const rmNow = rmEl ? String(rmEl.value || '').trim().toLowerCase() : '';
+          dirEl.disabled = !(type === 'W30' && rmNow === 'file');
         }
         if (patEl) {
-          patEl.disabled = type !== 'W30';
+          const rmNow = rmEl ? String(rmEl.value || '').trim().toLowerCase() : '';
+          patEl.disabled = !(type === 'W30' && rmNow === 'file');
         }
         if (idEl) {
           const cur = String(idEl.value || '').trim();
@@ -9481,6 +10203,7 @@ static partial class Program
       if (idEl) idEl.addEventListener('input', () => { autoId = false; });
       if (typeEl) typeEl.addEventListener('change', refreshDeviceModalDefaults);
       if (ipEl) ipEl.addEventListener('input', refreshDeviceModalDefaults);
+      if (rmEl) rmEl.addEventListener('change', refreshDeviceModalDefaults);
       refreshDeviceModalDefaults();
     }
 
@@ -9518,68 +10241,76 @@ static partial class Program
       if (sheetMonthlySelectAll) sheetMonthlySelectAll.style.display = isSuperadmin ? '' : 'none';
 
       try {
-        const devBody = el('settingsDevicesBody');
-        if (devBody) {
-          const devs = (j && Array.isArray(j.devices)) ? j.devices : [];
-          if (!devs.length) {
-            devBody.innerHTML = '<tr><td colspan="5" class="muted">No configured devices.</td></tr>';
-          } else {
-            devBody.innerHTML = devs.map(d => {
-              const id = String((d && d.deviceId) || '').trim();
-              const type = String((d && d.type) || '').trim();
-              const ip = String((d && d.ip) || '').trim();
-              const port = String((d && d.port) ?? '').trim();
-              const rm = String((d && d.readerMode) || '').trim();
-              const active = !!(d && d.active);
-              const ipPort = (ip && port) ? (ip + ':' + port) : (ip || port || '-');
-              const logDir = String((d && d.logDir) || '').trim();
-              const w30Dir = (type && type.toUpperCase() === 'W30') ? (logDir || '(Reference)') : '-';
-              const okAt = (d && d.lastOkAtUtc) ? fmt(String(d.lastOkAtUtc || '')) : '-';
-              return '<tr>' +
-                '<td>' + escHtml((type ? type + ' ' : '') + (id || '-')) + (active ? ' <span class="pill">Active</span>' : '') + '</td>' +
-                '<td class="mono">' + escHtml(ipPort) + '</td>' +
-                '<td>' + escHtml(rm || '-') + '</td>' +
-                '<td class="mono">' + escHtml(w30Dir) + '</td>' +
-                '<td class="mono">' + escHtml(okAt) + '</td>' +
-              '</tr>';
-            }).join('');
-          }
-        }
-
         const syncBody = el('settingsDeviceSyncBody');
         if (syncBody) {
           const devs = (j && Array.isArray(j.devices)) ? j.devices : [];
           if (!devs.length) {
-            syncBody.innerHTML = '<tr><td colspan="5" class="muted">No configured devices.</td></tr>';
+            syncBody.innerHTML = '<tr><td colspan="6" class="muted">No configured devices.</td></tr>';
           } else {
-            const activeId = String((j && j.device && j.device.deviceId) || '').trim();
-            const lastSyncAt = (j && j.sync) ? (j.sync.lastSyncFinishedAtUtc || j.sync.lastSyncStartedAtUtc || '') : '';
-            const lastReadAt = (j && j.sync) ? (j.sync.lastLocalWatermarkUtc || '') : '';
+            const displayNameById = {};
+            const idsByType = {};
+            for (const d of devs) {
+              let type = String((d && d.type) || '').trim().toUpperCase() || 'WL10';
+              if (type === 'WL30') type = 'WL10';
+              const id = String((d && d.deviceId) || '').trim();
+              if (!id) continue;
+              if (!idsByType[type]) idsByType[type] = [];
+              idsByType[type].push(id);
+            }
+            for (const type of Object.keys(idsByType)) {
+              const ids = (idsByType[type] || []).slice().sort((a, b) => String(a).localeCompare(String(b)));
+              for (let i = 0; i < ids.length; i++) {
+                displayNameById[ids[i]] = type + '-' + String(i + 1);
+              }
+            }
+
             syncBody.innerHTML = devs.map(d => {
               const id = String((d && d.deviceId) || '').trim();
-              const type = String((d && d.type) || '').trim().toUpperCase();
-              const active = id && activeId && id === activeId;
-              const mode = type === 'W30' ? 'Import' : (type === 'WL10' ? 'Sync Device' : '-');
-              const lastSync = type === 'W30'
-                ? ((d && d.lastProcessedAtUtc) ? fmt(String(d.lastProcessedAtUtc || '')) : '-')
-                : (active ? fmt(String(lastSyncAt || '')) : '-');
-              const lastRead = (type === 'WL10' && active) ? fmt(String(lastReadAt || '')) : '-';
+              let type = String((d && d.type) || '').trim().toUpperCase();
+              if (type === 'WL30') type = 'WL10';
+              const disp = (displayNameById[id] || ((type || 'Device') + '-?'));
+              const rm = String((d && d.readerMode) || '').trim();
+              const mode = rm ? (rm.toLowerCase() === 'com' ? 'COM' : (rm.charAt(0).toUpperCase() + rm.slice(1))) : '-';
+              const okAt = (d && d.lastOkAtUtc) ? fmt(String(d.lastOkAtUtc || '')) : '-';
+              const lastAct = (type === 'W30' && d && d.lastProcessedAtUtc) ? fmt(String(d.lastProcessedAtUtc || '')) : okAt;
+
               let notes = '';
               if (type === 'W30') {
                 const c = (d && Number.isFinite(Number(d.processedFilesCount))) ? Number(d.processedFilesCount) : 0;
                 const pat = String((d && d.filePattern) || '').trim();
                 notes = 'Processed files: ' + String(c) + (pat ? (' • ' + pat) : '');
-              } else if (type === 'WL10' && active) {
-                notes = 'Read punches: ' + String((j && j.sync && (j.sync.lastRunPunchCount ?? 0)) ?? 0) + ' • Total cached: ' + String((j && j.sync && (j.sync.deviceRecordsTotal ?? 0)) ?? 0);
+              } else if (type === 'WL10') {
+                notes = 'File: 1_attlog.dat • Cached records: ' + String((j && j.sync && (j.sync.deviceRecordsTotal ?? 0)) ?? 0);
               }
+
               return '<tr>' +
-                '<td>' + escHtml((type ? type + ' ' : '') + (id || '-')) + (active ? ' <span class="pill">Active</span>' : '') + '</td>' +
-                '<td>' + escHtml(mode) + '</td>' +
-                '<td class="mono">' + escHtml(lastSync) + '</td>' +
-                '<td class="mono">' + escHtml(lastRead) + '</td>' +
-                '<td class="mono">' + escHtml(notes || '-') + '</td>' +
+                '<td><div class="twoRowText">' + escHtml(disp) + '</div></td>' +
+                '<td><div class="twoRowText">' + escHtml(type || '-') + '</div></td>' +
+                '<td><div class="twoRowText">' + escHtml(mode) + '</div></td>' +
+                '<td class="mono"><div class="twoRowText">' + escHtml(lastAct || '-') + '</div></td>' +
+                '<td class="mono"><div class="twoRowText">' + escHtml(notes || '-') + '</div></td>' +
+                '<td><div class="actionIcons"><button class="btn sm primary" type="button" data-devsync-action="sync" data-dev-id="' + escHtml(id) + '">Sync</button></div></td>' +
               '</tr>';
             }).join('');
+
+            if (!settingsDeviceSyncWired) {
+              settingsDeviceSyncWired = true;
+              syncBody.addEventListener('click', async (ev) => {
+                const btn = ev.target && ev.target.closest ? ev.target.closest('button[data-devsync-action]') : null;
+                if (!btn) return;
+                const act = String(btn.getAttribute('data-devsync-action') || '').trim();
+                const id = String(btn.getAttribute('data-dev-id') || '').trim();
+                if (!act || !id) return;
+                ev.preventDefault();
+                if (act === 'sync') {
+                  const res = await fetch('/api/sync?today=1&supabase=0&deviceId=' + encodeURIComponent(id), { method: 'POST', credentials: 'same-origin' });
+                  if (res.status === 401) { notify('Error', 'Unauthorized (please login again).', 'bad'); return; }
+                  if (!res.ok) { notify('Error', 'Sync failed', (await res.text()) || ''); return; }
+                  notify('Success', 'Device synced.', 'ok');
+                  await refreshStatus();
+                }
+              });
+            }
           }
         }
       } catch { }
@@ -9587,6 +10318,8 @@ static partial class Program
       const ipEl = el('ip'); if (ipEl) ipEl.textContent = j.device.ip;
       const portEl = el('port'); if (portEl) portEl.textContent = j.device.port;
       const deviceIdEl = el('deviceId'); if (deviceIdEl) deviceIdEl.textContent = j.device.deviceId;
+      settingsDevicesActiveId = String((j && j.device && j.device.deviceId) || '').trim();
+      if (settingsDevices && settingsDevices.length) renderSettingsDevices();
       const readerModeEl = el('readerMode'); if (readerModeEl) {
         const raw = String(j.device.readerMode || '').trim();
         if (!raw) readerModeEl.textContent = '-';
@@ -9701,15 +10434,18 @@ static partial class Program
         const bestLabel = (j.pc && j.pc.bestLabel) ? String(j.pc.bestLabel || '').trim() : '';
         const bestName = (j.pc && j.pc.bestInterfaceName) ? String(j.pc.bestInterfaceName || '').trim() : '';
         const best = (j.pc && j.pc.bestIpv4) ? String(j.pc.bestIpv4) : '';
+        const wifiSsid = (j.pc && j.pc.wifiSsid) ? String(j.pc.wifiSsid || '').trim() : '';
         const iface = bestName || (bestLabel.includes(':') ? bestLabel.split(':')[0] : '');
-        const desktopLine = 'Desktop IP: ' + (bestLabel || best || '-');
+        const desktopLine = 'Desktop IP: ' + (best || '-');
         const ifaceLine = 'Active Network: ' + (iface || '-');
+        const wifiLine = wifiSsid ? ('Wi-Fi: ' + wifiSsid) : '';
         const dashPort = (j.dashboard && j.dashboard.port) ? String(j.dashboard.port) : (window.location.port || '5099');
         const dashHost = best || '127.0.0.1';
         const dashLine = 'Dashboard URL: http://' + dashHost + ':' + dashPort + '/';
         try { if (best) localStorage.setItem('wl10dash.bestIpv4', best); } catch { }
         desktopInfo.innerHTML =
           '<li>' + escHtml(ifaceLine) + '</li>' +
+          (wifiLine ? ('<li>' + escHtml(wifiLine) + '</li>') : '') +
           '<li>' + escHtml(desktopLine) + '</li>' +
           '<li>' + escHtml(dashLine) + '</li>';
       }
@@ -9847,7 +10583,15 @@ static partial class Program
           }
           const raw = (initialValues && (initialValues[f.key] ?? null) !== null) ? String(initialValues[f.key]) : '';
           const v = raw || String(f.default || '');
-          if (v) sel.value = v;
+          if (v) {
+            const exact = Array.from(sel.options || []).some(o => String(o && o.value) === String(v));
+            if (exact) sel.value = v;
+            else {
+              const vv = String(v).toLowerCase();
+              const match = Array.from(sel.options || []).find(o => String(o && o.value).toLowerCase() === vv);
+              if (match) sel.value = match.value;
+            }
+          }
           if (f.disabled) sel.disabled = true;
           ctrl = sel;
         } else if (kind === 'datalist') {
@@ -12269,23 +13013,34 @@ static partial class Program
     const devRefreshBtn = el('devRefresh');
     if (devRefreshBtn) devRefreshBtn.addEventListener('click', async () => {
       const pick = getRawDevicePick();
-      if (pick.toUpperCase().startsWith('W30-')) {
-        notify('Info', 'W30 uses file import. Copy AttendanceLog*.dat to the Reference folder then use Sync Database.', '');
-        return;
-      }
       devRefreshBtn.disabled = true;
       try {
-        logActivity('Raw Data / Device Records', 'Refreshing from device...');
-        const res = await fetch('/api/sync?today=1&supabase=0', { method: 'POST', credentials: 'same-origin' });
-        if (res.status === 401) {
-          logActivity('Raw Data / Device Records', 'Unauthorized. Please reload and login again.', 'ERR');
-          notify('Error', 'Unauthorized (please login again).', 'bad');
-        } else if (!res.ok) {
-          logActivity('Raw Data / Device Records', 'Refresh failed: ' + (await res.text()), 'ERR');
-          notify('Error', 'Sync Device failed (see Activity Log).', 'bad');
+        if (pick && pick !== 'all') {
+          logActivity('Raw Data / Device Records', 'Syncing ' + pick + '...');
+          const res = await fetch('/api/sync?today=1&supabase=0&deviceId=' + encodeURIComponent(pick), { method: 'POST', credentials: 'same-origin' });
+          if (res.status === 401) {
+            logActivity('Raw Data / Device Records', 'Unauthorized. Please reload and login again.', 'ERR');
+            notify('Error', 'Unauthorized (please login again).', 'bad');
+          } else if (!res.ok) {
+            logActivity('Raw Data / Device Records', 'Refresh failed: ' + (await res.text()), 'ERR');
+            notify('Error', 'Sync Device failed (see Activity Log).', 'bad');
+          } else {
+            logActivity('Raw Data / Device Records', 'Refresh complete.', 'OK');
+            notify('Success', 'Device synced.', 'ok');
+          }
         } else {
-          logActivity('Raw Data / Device Records', 'Refresh complete.', 'OK');
-          notify('Success', 'Device synced.', 'ok');
+          logActivity('Raw Data / Device Records', 'Syncing all devices...');
+          const res = await fetch('/api/sync?today=1&supabase=0&deviceId=all', { method: 'POST', credentials: 'same-origin' });
+          if (res.status === 401) {
+            logActivity('Raw Data / Device Records', 'Unauthorized. Please reload and login again.', 'ERR');
+            notify('Error', 'Unauthorized (please login again).', 'bad');
+          } else if (!res.ok) {
+            logActivity('Raw Data / Device Records', 'Refresh failed: ' + (await res.text()), 'ERR');
+            notify('Error', 'Sync Device failed (see Activity Log).', 'bad');
+          } else {
+            logActivity('Raw Data / Device Records', 'Refresh complete.', 'OK');
+            notify('Success', 'Devices synced.', 'ok');
+          }
         }
       } finally {
         devRefreshBtn.disabled = false;
@@ -12295,6 +13050,32 @@ static partial class Program
       await refreshDeviceRecords();
       await refreshDbRecords();
       await refreshAnalytics();
+    });
+
+    const devCleanupBtn = el('devCleanup');
+    if (devCleanupBtn) devCleanupBtn.addEventListener('click', async () => {
+      devCleanupBtn.disabled = true;
+      try {
+        logActivity('Raw Data / Device Records', 'Cleaning WL10 export file (removing wrongly-exported W30 rows)...');
+        const res = await fetch('/api/attlog/cleanup', { method: 'POST', credentials: 'same-origin' });
+        if (res.status === 401) {
+          logActivity('Raw Data / Device Records', 'Unauthorized. Please reload and login again.', 'ERR');
+          notify('Error', 'Unauthorized (please login again).', 'bad');
+        } else if (!res.ok) {
+          const txt = await res.text();
+          logActivity('Raw Data / Device Records', 'Cleanup failed: ' + txt, 'ERR');
+          notify('Error', 'Cleanup failed (see Activity Log).', 'bad');
+        } else {
+          const j = await res.json().catch(() => null);
+          const m1 = 'Removed W30 matches: ' + String((j && j.removedW30Matches) ?? 0);
+          const m2 = 'Removed duplicates: ' + String((j && j.removedDuplicates) ?? 0);
+          logActivity('Raw Data / Device Records', 'Cleanup complete. ' + m1 + ' · ' + m2, 'OK');
+          notify('Success', 'Cleanup complete.', m1 + '\n' + m2);
+        }
+      } finally {
+        devCleanupBtn.disabled = false;
+      }
+      await refreshDeviceRecords();
     });
 
     const dbUpdateSupabaseBtn = el('dbUpdateSupabase');
@@ -12444,7 +13225,7 @@ static partial class Program
         } catch { }
         if (tries >= 60) {
           clearInterval(t);
-          out('Restart requested. If the page does not come back, please start WL10Middleware on this PC.');
+          out('Restart requested. If the page does not come back, please start SHABMiddleware on this PC.');
         }
       }, 1000);
     });

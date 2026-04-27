@@ -1,0 +1,159 @@
+Here’s a **clear, structured way** to communicate all 4 issues so your developer understands both the *problem* and the *expected outcome* without ambiguity:
+
+---
+
+## 🧾 UI / Functional Fix Request — Device Settings Table
+
+### 🔧 1. Column Structure Is Too Fragmented (Needs Consolidation)
+
+**Problem**
+
+* The table currently has too many narrow columns:
+
+  * `Reader | W30 Log Folder | Last OK`
+* This creates:
+
+  * Poor readability
+  * Broken alignment (text wrapping like “W3 0 Log Fold er”)
+  * Wasted horizontal space
+
+**Required Change**
+
+* Merge these 3 columns into **ONE column named: `Status`**
+
+**Expected Layout (inside the Status column):**
+
+```
+Row 1: Reader: auto / file / ...
+Row 2: Last Connection: <value> 
+```
+
+**Important Notes**
+
+* Use **2-line layout inside the same cell**
+* Keep it clean and readable (no wrapping mid-word)
+* If a field is not applicable (e.g. WL10 has no log folder), hide it or show “-”
+
+---
+
+### 🔧 2. Device Name Is Redundant and Confusing
+
+**Problem**
+
+* Current format:
+
+  ```
+  WL10 WL10-192.168.1.170
+  W30 W30-192.168.1.177
+  ```
+* Issues:
+
+  * Device type is repeated twice
+  * IP address is duplicated (already exists in `IP:Port`)
+  * Makes the column unnecessarily long and messy
+
+**Required Change**
+
+* Simplify **Device column** (with identifier):
+
+  ```
+  WL10-1
+  W30-1
+  ```
+
+**Rule**
+
+* ❌ Do NOT include IP address in Device column
+* ✅ IP should exist ONLY in `IP:Port` column
+
+---
+
+### 🔧 3. Remove Device-Specific Column from Shared Table
+
+**Problem**
+
+* Column: `W30 Log Folder`
+* This is:
+
+  * Device-specific (only applies to W30)
+  * Incorrectly placed in a **shared table (WL10 + W30)**
+
+**Why this is wrong**
+
+* Breaks scalability (what if more device types?)
+* Makes UI inconsistent
+* Adds confusion for users
+
+**Required Change**
+
+* ❌ Remove `W30 Log Folder` as a standalone column
+* ✅ Move this setting to:
+
+  * Device **Add/Edit form only**
+
+**Optional**
+
+* If still really needed for visibility → show it inside the new **Status column (line 2)**
+
+---
+
+### 🔧 4. “Active Device” Concept Is Incorrect (Functional Issue)
+
+**Problem**
+
+* Current note:
+
+  > “Active device is the one used for Sync Device and live connection checks”
+
+* This implies:
+
+  * Only ONE device can sync at a time ❌
+
+**Required Behavior**
+
+* System must support:
+
+  * ✅ **Simultaneous connection to multiple devices**
+  * ✅ **Parallel sync (WL10 + W30 at the same time)**
+
+**Required Change**
+
+* Remove or reword this logic:
+
+  * ❌ No single “active device” limitation
+* Replace with:
+
+  * Each device manages its own:
+
+    * Connection status
+    * Sync status
+
+**Expected UX**
+
+* Each row independently shows:
+
+  * Status (connected / disconnected)
+  * Last sync
+* No global “active device” dependency
+
+---
+
+## ✅ Final Expected Table Structure
+
+**Columns should be reduced to something like:**
+
+```
+Device | IP:Port | Status | Actions
+```
+
+---
+
+## 🎯 Acceptance Criteria
+
+* Table is visually clean (no broken/wrapped headers)
+* No redundant data (IP appears only once)
+* No device-specific columns in shared table
+* Status information is grouped logically in one column
+* System supports syncing multiple devices simultaneously (no “active device” restriction)
+
+---

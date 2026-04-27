@@ -8,8 +8,12 @@ if /I "%~1"=="--debug" ( set "RUN_MODE=console" & shift )
 set "FORCE_RESTART="
 if /I "%~1"=="--restart" ( set "FORCE_RESTART=1" & shift )
 if /I "%~1"=="--force" ( set "FORCE_RESTART=1" & shift )
+set "NO_PAUSE="
+if /I "%~1"=="--no-pause" ( set "NO_PAUSE=1" & shift )
 set "OPEN_LINKS="
 if /I "%~1"=="--open-links" ( set "OPEN_LINKS=1" & shift )
+if defined FORCE_RESTART set "NO_PAUSE=1"
+if /I "%RUN_MODE%"=="console" set "NO_PAUSE=1"
 
 set "SHAB_START_VERSION=2026-04-16"
 set "ROOT=%~dp0"
@@ -72,10 +76,10 @@ if not exist "%APP_DIR%\%MW_EXE%" (
   echo If you have the source repo on this PC, run:
   echo   dotnet publish "%ROOT%..\SHAB Attendance Middleware\SHABMiddleware.csproj" -c Release -p:SHAB_BUILD_ARCH=x86 -p:PublishDir="%APP_DIR%\"
   echo.
-  pause
+  if not defined NO_PAUSE pause
   exit /b 1
 )
-set "MW_NAME=%~nMW_EXE%"
+for %%A in ("%MW_EXE%") do set "MW_NAME=%%~nA"
 
 cd /d "%APP_DIR%"
 
@@ -91,6 +95,8 @@ if defined FORCE_RESTART (
 )
 call :CHECK_PORT
 if not errorlevel 1 (
+  call :CHECK_HTTP
+  if errorlevel 1 goto PORT_OCCUPIED
   call :CHECK_RUNNING_PATH
   if defined FORCE_RESTART (
     call :LOG Port is open but an old dashboard process was detected. Restarting...
@@ -102,6 +108,33 @@ if not errorlevel 1 (
   )
 )
 
+goto PORT_CHECK_DONE
+
+:PORT_OCCUPIED
+echo.
+echo ERROR: Port 5099 is already in use, but the dashboard did not respond.
+echo Please stop whatever is using port 5099, then run this again.
+echo.
+call :LOG ERROR: Port 5099 is in use but dashboard did not respond.
+echo Port status:
+netstat -ano | findstr /R /C:":5099 .*LISTENING"
+for /f "tokens=5" %%P in ('netstat -ano ^| findstr /R /C:":5099 .*LISTENING"') do ( set "PORT_PID=%%P" & goto PORT_PID_OK )
+:PORT_PID_OK
+if defined PORT_PID (
+  echo.
+  echo Process using port 5099 (PID=%PORT_PID%):
+  tasklist /fi "pid eq %PORT_PID%"
+  call :LOG Port 5099 PID=%PORT_PID%
+) else (
+  call :LOG Could not determine PID for port 5099.
+)
+echo.
+echo Tip: Run "Stop Dashboard.bat" to stop the dashboard, or close the app shown above.
+echo.
+if not defined NO_PAUSE pause
+exit /b 1
+
+:PORT_CHECK_DONE
 call :CHECK_ZKEMKEEPER
 if not errorlevel 1 goto SDK_OK
 call :IS_ADMIN
@@ -114,15 +147,15 @@ exit /b
 :SDK_INSTALL
 echo ZKTeco SDK not detected. Installing now - requires Administrator...
 call :LOG ZKTeco SDK not detected. Installing now - requires Administrator...
-if not exist "%SDK_INSTALL%" echo ERROR: SDK installer not found: & echo   %SDK_INSTALL% & echo. & pause & exit /b 1
+if not exist "%SDK_INSTALL%" echo ERROR: SDK installer not found: & echo   %SDK_INSTALL% & echo. & if not defined NO_PAUSE pause & exit /b 1
 set "SHAB_SDK_INSTALL_SILENT=1"
 call :RUN_AS_ADMIN "%SDK_INSTALL%"
 set "SHAB_SDK_INSTALL_SILENT="
-if errorlevel 1 echo ERROR: Administrator request was cancelled or blocked. & echo Please run this as Administrator: & echo   %SDK_INSTALL% & echo. & pause & exit /b 1
+if errorlevel 1 echo ERROR: Administrator request was cancelled or blocked. & echo Please run this as Administrator: & echo   %SDK_INSTALL% & echo. & if not defined NO_PAUSE pause & exit /b 1
 call :CHECK_ZKEMKEEPER
 if not errorlevel 1 goto SDK_OK
 if exist "%ZK_TARGET%\zkemkeeper.dll" echo WARNING: ZKTeco SDK dll is present but COM registration was not detected or COM could not be loaded. & echo Device functions may not work until the SDK is registered. & goto SDK_OK
-echo ERROR: ZKTeco SDK install may have failed or was cancelled. & echo Please run this as Administrator: & echo   %SDK_INSTALL% & echo. & pause & exit /b 1
+echo ERROR: ZKTeco SDK install may have failed or was cancelled. & echo Please run this as Administrator: & echo   %SDK_INSTALL% & echo. & if not defined NO_PAUSE pause & exit /b 1
 
 :SDK_OK
 echo ZKTeco SDK detected.
@@ -150,6 +183,7 @@ echo Creating desktop shortcuts...
 call :LOG Creating desktop shortcuts...
 call :CREATE_SHORTCUT
 
+:LAUNCH_SECTION
 echo.
 echo Launching SHAB Attendance Dashboard...
 call :LOG Launching SHAB Attendance Dashboard...
@@ -180,29 +214,69 @@ echo   %MIDDLE_ERR%
 if /I "%RUN_MODE%"=="console" goto RUN_CONSOLE
 
 call :LOG Starting middleware in background...
-if exist "%PS_EXE%" (
-  "%PS_EXE%" -NoProfile -ExecutionPolicy Bypass -Command ^
-    "try { $exe=(Join-Path '%CD%' '%MW_EXE%'); $p=Start-Process -WindowStyle Minimized -WorkingDirectory '%CD%' -FilePath $exe -ArgumentList @('--dashboard','--dashboard-port','5099') -RedirectStandardOutput '%MIDDLE_OUT%' -RedirectStandardError '%MIDDLE_ERR%' -PassThru -ErrorAction Stop; if($p){ Write-Output ('Started PID=' + $p.Id) }; exit 0 } catch { Write-Output ('Start-Process failed: ' + $_.Exception.Message); exit 1 }" >>"%LOG_FILE%" 2>>&1
-  if errorlevel 1 (
-    call :LOG WARNING: Start-Process failed. Falling back to cmd start.
-    goto START_BG_FALLBACK
-  )
-) else (
-  goto START_BG_FALLBACK
-)
+call :LOG Launch attempt 1: PowerShell Start-Process with stdout/stderr redirect
+call :TRY_START_PS_REDIRECT
+if not errorlevel 1 goto STARTED_OK
+
+call :LOG Launch attempt 2: PowerShell Start-Process with stdout/stderr redirect (TEMP)
+set "MIDDLE_OUT=%TEMP%\middleware-stdout.log"
+set "MIDDLE_ERR=%TEMP%\middleware-stderr.log"
+if exist "%MIDDLE_OUT%" del /f /q "%MIDDLE_OUT%" >nul 2>&1
+if exist "%MIDDLE_ERR%" del /f /q "%MIDDLE_ERR%" >nul 2>&1
+type nul > "%MIDDLE_OUT%" 2>nul
+type nul > "%MIDDLE_ERR%" 2>nul
+call :LOG Using stdout log: %MIDDLE_OUT%
+call :LOG Using stderr log: %MIDDLE_ERR%
+call :TRY_START_PS_REDIRECT
+if not errorlevel 1 goto STARTED_OK
+
+call :LOG Launch attempt 3: PowerShell Start-Process without redirect
+call :TRY_START_PS_NO_REDIRECT
+if not errorlevel 1 goto STARTED_OK
+
+call :LOG Launch attempt 4: cmd start with stdout/stderr redirect
+call :TRY_START_CMD
 goto STARTED_OK
 
-:START_BG_FALLBACK
+:TRY_START_PS_REDIRECT
+if not exist "%PS_EXE%" exit /b 1
+"%PS_EXE%" -NoProfile -ExecutionPolicy Bypass -Command ^
+  "try { $exe = Join-Path '%CD%' '%MW_EXE%'; $p = Start-Process -WindowStyle Minimized -WorkingDirectory '%CD%' -FilePath $exe -ArgumentList '--dashboard','--dashboard-port','5099' -RedirectStandardOutput '%MIDDLE_OUT%' -RedirectStandardError '%MIDDLE_ERR%' -PassThru -ErrorAction Stop; Write-Output ('Started PID=' + $p.Id); exit 0 } catch { Write-Output ('Start-Process failed: ' + $_.Exception.GetType().FullName + ' HResult=' + $_.Exception.HResult + ' ' + $_.Exception.Message); exit 1 }" >>"%LOG_FILE%" 2>>&1
+if not errorlevel 1 exit /b 0
+exit /b 1
+
+:TRY_START_PS_NO_REDIRECT
+if not exist "%PS_EXE%" exit /b 1
+"%PS_EXE%" -NoProfile -ExecutionPolicy Bypass -Command ^
+  "try { $exe = Join-Path '%CD%' '%MW_EXE%'; $p = Start-Process -WindowStyle Minimized -WorkingDirectory '%CD%' -FilePath $exe -ArgumentList '--dashboard','--dashboard-port','5099' -PassThru -ErrorAction Stop; Write-Output ('Started PID=' + $p.Id); exit 0 } catch { Write-Output ('Start-Process failed: ' + $_.Exception.GetType().FullName + ' HResult=' + $_.Exception.HResult + ' ' + $_.Exception.Message); exit 1 }" >>"%LOG_FILE%" 2>>&1
+if not errorlevel 1 exit /b 0
+exit /b 1
+
+:TRY_START_CMD
 start "SHAB Attendance Middleware" /min cmd /c "\"%CD%\%MW_EXE%\" --dashboard --dashboard-port 5099 1>\"%MIDDLE_OUT%\" 2>\"%MIDDLE_ERR%\""
-goto STARTED_OK
+exit /b 0
 
 :RUN_CONSOLE
 echo.
 echo Running middleware in foreground (console mode)...
 echo Close this window to stop the dashboard.
 call :LOG Running middleware in foreground (console mode)...
-%MW_EXE% --dashboard --dashboard-port 5099
+if not defined MW_EXE (
+  set "MW_EXE=SHABMiddleware.exe"
+  if not exist "%APP_DIR%\%MW_EXE%" set "MW_EXE=WL10Middleware.exe"
+)
+if not exist "%APP_DIR%\%MW_EXE%" (
+  echo ERROR: Middleware EXE not found in:
+  echo   %APP_DIR%
+  call :LOG ERROR: Middleware EXE not found in: %APP_DIR%
+  echo.
+  if not defined NO_PAUSE pause
+  endlocal & exit /b 1
+)
+pushd "%APP_DIR%" >nul 2>&1
+"%MW_EXE%" --dashboard --dashboard-port 5099
 set "MW_EXIT=%errorlevel%"
+popd >nul 2>&1
 call :LOG Middleware exited (console mode). ExitCode=%MW_EXIT%
 echo.
 echo Middleware exited with code: %MW_EXIT%
@@ -211,32 +285,32 @@ echo   %MIDDLE_OUT%
 echo   %MIDDLE_ERR%
 echo   %LOG_FILE%
 echo.
-pause
+if not defined NO_PAUSE pause
 endlocal & exit /b %MW_EXIT%
 
 :STARTED_OK
 echo Waiting for dashboard to be ready...
-call :LOG Waiting for dashboard to be ready (port 5099)...
+call :LOG Waiting for dashboard to be ready on port 5099.
 timeout /t 2 /nobreak >nul
 call :CHECK_PROC
 if errorlevel 1 goto START_FAILED
 set /a TRIES_MAX=180
-set /a tries=%TRIES_MAX%
+set /a tries=TRIES_MAX
 set /a tick=0
 :WAIT_LOOP
 set /a tick+=1
-if %tick%==1 call :LOG Waiting... (up to 180 seconds)
-if %tick%==5 echo Still waiting... & set /a tick=0
+if "%tick%"=="1" call :LOG Waiting up to 180 seconds
+if "%tick%"=="5" echo Still waiting & set /a tick=0
 call :CHECK_READY
 if not errorlevel 1 set "READY=1" & goto OPEN_BROWSER
 call :CHECK_PROC
-if errorlevel 1 (
-  set /a elapsed=%TRIES_MAX%-%tries%
-  if %elapsed% GEQ 10 (
-    call :LOG Middleware process not detected after %elapsed% seconds.
-    goto START_FAILED
-  )
-)
+if errorlevel 1 goto PROC_MISSING
+goto PROC_OK
+:PROC_MISSING
+set /a elapsed=TRIES_MAX-tries
+if %elapsed% GEQ 10 call :LOG Middleware process not detected after %elapsed% seconds.
+if %elapsed% GEQ 10 goto START_FAILED
+:PROC_OK
 set /a tries-=1
 if %tries% LEQ 0 goto NOT_READY
 timeout /t 1 /nobreak >nul
@@ -254,7 +328,7 @@ if not errorlevel 1 exit /b 0
 exit /b 1
 
 :CHECK_PROC
-tasklist /fi "imagename eq %MW_EXE%" | find /i "%MW_EXE%" >nul 2>&1
+tasklist | find /i "%MW_EXE%" >nul 2>&1
 if not errorlevel 1 exit /b 0
 exit /b 1
 
@@ -307,7 +381,7 @@ call :LOG Desktop path: %DESKTOP_DIR%
 call :LOG HTTP probe:
 call :HTTP_PROBE
 call :LOG Recent crash events (Application log):
-call :LOG_EVENT_ERRORS
+wevtutil qe Application /c:20 /f:text /rd:true /q:"*[System[(EventID=1000 or EventID=1026) and TimeCreated[timediff(@SystemTime) <= 900000]]]" >>"%LOG_FILE%" 2>>&1
 if exist "%LOG_FILE%" echo Log file: & echo   %LOG_FILE% & echo. & start "" notepad.exe "%LOG_FILE%"
 call :LOG Middleware stdout (tail):
 call :TAIL "%MIDDLE_OUT%"
@@ -321,18 +395,32 @@ for %%A in ("%LOG_FILE%") do set "LOG_SIZE=%%~zA"
 for %%A in ("%LOG_FILE%") do set "LOG_SIZE=%%~zA"
 if "%LOG_SIZE%"=="0" echo NOTE: Log file is empty. Windows Defender or SmartScreen may be blocking the middleware EXE. & echo Try: Right-click the EXE in %APP_DIR% ^> Properties ^> Unblock, then run again.
 echo.
-pause
+if not defined NO_PAUSE pause
 echo.
 endlocal
 exit /b 1
 
 :START_FAILED
+if not defined RELOC_TRIED (
+  set "RELOC_TRIED=1"
+  call :LOG Middleware failed to start. Attempting fallback run location (ProgramData)...
+  call :TRY_RELOCATE_APPDIR
+  if not errorlevel 1 goto LAUNCH_SECTION
+)
+if /I not "%RUN_MODE%"=="console" (
+  call :LOG Auto-debug: switching to console mode after start failure.
+  set "RUN_MODE=console"
+  goto RUN_CONSOLE
+)
 echo Middleware process did not start.
 echo This is usually caused by antivirus blocking the EXE, missing permissions, or a missing dependency.
 echo If the log shows "Access is denied", try:
 echo - Right-click %APP_DIR%\%MW_EXE% ^> Properties ^> Unblock
 echo - Run Start Dashboard.bat as Administrator
 call :LOG ERROR: Middleware process did not start.
+call :LOG Security blocks (Defender/AppLocker):
+wevtutil qe "Microsoft-Windows-Windows Defender/Operational" /c:25 /f:text /rd:true /q:"*[System[(EventID=1116 or EventID=1121 or EventID=1123 or EventID=1124 or EventID=5007) and TimeCreated[timediff(@SystemTime) <= 900000]]]" >>"%LOG_FILE%" 2>>&1
+wevtutil qe "Microsoft-Windows-AppLocker/EXE and DLL" /c:25 /f:text /rd:true /q:"*[System[(EventID=8003 or EventID=8004) and TimeCreated[timediff(@SystemTime) <= 900000]]]" >>"%LOG_FILE%" 2>>&1
 call :LOG Middleware stdout (tail):
 call :TAIL "%MIDDLE_OUT%"
 call :LOG Middleware stderr (tail):
@@ -347,15 +435,50 @@ echo   %DESKTOP_DIR%
 echo.
 call :LOG Desktop path: %DESKTOP_DIR%
 call :LOG Recent crash events (Application log):
-call :LOG_EVENT_ERRORS
+wevtutil qe Application /c:20 /f:text /rd:true /q:"*[System[(EventID=1000 or EventID=1026) and TimeCreated[timediff(@SystemTime) <= 900000]]]" >>"%LOG_FILE%" 2>>&1
 if exist "%LOG_FILE%" echo Log file: & echo   %LOG_FILE% & echo. & start "" notepad.exe "%LOG_FILE%"
 for %%A in ("%LOG_FILE%") do set "LOG_SIZE=%%~zA"
 if "%LOG_SIZE%"=="0" echo NOTE: Log file is empty. Windows Defender or SmartScreen may be blocking the middleware EXE. & echo Try: Right-click the EXE in %APP_DIR% ^> Properties ^> Unblock, then run again.
 echo.
-pause
+if not defined NO_PAUSE pause
 echo.
 endlocal
 exit /b 1
+
+:TRY_RELOCATE_APPDIR
+set "PF=%ProgramFiles(x86)%"
+if not defined PF set "PF=%ProgramFiles%"
+set "TARGET_APP_DIR=%PF%\SHAB Attendance System\App\win-x86"
+call :TRY_COPY_APP_TO "%TARGET_APP_DIR%"
+if not errorlevel 1 goto RELOC_OK
+set "TARGET_APP_DIR=%ProgramData%\SHAB Attendance System\App\win-x86"
+call :TRY_COPY_APP_TO "%TARGET_APP_DIR%"
+if errorlevel 1 call :LOG ERROR: Relocate failed for all fallback locations. & exit /b 1
+
+:RELOC_OK
+set "APP_DIR=%TARGET_APP_DIR%"
+set "MW_EXE=SHABMiddleware.exe"
+if not exist "%APP_DIR%\%MW_EXE%" set "MW_EXE=WL10Middleware.exe"
+if not exist "%APP_DIR%\%MW_EXE%" call :LOG ERROR: Middleware EXE not found after relocate. & exit /b 1
+for %%A in ("%MW_EXE%") do set "MW_NAME=%%~nA"
+cd /d "%APP_DIR%"
+call :LOG Fallback app dir active: %APP_DIR%
+call :PREPARE_SECURITY
+exit /b 0
+
+:TRY_COPY_APP_TO
+setlocal EnableExtensions
+set "DEST=%~1"
+call :LOG Fallback target app dir: %DEST%
+if not exist "%DEST%" mkdir "%DEST%" >nul 2>&1
+if not exist "%DEST%" call :LOG ERROR: Could not create fallback app dir. & endlocal & exit /b 1
+call :LOG Copying app files from: %APP_DIR%
+call :LOG Copying app files to:   %DEST%
+xcopy "%APP_DIR%\*" "%DEST%\" /E /I /Y >nul 2>&1
+set "XC=%errorlevel%"
+call :LOG xcopy exit code: %XC%
+if %XC% GEQ 2 call :LOG ERROR: Copy failed. & endlocal & exit /b 1
+endlocal & exit /b 0
 
 :DOTNET_MISSING
 echo.
@@ -369,7 +492,7 @@ echo Download .NET 8 here and install the Windows x86 runtimes:
 echo https://dotnet.microsoft.com/en-us/download/dotnet/8.0
 if defined OPEN_LINKS call :OPEN_URL "https://dotnet.microsoft.com/en-us/download/dotnet/8.0"
 echo.
-pause
+if not defined NO_PAUSE pause
 endlocal
 exit /b 1
 
@@ -391,7 +514,12 @@ exit /b 1
 if not exist "%PS_EXE%" exit /b 0
 setlocal EnableExtensions
 set "EXPECTED=%CD%\%MW_EXE%"
-for /f "usebackq delims=" %%P in (`"%PS_EXE%" -NoProfile -ExecutionPolicy Bypass -Command "$n=@('%MW_NAME%','WL10Middleware','SHABMiddleware') | Select-Object -Unique; foreach($x in $n){ $p=(Get-Process -Name $x -ErrorAction SilentlyContinue | Select-Object -First 1); if($p){ if($p.Path){ Write-Output ($x + '|' + $p.Path) } else { Write-Output ($x + '|') }; break } }"` ) do set "FOUND=%%P"
+set "FOUND="
+set "FOUND_FILE=%TEMP%\shab-dashboard-found.txt"
+del /f /q "%FOUND_FILE%" >nul 2>&1
+"%PS_EXE%" -NoProfile -ExecutionPolicy Bypass -Command ^
+  "$n=@('%MW_NAME%','WL10Middleware','SHABMiddleware') | Select-Object -Unique; foreach($x in $n){ $p=Get-Process -Name $x -ErrorAction SilentlyContinue | Select-Object -First 1; if($p){ $path=''; try { $path=$p.Path } catch { }; Write-Output ($x + '|' + $path); break } }" >"%FOUND_FILE%" 2>nul
+if exist "%FOUND_FILE%" set /p FOUND=<"%FOUND_FILE%"
 if not defined FOUND endlocal & exit /b 0
 for /f "tokens=1* delims=|" %%A in ("%FOUND%") do (
   call :LOG Running process name: %%A
@@ -424,7 +552,7 @@ exit /b 1
 if exist "%PS_EXE%" "%PS_EXE%" -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -Verb RunAs -WorkingDirectory '%ROOT%' -FilePath '%~f0' -ArgumentList '__interactive'" >nul 2>&1 & exit /b 0
 mshta "javascript:var sh=new ActiveXObject('Shell.Application'); sh.ShellExecute('%~f0','__interactive','','runas',1); close();" >nul 2>&1 & exit /b 0
 echo ERROR: Could not request Administrator access automatically.
-pause
+if not defined NO_PAUSE pause
 exit /b 1
 
 :RUN_AS_ADMIN
@@ -437,6 +565,8 @@ if not exist "%PS_EXE%" exit /b 0
 "%PS_EXE%" -NoProfile -ExecutionPolicy Bypass -Command ^
   "$app='%APP_DIR%';" ^
   "Write-Output ('Security prep app path: ' + $app);" ^
+  "try { $mp = Get-MpPreference -ErrorAction SilentlyContinue; if ($mp) { Write-Output ('ControlledFolderAccess=' + $mp.EnableControlledFolderAccess) } } catch { };" ^
+  "try { $c=0; $all = Get-ChildItem -Path $app -Recurse -File -ErrorAction SilentlyContinue; foreach($f in $all){ try { Get-Item -LiteralPath $f.FullName -Stream Zone.Identifier -ErrorAction Stop | Out-Null; $c++ } catch { } }; Write-Output ('ZoneIdentifierFiles=' + $c) } catch { };" ^
   "try { $files = Get-ChildItem -Path $app -Recurse -File -Include *.exe,*.dll,*.bat -ErrorAction SilentlyContinue; foreach($f in $files){ Unblock-File -Path $f.FullName -ErrorAction SilentlyContinue }; Write-Output ('Unblocked files: ' + ($files | Measure-Object).Count) } catch { Write-Output ('Unblock failed: ' + $_.Exception.Message) };" ^
   "try { $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator); Write-Output ('IsAdmin: ' + $isAdmin); if ($isAdmin) { Add-MpPreference -ExclusionPath $app -ErrorAction SilentlyContinue | Out-Null; Write-Output 'Defender exclusion attempted.' } else { Write-Output 'Defender exclusion skipped (not admin).' } } catch { Write-Output ('Defender exclusion failed: ' + $_.Exception.Message) };" ^
   "exit 0" >>"%LOG_FILE%" 2>>&1
@@ -503,6 +633,11 @@ endlocal & exit /b 0
 
 :LOG_EVENT_ERRORS
 wevtutil qe Application /c:20 /f:text /rd:true /q:"*[System[(EventID=1000 or EventID=1026) and TimeCreated[timediff(@SystemTime) <= 900000]]]" >>"%LOG_FILE%" 2>>&1
+exit /b 0
+
+:LOG_SECURITY_BLOCKS
+wevtutil qe "Microsoft-Windows-Windows Defender/Operational" /c:25 /f:text /rd:true /q:"*[System[(EventID=1116 or EventID=1121 or EventID=1123 or EventID=1124 or EventID=5007) and TimeCreated[timediff(@SystemTime) <= 900000]]]" >>"%LOG_FILE%" 2>>&1
+wevtutil qe "Microsoft-Windows-AppLocker/EXE and DLL" /c:25 /f:text /rd:true /q:"*[System[(EventID=8003 or EventID=8004) and TimeCreated[timediff(@SystemTime) <= 900000]]]" >>"%LOG_FILE%" 2>>&1
 exit /b 0
 
 :OPEN_URL

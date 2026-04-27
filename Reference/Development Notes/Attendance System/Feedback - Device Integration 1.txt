@@ -1,0 +1,47 @@
+🔍 Observation 1: Incorrect Root Cause Attribution
+
+Problem
+
+The explanation given earlier linked the issue to WL10 device, but this is incorrect.
+WL10 is currently offline, so it cannot be the source of the records.
+The data shown is actually coming from W30 device, but is being mixed or misattributed.
+
+Evidence
+
+WL10-192.168.1.170  2  2026-04-26 01:49:08
+W30-192.168.1.177  8  2026-04-26 01:49:08
+WL10-192.168.1.170  1  2026-04-26 01:47:06
+W30-192.168.1.177  7  2026-04-26 01:47:06
+
+Why this is wrong
+
+WL10 should not produce any new logs (device offline).
+Yet WL10 entries appear interleaved with W30 data.
+This suggests:
+Device source is incorrectly assigned, OR
+Data is duplicated/mapped across devices.
+
+Expected behavior
+
+Only W30 records should appear.
+No WL10 entries should be present when it is offline.
+Each record must correctly reflect its true source device.
+🔍 Observation 2: Duplicate / Incorrect Staff ID Mapping
+
+Problem
+
+Each punch record appears duplicated with different Staff IDs.
+The duplicates are not valid — one of them is incorrect.
+
+Example
+
+W30  StaffID 2  01:49:08
+W30  StaffID 8  01:49:08  ← correct
+
+W30  StaffID 1  01:47:06
+W30  StaffID 7  01:47:06  ← correct
+
+Key issue
+
+The system is generating extra records with wrong Staff IDs (1, 2).
+The correct IDs are 7 and 8, not 1 and 2.

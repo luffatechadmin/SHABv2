@@ -856,3 +856,480 @@ At line:1 char:4
  
 [Sat 04/25/2026  5:45:21.53] Waiting for dashboard to be ready (port 5099)...
 [Sat 04/25/2026  5:45:21.55] Waiting... (up to 180 seconds)
+[Sat 04/25/2026  5:58:43.01] ============================================================
+[Sat 04/25/2026  5:58:43.02] SHAB Attendance System - Start Dashboard
+[Sat 04/25/2026  5:58:43.05] ERROR: Middleware process did not start.
+[Sat 04/25/2026  5:58:43.06] Security blocks (Defender/AppLocker):
+[Sat 04/25/2026  5:58:43.27] Middleware stdout (tail):
+[Sat 04/25/2026  5:58:43.54] Middleware stderr (tail):
+[Sat 04/25/2026  5:58:43.81] Desktop path: C:\Users\admin\Desktop
+[Sat 04/25/2026  5:58:43.81] Recent crash events (Application log):
+[Sat 04/25/2026  5:58:51.24] Root: C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\
+[Sat 04/25/2026  5:58:51.25] AppDir: C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\App\win-x86
+[Sat 04/25/2026  5:58:51.27] LogFile: C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\Logs\attendance-middleware.log
+[Sat 04/25/2026  5:58:51.28] MiddlewareStdout: C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\Logs\middleware-stdout.log
+[Sat 04/25/2026  5:58:51.30] MiddlewareStderr: C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\Logs\middleware-stderr.log
+[Sat 04/25/2026  5:58:51.33] Starting middleware in background...
+[Sat 04/25/2026  5:58:51.34] Launch attempt 1: PowerShell Start-Process with stdout/stderr redirect (Logs or TEMP
+Start-Process failed: This command cannot be run due to the error: Access is denied.
+[Sat 04/25/2026  5:58:51.81] Middleware stdout (tail):
+[Sat 04/25/2026  5:58:52.07] Middleware stderr (tail):
+[Sat 04/25/2026  5:58:52.33] Desktop path: C:\Users\admin\Desktop
+[Sat 04/25/2026  5:58:52.34] Recent crash events (Application log):
+[Sat 04/25/2026  9:13:46.90] ============================================================
+[Sat 04/25/2026  9:13:46.91] SHAB Attendance System - Start Dashboard
+[Sat 04/25/2026  9:13:46.93] Version: 2026-04-16
+[Sat 04/25/2026  9:13:47.24] AppDir: C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\App\win-x86
+[Sat 04/25/2026  9:13:47.25] User: admin
+[Sat 04/25/2026  9:13:47.55] Middleware stdout (tail):
+[Sat 04/25/2026  9:13:47.96] Middleware stderr (tail):
+[Sat 04/25/2026  9:14:10.21] RunMode: background
+[Sat 04/25/2026  9:14:14.43] ZKTeco SDK detected (or dll present).
+[Sat 04/25/2026  9:14:14.44] Preparing app files and security settings...
+Security prep app path: C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\App\win-x86
+ControlledFolderAccess=0
+ZoneIdentifierFiles=0
+Unblocked files: 16
+IsAdmin: False
+Defender exclusion skipped (not admin).
+[Sat 04/25/2026  9:14:15.54] Starting middleware in background...
+[Sat 04/25/2026  9:14:15.55] Launch attempt 1: PowerShell Start-Process with stdout/stderr redirect (Logs or TEMP
+Start-Process failed: This command cannot be run due to the error: Access is denied.
+Start-Process failed: This command cannot be run due to the error: Access is denied.
+[Sat 04/25/2026  9:14:16.30] Launch attempt 3: PowerShell Start-Process without redirect
+Start-Process failed: This command cannot be run completely because the system cannot find all the information required.
+[Sat 04/25/2026  9:14:16.79] Launch attempt 4: cmd start with stdout/stderr redirect (TEMP
+[Sat 04/25/2026  9:14:16.82] Waiting for dashboard to be ready (port 5099)...
+[Sat 04/25/2026 17:58:59.42] ============================================================
+[Sat 04/25/2026 17:58:59.42] SHAB Attendance System - Start Dashboard
+[Sat 04/25/2026 17:58:59.45] Version: 2026-04-16
+[Sat 04/25/2026 17:58:59.74] AppDir: C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\App\win-x86
+[Sat 04/25/2026 17:58:59.75] User: admin
+[Sat 04/25/2026 17:59:00.04] Middleware stdout (tail):
+[Sat 04/25/2026 17:59:00.53] Middleware stderr (tail):
+[Sat 04/25/2026 17:59:27.43] RunMode: background
+[Sat 04/25/2026 17:59:29.76] ZKTeco SDK detected (or dll present).
+[Sat 04/25/2026 17:59:29.76] Preparing app files and security settings...
+Security prep app path: C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\App\win-x86
+ControlledFolderAccess=0
+ZoneIdentifierFiles=0
+Unblocked files: 16
+IsAdmin: True
+Defender exclusion attempted.
+[Sat 04/25/2026 17:59:31.11] Starting middleware in background...
+[Sat 04/25/2026 17:59:31.12] Launch attempt 1: PowerShell Start-Process with stdout/stderr redirect (Logs or TEMP
+Start-Process failed: This command cannot be run due to the error: Access is denied.
+Start-Process failed: This command cannot be run due to the error: Access is denied.
+[Sat 04/25/2026 17:59:31.81] Launch attempt 3: PowerShell Start-Process without redirect
+Start-Process failed: This command cannot be run completely because the system cannot find all the information required.
+[Sat 04/25/2026 17:59:32.20] Launch attempt 4: cmd start with stdout/stderr redirect (TEMP
+[Sat 04/25/2026 17:59:32.24] Waiting for dashboard to be ready (port 5099)...
+[Sat 04/25/2026 18:01:10.52] ============================================================
+[Sat 04/25/2026 18:01:10.52] SHAB Attendance System - Start Dashboard
+[Sat 04/25/2026 18:01:10.55] Version: 2026-04-16
+[Sat 04/25/2026 18:01:10.87] AppDir: C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\App\win-x86
+[Sat 04/25/2026 18:01:10.87] User: admin
+[Sat 04/25/2026 18:01:11.28] Middleware stdout (tail):
+[Sat 04/25/2026 18:01:11.67] Middleware stderr (tail):
+[Sat 04/25/2026 18:01:17.55] RunMode: background
+[Sat 04/25/2026 18:01:19.92] ZKTeco SDK detected (or dll present).
+[Sat 04/25/2026 18:01:19.93] Preparing app files and security settings...
+Security prep app path: C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\App\win-x86
+ControlledFolderAccess=0
+ZoneIdentifierFiles=0
+Unblocked files: 16
+IsAdmin: True
+Defender exclusion attempted.
+[Sat 04/25/2026 18:01:21.01] Starting middleware in background...
+[Sat 04/25/2026 18:01:21.02] Launch attempt 1: PowerShell Start-Process with stdout/stderr redirect (Logs or TEMP
+Start-Process failed: This command cannot be run due to the error: Access is denied.
+Start-Process failed: This command cannot be run due to the error: Access is denied.
+[Sat 04/25/2026 18:01:21.68] Launch attempt 3: PowerShell Start-Process without redirect
+Start-Process failed: This command cannot be run completely because the system cannot find all the information required.
+[Sat 04/25/2026 18:01:22.06] Launch attempt 4: cmd start with stdout/stderr redirect (TEMP
+[Sat 04/25/2026 18:01:22.09] Waiting for dashboard to be ready (port 5099)...
+[Sat 04/25/2026 18:12:00.30] ============================================================
+[Sat 04/25/2026 18:12:00.31] SHAB Attendance System - Start Dashboard
+[Sat 04/25/2026 18:12:00.34] Version: 2026-04-16
+[Sat 04/25/2026 18:12:00.36] Using stderr log: C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\Logs\middleware-stderr.log
+Start-Process failed: System.InvalidOperationException HResult=-2146233079 This command cannot be run due to the error: Access is denied.
+[Sat 04/25/2026 18:12:00.73] Launch attempt 3: PowerShell Start-Process without redirect
+Start-Process failed: System.InvalidOperationException HResult=-2146233079 This command cannot be run completely because the system cannot find all the information required.
+[Sat 04/25/2026 18:12:01.14] Launch attempt 4: cmd start with stdout/stderr redirect
+[Sat 04/25/2026 18:12:01.17] Waiting for dashboard to be ready (port 5099)...
+[Sat 04/25/2026 18:12:20.10] ============================================================
+[Sat 04/25/2026 18:12:20.11] SHAB Attendance System - Start Dashboard
+[Sat 04/25/2026 18:12:20.12] Version: 2026-04-16
+[Sat 04/25/2026 18:12:20.14] Using stderr log: C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\Logs\middleware-stderr.log
+Start-Process failed: System.InvalidOperationException HResult=-2146233079 This command cannot be run due to the error: Access is denied.
+[Sat 04/25/2026 18:12:20.49] Launch attempt 3: PowerShell Start-Process without redirect
+Start-Process failed: System.InvalidOperationException HResult=-2146233079 This command cannot be run completely because the system cannot find all the information required.
+[Sat 04/25/2026 18:12:20.98] Launch attempt 4: cmd start with stdout/stderr redirect
+[Sat 04/25/2026 18:12:21.01] Waiting for dashboard to be ready (port 5099)...
+[Sat 04/25/2026 19:13:35.97] ============================================================
+[Sat 04/25/2026 19:13:35.97] SHAB Attendance System - Start Dashboard
+[Sat 04/25/2026 19:13:36.01] Version: 2026-04-16
+[Sat 04/25/2026 19:13:36.03] Using stderr log: C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\Logs\middleware-stderr.log
+Start-Process failed: System.InvalidOperationException HResult=-2146233079 This command cannot be run due to the error: Access is denied.
+[Sat 04/25/2026 19:13:36.45] Launch attempt 3: PowerShell Start-Process without redirect
+Start-Process failed: System.InvalidOperationException HResult=-2146233079 This command cannot be run completely because the system cannot find all the information required.
+[Sat 04/25/2026 19:13:37.01] Launch attempt 4: cmd start with stdout/stderr redirect
+[Sat 04/25/2026 19:13:37.05] Waiting for dashboard to be ready (port 5099)...
+[Sun 04/26/2026 19:26:42.84] ============================================================
+[Sun 04/26/2026 19:26:42.87] SHAB Attendance System - Start Dashboard
+[Sun 04/26/2026 19:26:42.88] Version: 2026-04-16
+[Sun 04/26/2026 19:26:42.90] Using stderr log: C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\Logs\middleware-stderr.log
+Start-Process failed: System.InvalidOperationException HResult=-2146233079 This command cannot be run due to the error: Access is denied.
+[Sun 04/26/2026 19:26:43.29] Launch attempt 3: PowerShell Start-Process without redirect
+Start-Process failed: System.InvalidOperationException HResult=-2146233079 This command cannot be run completely because the system cannot find all the information required.
+[Sun 04/26/2026 19:26:43.78] Launch attempt 4: cmd start with stdout/stderr redirect
+[Sun 04/26/2026 19:28:57.39] ============================================================
+[Sun 04/26/2026 19:28:57.40] SHAB Attendance System - Start Dashboard
+[Sun 04/26/2026 19:28:57.42] Version: 2026-04-16
+[Sun 04/26/2026 19:28:57.44] Using stderr log: C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\Logs\middleware-stderr.log
+Start-Process failed: System.InvalidOperationException HResult=-2146233079 This command cannot be run due to the error: Access is denied.
+[Sun 04/26/2026 19:28:57.81] Launch attempt 3: PowerShell Start-Process without redirect
+Start-Process failed: System.InvalidOperationException HResult=-2146233079 This command cannot be run completely because the system cannot find all the information required.
+[Sun 04/26/2026 19:28:58.46] Launch attempt 4: cmd start with stdout/stderr redirect
+[Sun 04/26/2026 19:30:32.97] Security blocks (Defender/AppLocker):
+[Sun 04/26/2026 19:30:33.16] Middleware stdout (tail):
+[Sun 04/26/2026 19:30:33.47] Middleware stderr (tail):
+[Sun 04/26/2026 19:30:33.78] Desktop path: C:\Users\admin\Desktop
+[Sun 04/26/2026 19:30:33.79] Fallback app dir active: C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\App\win-x86
+Security prep app path: C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\App\win-x86
+ControlledFolderAccess=0
+ZoneIdentifierFiles=0
+Unblocked files: 16
+IsAdmin: False
+Defender exclusion skipped (not admin).
+[Sun 04/26/2026 19:32:28.53] Security blocks (Defender/AppLocker):
+[Sun 04/26/2026 19:32:28.70] Middleware stdout (tail):
+[Sun 04/26/2026 19:32:28.99] Middleware stderr (tail):
+[Sun 04/26/2026 19:32:29.31] Desktop path: C:\Users\admin\Desktop
+[Sun 04/26/2026 19:32:29.32] Fallback app dir active: C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\App\win-x86
+Security prep app path: C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\App\win-x86
+ControlledFolderAccess=0
+ZoneIdentifierFiles=0
+Unblocked files: 16
+IsAdmin: False
+Defender exclusion skipped (not admin).
+[Sun 04/26/2026 19:32:34.51] Middleware stdout (tail):
+[Sun 04/26/2026 19:32:34.79] Middleware stderr (tail):
+[Sun 04/26/2026 19:32:35.09] Desktop path: C:\Users\admin\Desktop
+[Sun 04/26/2026 19:32:35.10] Fallback app dir active: C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\App\win-x86
+Security prep app path: C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\App\win-x86
+ControlledFolderAccess=0
+ZoneIdentifierFiles=0
+Unblocked files: 16
+IsAdmin: False
+Defender exclusion skipped (not admin).
+[Sun 04/26/2026 19:32:39.20] Version: 2026-04-16
+[Sun 04/26/2026 20:15:42.23] Middleware:  --dashboard --dashboard-port 5099
+[Sun 04/26/2026 20:15:42.25] LogFile: C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\Logs\attendance-middleware.log
+[Sun 04/26/2026 20:15:42.27] MiddlewareStdout: C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\Logs\middleware-stdout.log
+[Sun 04/26/2026 20:15:42.28] MiddlewareStderr: C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\Logs\middleware-stderr.log
+[Sun 04/26/2026 20:15:42.50] Using stderr log: C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\Logs\middleware-stderr.log
+Start-Process failed: System.InvalidOperationException HResult=-2146233079 This command cannot be run due to the error: Access is denied.
+[Sun 04/26/2026 20:15:43.27] Launch attempt 3: PowerShell Start-Process without redirect
+Start-Process failed: System.InvalidOperationException HResult=-2146233079 This command cannot be run completely because the system cannot find all the information required.
+[Sun 04/26/2026 20:15:44.11] Launch attempt 4: cmd start with stdout/stderr redirect
+[Sun 04/26/2026 20:15:44.22] Waiting for dashboard to be ready (port 5099)...
+[Sun 04/26/2026 20:15:46.45] Middleware exited immediately after start attempt within 2 seconds.
+[Sun 04/26/2026 20:16:12.67] Middleware:  --dashboard --dashboard-port 5099
+[Sun 04/26/2026 20:16:12.69] LogFile: C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\Logs\attendance-middleware.log
+[Sun 04/26/2026 20:16:12.71] MiddlewareStdout: C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\Logs\middleware-stdout.log
+[Sun 04/26/2026 20:16:12.73] MiddlewareStderr: C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\Logs\middleware-stderr.log
+[Sun 04/26/2026 20:16:12.93] Running process path: B
+Security prep app path: C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\App\win-x86
+ControlledFolderAccess=0
+ZoneIdentifierFiles=0
+Unblocked files: 16
+IsAdmin: False
+Defender exclusion skipped (not admin).
+[Sun 04/26/2026 20:23:04.74] Middleware:  --dashboard --dashboard-port 5099
+[Sun 04/26/2026 20:23:04.75] LogFile: C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\Logs\attendance-middleware.log
+[Sun 04/26/2026 20:23:05.08] MiddlewareStderr: C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\Logs\middleware-stderr.log
+Security prep app path: C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\App\win-x86
+ControlledFolderAccess=0
+ZoneIdentifierFiles=0
+Unblocked files: 16
+IsAdmin: False
+Defender exclusion skipped (not admin).
+Start-Process failed: System.InvalidOperationException HResult=-2146233079 This command cannot be run due to the error: Access is denied.
+[Sun 04/26/2026 20:23:07.26] ERROR: Could not create fallback app dir.
+Start-Process failed: System.InvalidOperationException HResult=-2146233079 This command cannot be run completely because the system cannot find all the information required.
+[Sun 04/26/2026 20:23:08.26] Launch attempt 4: cmd start with stdout/stderr redirect
+[Sun 04/26/2026 20:23:08.37] Waiting for dashboard to be ready on port 5099.
+INFO: No tasks are running which match the specified criteria.
+INFO: No tasks are running which match the specified criteria.
+[Sun 04/26/2026 20:28:28.66] Desktop path: C:\Users\admin\Desktop
+[Sun 04/26/2026 20:28:28.68] HTTP probe:
+HTTP_ERROR System.Net.WebException The operation has timed out.
+[Sun 04/26/2026 20:28:31.44] Recent crash events (Application log):
+A syntax error occurred at position 79
+
+Failed to open event query.
+The specified query is invalid.
+[Sun 04/26/2026 20:28:31.54] Middleware stdout (tail):
+[Sun 04/26/2026 20:28:32.43] Middleware stderr (tail):
+INFO: No tasks are running which match the specified criteria.
+INFO: No tasks are running which match the specified criteria.
+[Sun 04/26/2026 20:33:05.49] Desktop path: C:\Users\admin\Desktop
+[Sun 04/26/2026 20:33:05.51] HTTP probe:
+HTTP_ERROR System.Net.WebException The operation has timed out.
+[Sun 04/26/2026 20:33:08.19] Recent crash events (Application log):
+A syntax error occurred at position 79
+
+Failed to open event query.
+The specified query is invalid.
+[Sun 04/26/2026 20:33:08.28] Middleware stdout (tail):
+[Sun 04/26/2026 20:33:09.19] Middleware stderr (tail):
+[Sun 04/26/2026 20:33:09.77] LogFile: C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\Logs\attendance-middleware.log
+[Sun 04/26/2026 20:33:09.78] MiddlewareStdout: C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\Logs\middleware-stdout.log
+[Sun 04/26/2026 20:33:09.81] MiddlewareStderr: C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\Logs\middleware-stderr.log
+[Sun 04/26/2026 20:33:10.01] Using stderr log: C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\Logs\middleware-stderr.log
+Start-Process failed: System.InvalidOperationException HResult=-2146233079 This command cannot be run due to the error: Access is denied.
+[Sun 04/26/2026 20:33:10.66] ERROR: Middleware EXE not found after relocate.
+Start-Process failed: System.InvalidOperationException HResult=-2146233079 This command cannot be run due to the error: The system cannot find the file specified.
+[Sun 04/26/2026 20:33:11.30] Launch attempt 4: cmd start with stdout/stderr redirect
+[Sun 04/26/2026 20:33:11.41] Waiting for dashboard to be ready on port 5099.
+[Sun 04/26/2026 20:36:41.90] Security blocks (Defender/AppLocker):
+[Sun 04/26/2026 20:36:41.93] Middleware stdout (tail):
+[Sun 04/26/2026 20:36:42.48] Middleware stderr (tail):
+[Sun 04/26/2026 20:36:43.03] Desktop path: C:\Users\admin\Desktop
+[Sun 04/26/2026 20:36:43.05] Recent crash events (Application log):
+A syntax error occurred at position 79
+
+Failed to open event query.
+The specified query is invalid.
+[Sun 04/26/2026 20:36:43.18] Middleware stdout (tail):
+[Sun 04/26/2026 20:36:44.07] Middleware stderr (tail):
+[Sun 04/26/2026 20:36:44.61] Desktop path: C:\Users\admin\Desktop
+[Sun 04/26/2026 20:36:44.63] Recent crash events (Application log):
+A syntax error occurred at position 79
+
+Failed to open event query.
+The specified query is invalid.
+[Sun 04/26/2026 20:36:44.73] Version: 2026-04-16
+[Sun 04/26/2026 20:36:44.75] Root: C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\
+[Sun 04/26/2026 20:41:58.16] Fallback target app dir: C:\Program Files (x86)\SHAB Attendance System\App\win-x86
+[Sun 04/26/2026 20:41:58.18] ERROR: Could not create fallback app dir.
+[Sun 04/26/2026 20:41:58.21] Fallback target app dir: C:\ProgramData\SHAB Attendance System\App\win-x86
+[Sun 04/26/2026 20:41:58.23] ERROR: Could not create fallback app dir.
+[Sun 04/26/2026 20:41:58.25] ERROR: Relocate failed for all fallback locations.
+[Sun 04/26/2026 20:41:58.27] Auto-debug: switching to console mode after start failure.
+[Sun 04/26/2026 20:41:58.30] Running middleware in foreground (console mode)...
+[Sun 04/26/2026 20:41:58.31] Middleware exited (console mode). ExitCode=9009
+A syntax error occurred at position 79
+
+Failed to open event query.
+The specified query is invalid.
+[Sun 04/26/2026 20:41:58.44] Root: C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\
+[Sun 04/26/2026 20:41:58.46] AppDir: C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\App\win-x86
+[Sun 04/26/2026 20:41:58.51] LogFile: C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\Logs\attendance-middleware.log
+[Sun 04/26/2026 20:41:58.56] Fallback app dir active: C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\App\win-x86
+Security prep app path: C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\App\win-x86
+ControlledFolderAccess=0
+ZoneIdentifierFiles=0
+Unblocked files: 16
+IsAdmin: False
+Defender exclusion skipped (not admin).
+[Sun 04/26/2026 20:42:00.60] MiddlewareStderr: C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\Logs\middleware-stderr.log
+[Sun 04/26/2026 20:42:00.79] Running middleware in foreground (console mode)...
+[Sun 04/26/2026 20:42:00.82] Middleware exited (console mode). ExitCode=9009
+A syntax error occurred at position 127
+
+Failed to open event query.
+The specified query is invalid.
+A syntax error occurred at position 79
+
+Failed to open event query.
+The specified query is invalid.
+[Sun 04/26/2026 20:42:00.95] Middleware stdout (tail):
+[Sun 04/26/2026 20:42:01.50] Middleware stderr (tail):
+[Sun 04/26/2026 20:42:02.05] Desktop path: C:\Users\admin\Desktop
+[Sun 04/26/2026 20:42:02.07] Recent crash events (Application log):
+A syntax error occurred at position 79
+
+Failed to open event query.
+The specified query is invalid.
+[Sun 04/26/2026 20:42:02.17] RunMode: console
+[Sun 04/26/2026 20:42:02.19] ============================================================
+[Sun 04/26/2026 20:42:02.21] OS_VER: Windows_NT (ver: 2)
+
+Microsoft Windows [Version 10.0.19045.5965]
+PSVersion=5.1.19041.5965
+Is64BitOS=True
+Is64BitProc=True
+OSVersion=Microsoft Windows NT 10.0.19045.0
+[Sun 04/26/2026 20:42:03.02] Checking if dashboard is already running (port 5099)...
+[Sun 04/26/2026 20:42:03.61] Desktop path: C:\Users\admin\Desktop
+[Sun 04/26/2026 20:42:03.63] Recent crash events (Application log):
+A syntax error occurred at position 79
+
+Failed to open event query.
+The specified query is invalid.
+A syntax error occurred at position 127
+
+Failed to open event query.
+The specified query is invalid.
+A syntax error occurred at position 79
+
+Failed to open event query.
+The specified query is invalid.
+[Sun 04/26/2026 20:42:03.81] Middleware stdout (tail):
+[Sun 04/26/2026 20:42:04.52] Middleware stderr (tail):
+[Sun 04/26/2026 20:42:05.07] Desktop path: C:\Users\admin\Desktop
+[Sun 04/26/2026 20:42:05.09] Recent crash events (Application log):
+A syntax error occurred at position 79
+
+Failed to open event query.
+The specified query is invalid.
+[Sun 04/26/2026 20:42:14.39] Requesting Administrator access for SDK install...
+[Sun 04/26/2026 20:58:08.28] ============================================================
+[Sun 04/26/2026 20:58:08.30] SHAB Attendance System - Start Dashboard
+[Sun 04/26/2026 20:58:08.32] Version: 2026-04-16
+[Sun 04/26/2026 20:58:08.33] Root: C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\
+INFO: No tasks are running which match the specified criteria.
+INFO: No tasks are running which match the specified criteria.
+[Sun 04/26/2026 20:58:08.57] Desktop path: C:\Users\admin\Desktop
+[Sun 04/26/2026 20:58:08.58] HTTP probe:
+HTTP_ERROR System.Net.WebException The operation has timed out.
+[Sun 04/26/2026 20:58:11.23] Recent crash events (Application log):
+A syntax error occurred at position 79
+
+Failed to open event query.
+The specified query is invalid.
+[Sun 04/26/2026 20:58:11.32] Middleware stdout (tail):
+[Sun 04/26/2026 20:58:12.18] Middleware stderr (tail):
+[Sun 04/26/2026 20:58:12.72] LogFile: C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\Logs\attendance-middleware.log
+[Sun 04/26/2026 20:58:12.73] MiddlewareStdout: C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\Logs\middleware-stdout.log
+[Sun 04/26/2026 20:58:12.75] MiddlewareStderr: C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\Logs\middleware-stderr.log
+[Sun 04/26/2026 20:58:12.95] Using stderr log: C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\Logs\middleware-stderr.log
+Start-Process failed: System.InvalidOperationException HResult=-2146233079 This command cannot be run due to the error: Access is denied.
+[Sun 04/26/2026 21:22:54.93] ============================================================
+[Sun 04/26/2026 21:22:54.95] SHAB Attendance System - Start Dashboard
+[Sun 04/26/2026 21:22:54.97] Version: 2026-04-16
+[Sun 04/26/2026 21:22:54.99] Root: C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\
+INFO: No tasks are running which match the specified criteria.
+INFO: No tasks are running which match the specified criteria.
+[Sun 04/26/2026 21:22:55.24] Desktop path: C:\Users\admin\Desktop
+[Sun 04/26/2026 21:22:55.26] HTTP probe:
+HTTP_ERROR System.Net.WebException The operation has timed out.
+[Sun 04/26/2026 21:22:57.97] Fallback target app dir: C:\Program Files (x86)\SHAB Attendance System\App\win-x86
+[Sun 04/26/2026 21:22:57.99] ERROR: Could not create fallback app dir.
+[Sun 04/26/2026 21:22:58.02] Fallback target app dir: C:\ProgramData\SHAB Attendance System\App\win-x86
+[Sun 04/26/2026 21:22:58.04] ERROR: Could not create fallback app dir.
+[Sun 04/26/2026 21:22:58.06] ERROR: Relocate failed for all fallback locations.
+[Sun 04/26/2026 21:22:58.07] Auto-debug: switching to console mode after start failure.
+[Sun 04/26/2026 21:22:58.11] Security blocks (Defender/AppLocker):
+[Sun 04/26/2026 21:22:58.31] Middleware stdout (tail):
+[Sun 04/26/2026 21:22:58.83] Middleware stderr (tail):
+[Sun 04/26/2026 21:22:59.37] Desktop path: C:\Users\admin\Desktop
+[Sun 04/26/2026 21:22:59.38] Recent crash events (Application log):
+[Mon 04/27/2026  0:31:38.88] ============================================================
+[Mon 04/27/2026  0:31:38.90] SHAB Attendance System - Start Dashboard
+[Mon 04/27/2026  0:31:38.92] Version: 2026-04-16
+[Mon 04/27/2026  0:31:38.94] Root: C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\
+INFO: No tasks are running which match the specified criteria.
+INFO: No tasks are running which match the specified criteria.
+[Mon 04/27/2026  0:31:39.18] Desktop path: C:\Users\admin\Desktop
+[Mon 04/27/2026  0:31:39.21] HTTP probe:
+HTTP_ERROR System.Net.WebException The operation has timed out.
+[Mon 04/27/2026  0:31:41.88] Fallback target app dir: C:\Program Files (x86)\SHAB Attendance System\App\win-x86
+[Mon 04/27/2026  0:31:41.90] ERROR: Could not create fallback app dir.
+[Mon 04/27/2026  0:31:41.93] Fallback target app dir: C:\ProgramData\SHAB Attendance System\App\win-x86
+[Mon 04/27/2026  0:31:41.94] Copying app files from: C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\App\win-x86
+[Mon 04/27/2026  0:31:41.98] Running process path: B
+[Mon 04/27/2026  0:31:42.38] xcopy exit code: 4
+[Mon 04/27/2026  0:31:42.39] ERROR: Copy failed.
+[Mon 04/27/2026  0:31:42.42] ERROR: Relocate failed for all fallback locations.
+[Mon 04/27/2026  0:31:42.43] Auto-debug: switching to console mode after start failure.
+[Mon 04/27/2026  0:31:42.47] Security blocks (Defender/AppLocker):
+[Mon 04/27/2026  0:31:42.66] Middleware stdout (tail):
+[Mon 04/27/2026  0:31:43.18] Middleware stderr (tail):
+[Mon 04/27/2026  0:31:43.75] Desktop path: C:\Users\admin\Desktop
+[Mon 04/27/2026  0:31:43.77] Recent crash events (Application log):
+[Mon 04/27/2026  8:33:16.77] ============================================================
+[Mon 04/27/2026  8:33:16.79] SHAB Attendance System - Start Dashboard
+[Mon 04/27/2026  8:33:16.81] Version: 2026-04-16
+[Mon 04/27/2026  8:33:16.83] Root: C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\
+INFO: No tasks are running which match the specified criteria.
+INFO: No tasks are running which match the specified criteria.
+[Mon 04/27/2026  8:33:17.04] Desktop path: C:\Users\admin\Desktop
+[Mon 04/27/2026  8:33:17.06] HTTP probe:
+HTTP_ERROR System.Net.WebException The operation has timed out.
+[Mon 04/27/2026  8:33:19.82] Fallback target app dir: C:\Program Files (x86)\SHAB Attendance System\App\win-x86
+[Mon 04/27/2026  8:33:19.84] ERROR: Could not create fallback app dir.
+[Mon 04/27/2026  8:33:19.85] Fallback target app dir: C:\ProgramData\SHAB Attendance System\App\win-x86
+[Mon 04/27/2026  8:33:19.86] Copying app files from: C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\App\win-x86
+[Mon 04/27/2026  8:33:19.88] Running process path: B
+[Mon 04/27/2026  8:33:19.98] xcopy exit code: 0
+[Mon 04/27/2026  8:33:19.99] Fallback app dir active: C:\ProgramData\SHAB Attendance System\App\win-x86
+Security prep app path: C:\ProgramData\SHAB Attendance System\App\win-x86
+ControlledFolderAccess=0
+ZoneIdentifierFiles=0
+Unblocked files: 16
+IsAdmin: False
+Defender exclusion skipped (not admin).
+[Mon 04/27/2026  8:33:21.80] Launching SHAB Attendance Dashboard...
+[Mon 04/27/2026  8:33:21.81] Middleware: SHABMiddleware.exe --dashboard --dashboard-port 5099
+[Mon 04/27/2026  8:33:21.83] LogFile: C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\Logs\attendance-middleware.log
+[Mon 04/27/2026  8:33:21.84] MiddlewareStdout: C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\Logs\middleware-stdout.log
+[Mon 04/27/2026  8:33:21.86] MiddlewareStderr: C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\Logs\middleware-stderr.log
+[Mon 04/27/2026  8:33:22.04] Using stderr log: C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\Logs\middleware-stderr.log
+Started PID=26228
+[Mon 04/27/2026  8:42:13.26] ============================================================
+[Mon 04/27/2026  8:42:13.29] SHAB Attendance System - Start Dashboard
+[Mon 04/27/2026  8:42:13.31] Version: 2026-04-16
+[Mon 04/27/2026  8:42:13.32] Root: C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\
+INFO: No tasks are running which match the specified criteria.
+INFO: No tasks are running which match the specified criteria.
+[Mon 04/27/2026  8:42:13.53] Desktop path: C:\Users\admin\Desktop
+[Mon 04/27/2026  8:42:13.54] HTTP probe:
+HTTP_ERROR System.Net.WebException The operation has timed out.
+[Mon 04/27/2026  8:42:15.94] Fallback target app dir: C:\Program Files (x86)\SHAB Attendance System\App\win-x86
+[Mon 04/27/2026  8:42:15.95] Copying app files from: C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\App\win-x86
+[Mon 04/27/2026  8:42:15.96] Running process path: B
+[Mon 04/27/2026  8:42:16.04] xcopy exit code: 0
+[Mon 04/27/2026  8:42:16.05] Fallback app dir active: C:\Program Files (x86)\SHAB Attendance System\App\win-x86
+Security prep app path: C:\Program Files (x86)\SHAB Attendance System\App\win-x86
+ControlledFolderAccess=0
+ZoneIdentifierFiles=0
+Unblocked files: 16
+IsAdmin: True
+Defender exclusion attempted.
+[Mon 04/27/2026  8:42:17.15] Launching SHAB Attendance Dashboard...
+[Mon 04/27/2026  8:42:17.15] Middleware: SHABMiddleware.exe --dashboard --dashboard-port 5099
+[Mon 04/27/2026  8:42:17.17] LogFile: C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\Logs\attendance-middleware.log
+[Mon 04/27/2026  8:42:17.19] MiddlewareStdout: C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\Logs\middleware-stdout.log
+[Mon 04/27/2026  8:42:17.20] MiddlewareStderr: C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\Logs\middleware-stderr.log
+[Mon 04/27/2026  8:42:17.22] Using stderr log: C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\Logs\middleware-stderr.log
+Started PID=25016
+[Mon 04/27/2026  8:43:16.75] ============================================================
+[Mon 04/27/2026  8:43:16.77] SHAB Attendance System - Start Dashboard
+[Mon 04/27/2026  8:43:16.79] Version: 2026-04-16
+[Mon 04/27/2026  8:43:16.80] Root: C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\
+INFO: No tasks are running which match the specified criteria.
+INFO: No tasks are running which match the specified criteria.
+[Mon 04/27/2026  8:43:17.00] Desktop path: C:\Users\admin\Desktop
+[Mon 04/27/2026  8:43:17.01] HTTP probe:
+HTTP_ERROR System.Net.WebException The operation has timed out.
+[Mon 04/27/2026  8:43:19.42] Fallback target app dir: C:\Program Files (x86)\SHAB Attendance System\App\win-x86
+[Mon 04/27/2026  8:43:19.42] Copying app files from: C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\App\win-x86
+[Mon 04/27/2026  8:43:19.44] Running process path: B
+[Mon 04/27/2026  8:43:19.56] xcopy exit code: 0
+[Mon 04/27/2026  8:43:19.57] Fallback app dir active: C:\Program Files (x86)\SHAB Attendance System\App\win-x86
+Security prep app path: C:\Program Files (x86)\SHAB Attendance System\App\win-x86
+ControlledFolderAccess=0
+ZoneIdentifierFiles=0
+Unblocked files: 16
+IsAdmin: True
+Defender exclusion attempted.
+[Mon 04/27/2026  8:43:20.74] Launching SHAB Attendance Dashboard...
+[Mon 04/27/2026  8:43:20.75] Middleware: SHABMiddleware.exe --dashboard --dashboard-port 5099
+[Mon 04/27/2026  8:43:20.76] LogFile: C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\Logs\attendance-middleware.log
+[Mon 04/27/2026  8:43:20.78] MiddlewareStdout: C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\Logs\middleware-stdout.log
+[Mon 04/27/2026  8:43:20.79] MiddlewareStderr: C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\Logs\middleware-stderr.log
+[Mon 04/27/2026  8:43:20.82] Using stderr log: C:\Users\admin\Documents\GitHub\SHABv2\SHAB Attendance System\Client Package\Logs\middleware-stderr.log
+Started PID=18620
