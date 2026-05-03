@@ -2,16 +2,21 @@
 setlocal EnableExtensions
 
 set "RUN_MODE=background"
-if /I "%~1"=="--console" ( set "RUN_MODE=console" & shift )
-if /I "%~1"=="--foreground" ( set "RUN_MODE=console" & shift )
-if /I "%~1"=="--debug" ( set "RUN_MODE=console" & shift )
 set "FORCE_RESTART="
-if /I "%~1"=="--restart" ( set "FORCE_RESTART=1" & shift )
-if /I "%~1"=="--force" ( set "FORCE_RESTART=1" & shift )
 set "NO_PAUSE="
-if /I "%~1"=="--no-pause" ( set "NO_PAUSE=1" & shift )
 set "OPEN_LINKS="
-if /I "%~1"=="--open-links" ( set "OPEN_LINKS=1" & shift )
+:PARSE_ARGS
+if "%~1"=="" goto PARSE_ARGS_DONE
+if /I "%~1"=="--console" set "RUN_MODE=console"
+if /I "%~1"=="--foreground" set "RUN_MODE=console"
+if /I "%~1"=="--debug" set "RUN_MODE=console"
+if /I "%~1"=="--restart" set "FORCE_RESTART=1"
+if /I "%~1"=="--force" set "FORCE_RESTART=1"
+if /I "%~1"=="--no-pause" set "NO_PAUSE=1"
+if /I "%~1"=="--open-links" set "OPEN_LINKS=1"
+shift
+goto PARSE_ARGS
+:PARSE_ARGS_DONE
 if defined FORCE_RESTART set "NO_PAUSE=1"
 if /I "%RUN_MODE%"=="console" set "NO_PAUSE=1"
 
@@ -22,7 +27,7 @@ set "SDK_INSTALL=%ROOT%ZKTecoSDK\x86\Auto-install_sdk.bat"
 set "DASH_URL=http://127.0.0.1:5099/login"
 set "SHORTCUT_ICON=%ROOT%Assets\SHAB Attendance Dashboard.ico"
 set "LOG_DIR=%ROOT%Logs"
-set "LOG_FILE=%LOG_DIR%\attendance-middleware.log"
+set "LOG_FILE=%LOG_DIR%\start-dashboard.log"
 set "MIDDLE_OUT=%LOG_DIR%\middleware-stdout.log"
 set "MIDDLE_ERR=%LOG_DIR%\middleware-stderr.log"
 set "DATA_DIR=%ROOT%Data"
@@ -44,6 +49,7 @@ if not exist "%DATA_DIR%" mkdir "%DATA_DIR%" >nul 2>&1
 if not exist "%EXPORT_DIR%" mkdir "%EXPORT_DIR%" >nul 2>&1
 if not exist "%REF_DIR%" mkdir "%REF_DIR%" >nul 2>&1
 if not exist "%ATTLOG_FILE%" type nul > "%ATTLOG_FILE%" 2>nul
+set "WL10_STATE_PATH=%DATA_DIR%\state.json"
 set "DESKTOP_DIR=%USERPROFILE%\Desktop"
 
 call :LOG ============================================================
@@ -164,8 +170,7 @@ echo Preparing app files and security settings...
 call :LOG Preparing app files and security settings...
 call :PREPARE_SECURITY
 
-REM Force local state/export paths so the package is self-contained (no dependency on other folders)
-set "WL10_STATE_PATH=%DATA_DIR%\state.json"
+REM Force local export paths so the package is self-contained (no dependency on other folders)
 set "WL10_ATTLOG_EXPORT_PATH=%ATTLOG_FILE%"
 set "WL10_ATTLOG_FILE_PATH=%ATTLOG_FILE%"
 call :LOG WL10_STATE_PATH=%WL10_STATE_PATH%
@@ -344,11 +349,26 @@ echo.
 if not defined READY goto NOT_READY
 echo Opening browser: %DASH_URL%
 call :LOG Dashboard reachable. Opening browser: %DASH_URL%
+call :BROWSER_OPEN_GUARD
+if errorlevel 1 (
+  call :LOG Browser open suppressed (already opened recently).
+  endlocal
+  exit /b 0
+)
 call :OPEN_URL "%DASH_URL%"
 echo.
 call :LOG Done.
 endlocal
 exit /b 0
+
+:BROWSER_OPEN_GUARD
+if not exist "%PS_EXE%" exit /b 0
+setlocal EnableExtensions
+set "LOCK=%TEMP%\shab-dashboard-open.lock"
+"%PS_EXE%" -NoProfile -ExecutionPolicy Bypass -Command ^
+  "try { $lock='%LOCK%'; $now=[DateTimeOffset]::UtcNow.ToUnixTimeSeconds(); $last=0; if(Test-Path -LiteralPath $lock){ try { $txt=(Get-Content -LiteralPath $lock -TotalCount 1 -ErrorAction SilentlyContinue); if($txt){ $last=[int64]$txt } } catch { } }; if($last -gt 0 -and ($now - $last) -lt 15){ exit 1 }; Set-Content -LiteralPath $lock -Value $now -Encoding ASCII; exit 0 } catch { exit 0 }" >nul 2>&1
+set "EC=%errorlevel%"
+endlocal & exit /b %EC%
 
 :START_FAILED_EARLY_EXIT
 call :LOG Middleware exited immediately after start attempt within 2 seconds.
@@ -448,10 +468,10 @@ exit /b 1
 :TRY_RELOCATE_APPDIR
 set "PF=%ProgramFiles(x86)%"
 if not defined PF set "PF=%ProgramFiles%"
-set "TARGET_APP_DIR=%PF%\SHAB Attendance System\App\win-x86"
+set "TARGET_APP_DIR=%ProgramData%\SHAB Attendance System\App\win-x86"
 call :TRY_COPY_APP_TO "%TARGET_APP_DIR%"
 if not errorlevel 1 goto RELOC_OK
-set "TARGET_APP_DIR=%ProgramData%\SHAB Attendance System\App\win-x86"
+set "TARGET_APP_DIR=%PF%\SHAB Attendance System\App\win-x86"
 call :TRY_COPY_APP_TO "%TARGET_APP_DIR%"
 if errorlevel 1 call :LOG ERROR: Relocate failed for all fallback locations. & exit /b 1
 
@@ -531,14 +551,8 @@ endlocal & set "FORCE_RESTART=1" & exit /b 0
 
 :CHECK_ZKEMKEEPER
 reg query "HKCR\zkemkeeper.CZKEM" /reg:32 >nul 2>&1
-if not errorlevel 1 (
-  if exist "%WIN_DIR%\SysWOW64\WindowsPowerShell\v1.0\powershell.exe" (
-    "%WIN_DIR%\SysWOW64\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -Command "try{New-Object -ComObject zkemkeeper.CZKEM | Out-Null; exit 0}catch{exit 1}" >nul 2>&1
-    if not errorlevel 1 exit /b 0
-  ) else (
-    exit /b 0
-  )
-)
+if not errorlevel 1 exit /b 0
+if exist "%ZK_TARGET%\zkemkeeper.dll" exit /b 0
 exit /b 1
 
 :IS_ADMIN
@@ -573,20 +587,18 @@ if not exist "%PS_EXE%" exit /b 0
 exit /b 0
 
 :CHECK_DOTNET
+setlocal EnableExtensions
 set "NETCORE_OK="
 set "ASPNET_OK="
-
-if exist "C:\Program Files (x86)\" (
-  if not exist "%DOTNET_X86_EXE%" exit /b 1
-  for /f "delims=" %%d in ('dir /b "%DOTNET_SHARED1%\Microsoft.NETCore.App\8.*" 2^>nul') do set "NETCORE_OK=1"
-  for /f "delims=" %%d in ('dir /b "%DOTNET_SHARED1%\Microsoft.AspNetCore.App\8.*" 2^>nul') do set "ASPNET_OK=1"
-) else (
-  if exist "%DOTNET_SHARED2%\Microsoft.NETCore.App\8.*" set "NETCORE_OK=1"
-  if exist "%DOTNET_SHARED2%\Microsoft.AspNetCore.App\8.*" set "ASPNET_OK=1"
+set "DOTNET_EXE=%DOTNET_X86_EXE%"
+if not exist "%DOTNET_EXE%" set "DOTNET_EXE=%DOTNET_X64_EXE%"
+if not exist "%DOTNET_EXE%" endlocal & exit /b 1
+for /f "usebackq delims=" %%L in (`"%DOTNET_EXE%" --list-runtimes 2^>nul`) do (
+  echo %%L | findstr /i /c:"Microsoft.NETCore.App 8." >nul && set "NETCORE_OK=1"
+  echo %%L | findstr /i /c:"Microsoft.AspNetCore.App 8." >nul && set "ASPNET_OK=1"
 )
-
-if defined NETCORE_OK if defined ASPNET_OK exit /b 0
-exit /b 1
+if defined NETCORE_OK if defined ASPNET_OK (endlocal & exit /b 0)
+endlocal & exit /b 1
 
 :LOG_SYSTEM_INFO
 setlocal EnableExtensions

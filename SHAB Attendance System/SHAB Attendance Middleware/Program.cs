@@ -36,7 +36,7 @@ sealed record AppConfig(
   bool SupabaseSyncEnabled
 );
 
-sealed record Punch(string StaffId, DateTimeOffset OccurredAtUtc, string EventDate, string DeviceId, int VerifyMode = 255);
+sealed record Punch(string StaffId, DateTimeOffset OccurredAtUtc, string EventDate, string DeviceId, int VerifyMode = 255, int InOutMode = 255, int WorkCode = 0);
 
 sealed record DashboardSettings(
   string SupabaseUrl,
@@ -181,18 +181,23 @@ static partial class Program
 
   private static string? TryResolveAttlogExportPath(string? deviceId)
   {
-    var exportPath = (Environment.GetEnvironmentVariable("WL10_ATTLOG_EXPORT_PATH") ?? "").Trim();
-    var filePath = (Environment.GetEnvironmentVariable("WL10_ATTLOG_FILE_PATH") ?? "").Trim();
-    var p = exportPath.Length > 0 ? exportPath : filePath;
-    if (p.Length > 0)
+    var id0 = (deviceId ?? string.Empty).Trim();
+    var isWl10Env = id0.Length == 0 || id0.StartsWith("WL10", StringComparison.OrdinalIgnoreCase);
+    if (isWl10Env)
     {
-      try
+      var exportPath = (Environment.GetEnvironmentVariable("WL10_ATTLOG_EXPORT_PATH") ?? "").Trim();
+      var filePath = (Environment.GetEnvironmentVariable("WL10_ATTLOG_FILE_PATH") ?? "").Trim();
+      var p = exportPath.Length > 0 ? exportPath : filePath;
+      if (p.Length > 0)
       {
-        var full = Path.GetFullPath(p);
-        var dir = Path.GetDirectoryName(full);
-        if (!string.IsNullOrWhiteSpace(dir) && (Directory.Exists(dir) || File.Exists(full))) return full;
+        try
+        {
+          var full = Path.GetFullPath(p);
+          var dir = Path.GetDirectoryName(full);
+          if (!string.IsNullOrWhiteSpace(dir) && (Directory.Exists(dir) || File.Exists(full))) return full;
+        }
+        catch { }
       }
-      catch { }
     }
 
     try
@@ -284,18 +289,18 @@ static partial class Program
       var startDateRaw = (Environment.GetEnvironmentVariable("WL10_ATTLOG_EXPORT_START_DATE") ?? "").Trim();
       var endDateRaw = (Environment.GetEnvironmentVariable("WL10_ATTLOG_EXPORT_END_DATE") ?? "").Trim();
 
-      var startDate = new DateOnly(2025, 1, 1);
+      var startDate = new DateOnly(2000, 1, 1);
       var endDate = DateOnly.FromDateTime(DateTime.Now);
 
-      var hasStart = true;
-      if (startDateRaw.Length > 0)
+      var hasStart = startDateRaw.Length > 0;
+      if (hasStart)
       {
         hasStart = TryParseDateOnly(startDateRaw, out startDate);
-        if (!hasStart) { startDate = new DateOnly(2025, 1, 1); hasStart = true; }
+        if (!hasStart) { startDate = new DateOnly(2000, 1, 1); hasStart = true; }
       }
 
-      var hasEnd = true;
-      if (endDateRaw.Length > 0)
+      var hasEnd = endDateRaw.Length > 0;
+      if (hasEnd)
       {
         hasEnd = TryParseDateOnly(endDateRaw, out endDate);
         if (!hasEnd) { endDate = DateOnly.FromDateTime(DateTime.Now); hasEnd = true; }
@@ -1044,6 +1049,21 @@ static partial class Program
 
   private static async Task RunOnce(AppConfig config, string statePath, bool verify, bool today)
   {
+    var runDeviceId = (config.DeviceId ?? string.Empty).Trim();
+    var isW30Device = runDeviceId.StartsWith("W30", StringComparison.OrdinalIgnoreCase);
+    if (isW30Device)
+    {
+      var mode = (config.BadDateTimeMode ?? string.Empty).Trim();
+      if (mode.Equals("device_date", StringComparison.OrdinalIgnoreCase))
+      {
+        config = config with { BadDateTimeMode = "skip" };
+      }
+      if (config.FilterToDeviceUsers)
+      {
+        config = config with { FilterToDeviceUsers = false };
+      }
+    }
+
     LastRunPunchCount = 0;
     LastRunUpsertedCount = 0;
     LastRunSkippedUpsertCount = 0;
@@ -1091,7 +1111,9 @@ static partial class Program
       ? new HashSet<string>(deviceUsers.Keys, StringComparer.Ordinal)
       : null;
     var pollSw = Stopwatch.StartNew();
-    var punches = ReadDevicePunches(config, today ? null : watermark, today, validStaffIds);
+    var punches = isW30Device
+      ? ReadDevicePunches(config, afterUtc: null, onlyDeviceToday: false, restrictToStaffIds: validStaffIds)
+      : ReadDevicePunches(config, today ? null : watermark, today, validStaffIds);
     if (config.FilterToDeviceUsers && deviceUsers.Count > 0)
     {
       var valid = new HashSet<string>(deviceUsers.Keys, StringComparer.Ordinal);
@@ -1138,7 +1160,7 @@ static partial class Program
           var valid = new HashSet<string>(deviceUsers.Keys, StringComparer.Ordinal);
           fullPunches = fullPunches.Where(p => valid.Contains(p.StaffId)).ToList();
         }
-        DevicePunches = MergePunches(Array.Empty<Punch>(), fullPunches, max: 50000);
+        DevicePunches = MergePunches(Array.Empty<Punch>(), fullPunches, max: 200000);
       }
       catch (Exception ex)
       {
@@ -1643,7 +1665,9 @@ static partial class Program
 
     if (candidates.Count == 0)
     {
-      if (s.Length == 1)
+      var devId = (config.DeviceId ?? string.Empty).Trim();
+      var isW30 = devId.StartsWith("W30", StringComparison.OrdinalIgnoreCase);
+      if (!isW30 && s.Length == 1)
       {
         if (!char.IsDigit(s[0]))
         {
@@ -1662,6 +1686,48 @@ static partial class Program
       if (n >= 1 && n <= max) return n;
     }
     return null;
+  }
+
+  private static Dictionary<int, int> TryReadW30EnrollAliases(dynamic zk, AppConfig config)
+  {
+    var map = new Dictionary<int, int>();
+    try
+    {
+      try { _ = (bool)zk.ReadAllUserID(config.MachineNumber); } catch { }
+      while (true)
+      {
+        string enrollNumber;
+        string name;
+        string password;
+        int privilege;
+        bool enabled;
+        var ok = false;
+        try
+        {
+          ok = (bool)zk.SSR_GetAllUserInfo(config.MachineNumber, out enrollNumber, out name, out password, out privilege, out enabled);
+        }
+        catch
+        {
+          break;
+        }
+        if (!ok) break;
+
+        var internalN = ExtractStaffNumber(config, enrollNumber ?? string.Empty);
+        if (internalN is null) continue;
+
+        var cleanedName = new string((name ?? string.Empty).Where(c => !char.IsControl(c)).ToArray()).Trim();
+        var cleanedPass = new string((password ?? string.Empty).Where(c => !char.IsControl(c)).ToArray()).Trim();
+        var aliasN = ExtractStaffNumber(config, cleanedName);
+        aliasN ??= ExtractStaffNumber(config, cleanedPass);
+        if (aliasN is null) continue;
+        if (aliasN.Value <= 0) continue;
+        if (aliasN.Value == internalN.Value) continue;
+
+        map[internalN.Value] = aliasN.Value;
+      }
+    }
+    catch { }
+    return map;
   }
 
   private static string DebugCharCodes(string value)
@@ -1798,6 +1864,18 @@ static partial class Program
       var normalizedLogged = 0;
       var normalizedStaffCount = 0;
       var correctedTimestampCount = 0;
+      var resolvedDeviceId = ResolveDeviceId(config);
+      var isW30Device = resolvedDeviceId.StartsWith("W30", StringComparison.OrdinalIgnoreCase);
+      Dictionary<int, int>? w30Aliases = null;
+      if (isW30Device)
+      {
+        try
+        {
+          var a = TryReadW30EnrollAliases(zk, config);
+          if (a.Count > 0) w30Aliases = a;
+        }
+        catch { w30Aliases = null; }
+      }
 
       void ProcessRecord(
         List<Punch> results,
@@ -1817,7 +1895,11 @@ static partial class Program
 
         var staffNumber = ExtractStaffNumber(config, staffIdRaw);
         var maxN = config.MaxStaffNumber > 0 ? config.MaxStaffNumber : 999;
-        if (staffNumber is null && workCode > 0)
+        if (isW30Device && staffNumber is not null && w30Aliases is not null && w30Aliases.TryGetValue(staffNumber.Value, out var aliasN))
+        {
+          if (aliasN >= 1 && aliasN <= maxN) staffNumber = aliasN;
+        }
+        if (!isW30Device && staffNumber is null && workCode > 0)
         {
           if (workCode >= 1 && workCode <= maxN) staffNumber = workCode;
         }
@@ -1982,7 +2064,7 @@ static partial class Program
         }
 
         var eventDate = localDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
-        results.Add(new Punch(staffId, occurredAtUtc, eventDate, ResolveDeviceId(config), inOutMode));
+        results.Add(new Punch(staffId, occurredAtUtc, eventDate, resolvedDeviceId, verifyMode, inOutMode, workCode));
         keptCount++;
       }
 
@@ -2000,7 +2082,9 @@ static partial class Program
         catch { }
       }
 
-      var readModesToTry = new[] { "ReadGeneralLogData", "GetGeneralLogData", "GetGeneralExtLogData", "ReadAllGLogData", "ReadNewGLogData" };
+      var readModesToTry = isW30Device
+        ? new[] { "SSR_GetGeneralLogData", "GetGeneralExtLogData" }
+        : new[] { "ReadGeneralLogData", "GetGeneralLogData", "GetGeneralExtLogData", "ReadAllGLogData", "ReadNewGLogData" };
       foreach (var readMode in readModesToTry)
       {
         try
@@ -2008,7 +2092,12 @@ static partial class Program
           var readOk = false;
           try
           {
-            if (string.Equals(readMode, "ReadGeneralLogData", StringComparison.Ordinal))
+            if (string.Equals(readMode, "SSR_GetGeneralLogData", StringComparison.Ordinal))
+            {
+              readOk = (bool)zk.ReadAllGLogData(config.MachineNumber);
+              if (!readOk) readOk = (bool)zk.ReadGeneralLogData(config.MachineNumber);
+            }
+            else if (string.Equals(readMode, "ReadGeneralLogData", StringComparison.Ordinal))
             {
               readOk = (bool)zk.ReadGeneralLogData(config.MachineNumber);
               if (!readOk) readOk = (bool)zk.ReadAllGLogData(config.MachineNumber);
@@ -2251,7 +2340,11 @@ static partial class Program
 
             try
             {
-              if (string.Equals(readMode, "GetGeneralExtLogData", StringComparison.Ordinal))
+              if (string.Equals(readMode, "SSR_GetGeneralLogData", StringComparison.Ordinal))
+              {
+                useSsr = true;
+              }
+              else if (string.Equals(readMode, "GetGeneralExtLogData", StringComparison.Ordinal))
               {
                 string enrollNumber = string.Empty;
 
@@ -2919,7 +3012,7 @@ static partial class Program
       }
 
       var eventDate = localDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
-      results.Add(new Punch(staffId, occurredAtUtc, eventDate, ResolveDeviceId(config), inOutMode));
+      results.Add(new Punch(staffId, occurredAtUtc, eventDate, ResolveDeviceId(config), verifyMode, inOutMode, workCode));
       keptCount++;
     }
 
@@ -3440,6 +3533,23 @@ static partial class Program
 
     Console.WriteLine($"Upserting {punches.Count} punches to Supabase...");
 
+    if ((config.DeviceId ?? string.Empty).Trim().StartsWith("W30", StringComparison.OrdinalIgnoreCase))
+    {
+      try
+      {
+        var baseUrl = config.SupabaseUrl.TrimEnd('/');
+        var table = (config.SupabaseAttendanceTable ?? string.Empty).Trim();
+        if (table.Length == 0) table = "attendance_events";
+        var url = $"{baseUrl}/rest/v1/{table}?device_id=eq.{Uri.EscapeDataString(config.DeviceId)}&staff_id=eq.64";
+        using var delReq = new HttpRequestMessage(HttpMethod.Delete, url);
+        delReq.Headers.TryAddWithoutValidation("apikey", config.SupabaseServiceRoleKey);
+        delReq.Headers.TryAddWithoutValidation("Authorization", $"Bearer {config.SupabaseServiceRoleKey}");
+        delReq.Headers.TryAddWithoutValidation("Prefer", "return=minimal");
+        using var delResp = await http.SendAsync(delReq);
+      }
+      catch { }
+    }
+
     if (config.AutoCreateStaff || config.SyncStaffNames)
     {
       await EnsureStaffRowsExist(http, config, punches.Select(p => p.StaffId).Distinct(StringComparer.Ordinal).ToArray(), staffNames);
@@ -3487,6 +3597,53 @@ static partial class Program
     using var http = new HttpClient();
     http.Timeout = TimeSpan.FromSeconds(30);
 
+    static string[] ExtractMissingStaffIds(string body)
+    {
+      var text = body ?? string.Empty;
+      if (text.Length == 0) return Array.Empty<string>();
+      var ids = new List<string>(capacity: 4);
+      const string token = "(staff_id)=(";
+      var idx = 0;
+      while (idx < text.Length)
+      {
+        var at = text.IndexOf(token, idx, StringComparison.OrdinalIgnoreCase);
+        if (at < 0) break;
+        var start = at + token.Length;
+        var end = text.IndexOf(')', start);
+        if (end > start)
+        {
+          var id = text[start..end].Trim().Trim('"');
+          if (id.Length > 0) ids.Add(id);
+        }
+        idx = end > start ? end + 1 : start + 1;
+      }
+      return ids.Distinct(StringComparer.Ordinal).ToArray();
+    }
+
+    static async Task EnsureStaffIdsExist(HttpClient http, AppConfig config, string[] staffIds, CancellationToken ct)
+    {
+      var ids = (staffIds ?? Array.Empty<string>())
+        .Select(x => (x ?? string.Empty).Trim())
+        .Where(x => x.Length > 0 && x.Length <= 64)
+        .Distinct(StringComparer.Ordinal)
+        .ToArray();
+      if (ids.Length == 0) return;
+
+      var upsertUrl = $"{config.SupabaseUrl.TrimEnd('/')}/rest/v1/staff?on_conflict=id";
+      using var req = new HttpRequestMessage(HttpMethod.Post, upsertUrl);
+      req.Headers.TryAddWithoutValidation("apikey", config.SupabaseServiceRoleKey);
+      req.Headers.TryAddWithoutValidation("Authorization", $"Bearer {config.SupabaseServiceRoleKey}");
+      req.Headers.TryAddWithoutValidation("Prefer", "resolution=merge-duplicates,return=minimal");
+      var payload = ids.Select(id => new { id, full_name = id, status = "active" }).ToArray();
+      req.Content = new StringContent(JsonSerializer.Serialize(payload, JsonOptions), Encoding.UTF8, "application/json");
+      using var resp = await http.SendAsync(req, ct);
+      if (!resp.IsSuccessStatusCode)
+      {
+        var body = await resp.Content.ReadAsStringAsync(ct);
+        throw new InvalidOperationException($"Supabase staff upsert failed: {(int)resp.StatusCode} {resp.ReasonPhrase}. Body={body}");
+      }
+    }
+
     var url = $"{config.SupabaseUrl.TrimEnd('/')}/rest/v1/{config.SupabaseAttendanceTable}?on_conflict=id";
     var chunkSize = 1000;
     for (var i = 0; i < rows.Count; i += chunkSize)
@@ -3527,10 +3684,26 @@ static partial class Program
       req.Headers.TryAddWithoutValidation("Prefer", "resolution=merge-duplicates,return=minimal");
       req.Content = new StringContent(JsonSerializer.Serialize(batch, JsonOptions), Encoding.UTF8, "application/json");
 
-      using var resp = await http.SendAsync(req, ct);
-      if (!resp.IsSuccessStatusCode)
+      var retried = false;
+      while (true)
       {
+        using var resp = await http.SendAsync(req, ct);
+        if (resp.IsSuccessStatusCode) break;
+
         var body = await resp.Content.ReadAsStringAsync(ct);
+        var isFk = ((int)resp.StatusCode == 409)
+          && body.Contains("\"code\":\"23503\"", StringComparison.OrdinalIgnoreCase)
+          && body.Contains("staff_id", StringComparison.OrdinalIgnoreCase);
+        if (!retried && isFk)
+        {
+          retried = true;
+          var missing = ExtractMissingStaffIds(body);
+          if (missing.Length > 0)
+          {
+            await EnsureStaffIdsExist(http, config, missing, ct);
+            continue;
+          }
+        }
         throw new InvalidOperationException($"Supabase upsert failed: {(int)resp.StatusCode} {resp.ReasonPhrase}. Body={body}");
       }
     }
