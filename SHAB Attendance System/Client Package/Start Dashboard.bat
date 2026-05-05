@@ -159,6 +159,16 @@ echo.
 echo Port status:
 netstat -ano | findstr /R /C:":5099 .*LISTENING"
 echo.
+echo Middleware process:
+tasklist /fi "imagename eq %MW_EXE%"
+echo.
+call :LOG Port status:
+netstat -ano | findstr /R /C:":5099 .*LISTENING" >>"%LOG_FILE%" 2>>&1
+call :LOG Middleware process:
+tasklist /fi "imagename eq %MW_EXE%" >>"%LOG_FILE%" 2>>&1
+if exist "%MIDDLE_OUT%" start "" notepad.exe "%MIDDLE_OUT%"
+if exist "%MIDDLE_ERR%" start "" notepad.exe "%MIDDLE_ERR%"
+if exist "%LOG_FILE%" start "" notepad.exe "%LOG_FILE%"
 if not defined NO_PAUSE pause
 popd >nul 2>&1
 endlocal & exit /b 1
@@ -182,11 +192,12 @@ endlocal & exit /b 1
 setlocal EnableExtensions
 set "NETCORE_OK="
 set "ASPNET_OK="
+set "DOTNET_SHARED="
+if defined ProgramFiles(x86) set "DOTNET_SHARED=%ProgramFiles(x86)%\dotnet\shared"
+if not defined DOTNET_SHARED set "DOTNET_SHARED=%ProgramFiles%\dotnet\shared"
 
-dir /b "%ProgramFiles(x86)%\dotnet\shared\Microsoft.NETCore.App\8.*" >nul 2>&1 && set "NETCORE_OK=1"
-dir /b "%ProgramFiles%\dotnet\shared\Microsoft.NETCore.App\8.*" >nul 2>&1 && set "NETCORE_OK=1"
-dir /b "%ProgramFiles(x86)%\dotnet\shared\Microsoft.AspNetCore.App\8.*" >nul 2>&1 && set "ASPNET_OK=1"
-dir /b "%ProgramFiles%\dotnet\shared\Microsoft.AspNetCore.App\8.*" >nul 2>&1 && set "ASPNET_OK=1"
+dir /b "%DOTNET_SHARED%\Microsoft.NETCore.App\8.*" >nul 2>&1 && set "NETCORE_OK=1"
+dir /b "%DOTNET_SHARED%\Microsoft.AspNetCore.App\8.*" >nul 2>&1 && set "ASPNET_OK=1"
 
 if defined NETCORE_OK if defined ASPNET_OK (endlocal & exit /b 0)
 endlocal & exit /b 1
@@ -199,14 +210,40 @@ exit /b 1
 :WAIT_HTTP
 if not exist "%PS_EXE%" exit /b 1
 setlocal EnableExtensions
-set /a tries=90
+set /a tries=180
+set /a tick=0
+set /a missing=0
+echo Waiting up to %tries% seconds...
 :WAIT_HTTP_LOOP
-"%PS_EXE%" -NoProfile -ExecutionPolicy Bypass -Command "try { $r=Invoke-WebRequest -Uri 'http://127.0.0.1:5099/login' -UseBasicParsing -TimeoutSec 1; if ($r.StatusCode -ge 200 -and $r.StatusCode -lt 500) { exit 0 } else { exit 1 } } catch { exit 1 }" >nul 2>&1
+set /a tick+=1
+if %tick%==5 echo Still waiting...
+if %tick%==10 set /a tick=0
+
+call :CHECK_PROC
+if errorlevel 1 (
+  set /a missing+=1
+  if %missing% GEQ 5 (endlocal & exit /b 1)
+) else (
+  set /a missing=0
+)
+
+call :CHECK_PORT
 if not errorlevel 1 (endlocal & exit /b 0)
+
+"%PS_EXE%" -NoProfile -ExecutionPolicy Bypass -Command "try { if (Get-Command Invoke-WebRequest -ErrorAction SilentlyContinue) { $r=Invoke-WebRequest -Uri 'http://127.0.0.1:5099/login' -UseBasicParsing -TimeoutSec 1; if ($r.StatusCode -ge 200 -and $r.StatusCode -lt 500) { exit 0 } else { exit 1 } } else { $c = New-Object System.Net.Sockets.TcpClient; $iar = $c.BeginConnect('127.0.0.1',5099,$null,$null); if(-not $iar.AsyncWaitHandle.WaitOne(500)) { $c.Close(); exit 1 }; $c.EndConnect($iar); $c.Close(); exit 0 } } catch { exit 1 }" >nul 2>&1
+if not errorlevel 1 (endlocal & exit /b 0)
+
+set /p "=." <nul
 set /a tries-=1
+if %tries% LEQ 0 echo.
 if %tries% LEQ 0 (endlocal & exit /b 1)
 timeout /t 1 /nobreak >nul
 goto WAIT_HTTP_LOOP
+
+:CHECK_PROC
+tasklist /fi "imagename eq %MW_EXE%" | find /i "%MW_EXE%" >nul 2>&1
+if not errorlevel 1 exit /b 0
+exit /b 1
 
 :OPEN_URL
 if exist "%PS_EXE%" (
