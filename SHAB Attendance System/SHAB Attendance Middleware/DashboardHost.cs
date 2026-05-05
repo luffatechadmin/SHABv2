@@ -5027,62 +5027,6 @@ static partial class Program
         return rows;
       }
 
-      static List<object> ReadW30FileRows(ConfiguredDeviceEntry dev, string baseDir)
-      {
-        var rows = new List<object>(capacity: 200);
-        var seen = new HashSet<string>(StringComparer.Ordinal);
-        var w30Dir = (dev.LogDir ?? string.Empty).Trim();
-        if (w30Dir.Length == 0) w30Dir = baseDir;
-        if (w30Dir.Length == 0) w30Dir = Directory.GetCurrentDirectory();
-        if (!Directory.Exists(w30Dir)) return rows;
-
-        var pat = (dev.FilePattern ?? string.Empty).Trim();
-        if (pat.Length == 0) pat = "AttendanceLog*.dat;AttendanceLog*.txt;attlog_W30-*.dat;attlog_W30-*.txt";
-        IEnumerable<FileInfo> files;
-        try
-        {
-          var searchOpt = SearchOption.TopDirectoryOnly;
-          if (string.IsNullOrWhiteSpace((dev.LogDir ?? string.Empty).Trim()))
-          {
-            var tail = Path.GetFileName(w30Dir.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
-            if (tail.Equals("Reference", StringComparison.OrdinalIgnoreCase)) searchOpt = SearchOption.AllDirectories;
-          }
-          files = EnumerateW30Files(w30Dir, pat, searchOpt);
-        }
-        catch { files = Array.Empty<FileInfo>(); }
-        foreach (var f in files.OrderByDescending(x => x.LastWriteTimeUtc).Take(500))
-        {
-          try
-          {
-            foreach (var r in ReadW30AttlogRows(f.FullName))
-            {
-              var k =
-                (r.StaffId ?? string.Empty) + "|" +
-                (r.DateTime ?? string.Empty) + "|" +
-                (r.Workcode ?? string.Empty) + "|" +
-                (r.Verified ?? string.Empty) + "|" +
-                (r.Status ?? string.Empty);
-              if (!seen.Add(k)) continue;
-              rows.Add(new
-              {
-                device_id = dev.DeviceId,
-                staff_id = r.StaffId,
-                datetime = r.DateTime,
-                verified = r.Verified,
-                status = r.Status,
-                workcode = r.Workcode,
-                reserved = r.Reserved,
-                source = "file",
-                file_name = f.Name,
-                file_write_utc = f.LastWriteTimeUtc.ToString("O", CultureInfo.InvariantCulture),
-              });
-            }
-          }
-          catch { }
-        }
-        return rows;
-      }
-
       static List<object> ReadW30MemoryRows(string w30DeviceId)
       {
         var rows = new List<object>(capacity: 200);
@@ -5105,37 +5049,6 @@ static partial class Program
             file_write_utc = "",
           });
         }
-        return rows;
-      }
-
-      static List<object> ReadW30ExportRows(ConfiguredDeviceEntry dev)
-      {
-        var rows = new List<object>(capacity: 200);
-        try
-        {
-          var exportPath = TryResolveAttlogExportPath((dev.DeviceId ?? string.Empty).Trim());
-          if (string.IsNullOrWhiteSpace(exportPath)) return rows;
-          if (!File.Exists(exportPath)) return rows;
-
-          var f = new FileInfo(exportPath);
-          foreach (var r in ReadW30AttlogRows(exportPath))
-          {
-            rows.Add(new
-            {
-              device_id = dev.DeviceId,
-              staff_id = r.StaffId,
-              datetime = r.DateTime,
-              verified = r.Verified,
-              status = r.Status,
-              workcode = r.Workcode,
-              reserved = r.Reserved,
-              source = "export",
-              file_name = f.Name,
-              file_write_utc = f.LastWriteTimeUtc.ToString("O", CultureInfo.InvariantCulture),
-            });
-          }
-        }
-        catch { }
         return rows;
       }
 

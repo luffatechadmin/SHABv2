@@ -1,22 +1,2 @@
 Dashboard running at http://127.0.0.1:5099
 Dashboard login configured. Override credentials with WL10_DASHBOARD_USER and WL10_DASHBOARD_PASSWORD.
-[INFO] [Activity] [System] [INFO] Auto sync started (all devices + supabase, login)...
-[INFO] Polling device W30-192.168.1.177 (192.168.1.177:4370)
-[INFO] [Activity] [System] [INFO] Auto sync started (all devices + supabase, login)...
-[INFO] [Activity] [System] [OK] Auto sync completed (all devices + supabase).
-[INFO] Retrieved punches: 3 records (device poll 5645ms)
-Upserting 3 punches to Supabase...
-Supabase upsert OK.
-[INFO] Sync to database: upserted=3 duration_ms=379
-[INFO] Saved watermark (UTC): 2026-04-26T20:20:16.0000000+00:00
-[INFO] [Activity] [System] [OK] Auto sync completed (all devices + supabase).
-[INFO] [Activity] [System] [INFO] Auto sync started (all devices + supabase, login)...
-[INFO] Polling device W30-192.168.1.177 (192.168.1.177:4370)
-[INFO] [Activity] [System] [INFO] Auto sync started (all devices + supabase, login)...
-[INFO] [Activity] [System] [OK] Auto sync completed (all devices + supabase).
-[INFO] Retrieved punches: 3 records (device poll 5400ms)
-Upserting 3 punches to Supabase...
-Supabase upsert OK.
-[INFO] Sync to database: upserted=3 duration_ms=344
-[INFO] Saved watermark (UTC): 2026-04-26T20:20:16.0000000+00:00
-[INFO] [Activity] [System] [OK] Auto sync completed (all devices + supabase).

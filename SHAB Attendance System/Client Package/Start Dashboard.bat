@@ -55,10 +55,10 @@ set "DESKTOP_DIR=%USERPROFILE%\Desktop"
 call :LOG ============================================================
 call :LOG SHAB Attendance System - Start Dashboard
 call :LOG Version: %SHAB_START_VERSION%
-call :LOG Root: %ROOT%
-call :LOG AppDir: %APP_DIR%
-call :LOG User: %USERNAME%
-call :LOG Machine: %COMPUTERNAME%
+call :LOG Root: "%ROOT%"
+call :LOG AppDir: "%APP_DIR%"
+call :LOG User: "%USERNAME%"
+call :LOG Machine: "%COMPUTERNAME%"
 call :LOG RunMode: %RUN_MODE%
 call :LOG ============================================================
 call :LOG_SYSTEM_INFO
@@ -128,7 +128,7 @@ for /f "tokens=5" %%P in ('netstat -ano ^| findstr /R /C:":5099 .*LISTENING"') d
 :PORT_PID_OK
 if defined PORT_PID (
   echo.
-  echo Process using port 5099 (PID=%PORT_PID%):
+  echo Process using port 5099 PID=%PORT_PID%:
   tasklist /fi "pid eq %PORT_PID%"
   call :LOG Port 5099 PID=%PORT_PID%
 ) else (
@@ -153,15 +153,37 @@ exit /b
 :SDK_INSTALL
 echo ZKTeco SDK not detected. Installing now - requires Administrator...
 call :LOG ZKTeco SDK not detected. Installing now - requires Administrator...
-if not exist "%SDK_INSTALL%" echo ERROR: SDK installer not found: & echo   %SDK_INSTALL% & echo. & if not defined NO_PAUSE pause & exit /b 1
+if not exist "%SDK_INSTALL%" (
+  echo ERROR: SDK installer not found:
+  echo   %SDK_INSTALL%
+  echo.
+  if not defined NO_PAUSE pause
+  exit /b 1
+)
 set "SHAB_SDK_INSTALL_SILENT=1"
 call :RUN_AS_ADMIN "%SDK_INSTALL%"
 set "SHAB_SDK_INSTALL_SILENT="
-if errorlevel 1 echo ERROR: Administrator request was cancelled or blocked. & echo Please run this as Administrator: & echo   %SDK_INSTALL% & echo. & if not defined NO_PAUSE pause & exit /b 1
+if errorlevel 1 (
+  echo ERROR: Administrator request was cancelled or blocked.
+  echo Please run this as Administrator:
+  echo   %SDK_INSTALL%
+  echo.
+  if not defined NO_PAUSE pause
+  exit /b 1
+)
 call :CHECK_ZKEMKEEPER
 if not errorlevel 1 goto SDK_OK
-if exist "%ZK_TARGET%\zkemkeeper.dll" echo WARNING: ZKTeco SDK dll is present but COM registration was not detected or COM could not be loaded. & echo Device functions may not work until the SDK is registered. & goto SDK_OK
-echo ERROR: ZKTeco SDK install may have failed or was cancelled. & echo Please run this as Administrator: & echo   %SDK_INSTALL% & echo. & if not defined NO_PAUSE pause & exit /b 1
+if exist "%ZK_TARGET%\zkemkeeper.dll" (
+  echo WARNING: ZKTeco SDK dll is present but COM registration was not detected or COM could not be loaded.
+  echo Device functions may not work until the SDK is registered.
+  goto SDK_OK
+)
+echo ERROR: ZKTeco SDK install may have failed or was cancelled.
+echo Please run this as Administrator:
+echo   %SDK_INSTALL%
+echo.
+if not defined NO_PAUSE pause
+exit /b 1
 
 :SDK_OK
 echo ZKTeco SDK detected.
@@ -180,7 +202,10 @@ call :LOG WL10_ATTLOG_FILE_PATH=%WL10_ATTLOG_FILE_PATH%
 if exist "%APP_DIR%\coreclr.dll" goto DOTNET_OK
 call :LOG Checking .NET runtimes...
 call :CHECK_DOTNET
-if errorlevel 1 goto DOTNET_MISSING
+if errorlevel 1 (
+  echo WARNING: Could not verify .NET 8 runtimes via dotnet.exe. Continuing to launch anyway...
+  call :LOG WARNING: Could not verify .NET 8 runtimes via dotnet.exe. Continuing to launch anyway.
+)
 :DOTNET_OK
 call :LOG Dotnet check OK (or self-contained runtime detected).
 
@@ -351,7 +376,7 @@ echo Opening browser: %DASH_URL%
 call :LOG Dashboard reachable. Opening browser: %DASH_URL%
 call :BROWSER_OPEN_GUARD
 if errorlevel 1 (
-  call :LOG Browser open suppressed (already opened recently).
+  call :LOG Browser open suppressed - already opened recently.
   endlocal
   exit /b 0
 )
@@ -423,7 +448,7 @@ exit /b 1
 :START_FAILED
 if not defined RELOC_TRIED (
   set "RELOC_TRIED=1"
-  call :LOG Middleware failed to start. Attempting fallback run location (ProgramData)...
+  call :LOG Middleware failed to start. Attempting fallback run location - ProgramData.
   call :TRY_RELOCATE_APPDIR
   if not errorlevel 1 goto LAUNCH_SECTION
 )
@@ -473,7 +498,10 @@ call :TRY_COPY_APP_TO "%TARGET_APP_DIR%"
 if not errorlevel 1 goto RELOC_OK
 set "TARGET_APP_DIR=%PF%\SHAB Attendance System\App\win-x86"
 call :TRY_COPY_APP_TO "%TARGET_APP_DIR%"
-if errorlevel 1 call :LOG ERROR: Relocate failed for all fallback locations. & exit /b 1
+if errorlevel 1 (
+  call :LOG ERROR: Relocate failed for all fallback locations.
+  exit /b 1
+)
 
 :RELOC_OK
 set "APP_DIR=%TARGET_APP_DIR%"
@@ -497,8 +525,13 @@ call :LOG Copying app files to:   %DEST%
 xcopy "%APP_DIR%\*" "%DEST%\" /E /I /Y >nul 2>&1
 set "XC=%errorlevel%"
 call :LOG xcopy exit code: %XC%
-if %XC% GEQ 2 call :LOG ERROR: Copy failed. & endlocal & exit /b 1
-endlocal & exit /b 0
+if %XC% GEQ 2 (
+  call :LOG ERROR: Copy failed.
+  endlocal
+  exit /b 1
+)
+endlocal
+exit /b 0
 
 :DOTNET_MISSING
 echo.
@@ -592,7 +625,15 @@ set "NETCORE_OK="
 set "ASPNET_OK="
 set "DOTNET_EXE=%DOTNET_X86_EXE%"
 if not exist "%DOTNET_EXE%" set "DOTNET_EXE=%DOTNET_X64_EXE%"
+if not exist "%DOTNET_EXE%" (
+  for /f "usebackq delims=" %%D in (`where dotnet 2^>nul`) do (
+    set "DOTNET_EXE=%%D"
+    goto DOTNET_EXE_OK
+  )
+)
+:DOTNET_EXE_OK
 if not exist "%DOTNET_EXE%" endlocal & exit /b 1
+>>"%LOG_FILE%" echo [%date% %time%] DOTNET_EXE=%DOTNET_EXE%
 for /f "usebackq delims=" %%L in (`"%DOTNET_EXE%" --list-runtimes 2^>nul`) do (
   echo %%L | findstr /i /c:"Microsoft.NETCore.App 8." >nul && set "NETCORE_OK=1"
   echo %%L | findstr /i /c:"Microsoft.AspNetCore.App 8." >nul && set "ASPNET_OK=1"
@@ -690,7 +731,8 @@ exit /b 0
 :CREATE_SHORTCUT_CMD
 set "CMD_SHORTCUT=%DESKTOP_DIR%\SHAB Attendance Dashboard.cmd"
 > "%CMD_SHORTCUT%" echo @echo off
->> "%CMD_SHORTCUT%" echo start "" "%ROOT%Start Dashboard.bat"
+>> "%CMD_SHORTCUT%" echo cd /d "%ROOT%"
+>> "%CMD_SHORTCUT%" echo call "%ROOT%Start Dashboard.bat"
 echo Shortcut created:
 echo   %CMD_SHORTCUT%
 call :LOG Shortcut created: %CMD_SHORTCUT%

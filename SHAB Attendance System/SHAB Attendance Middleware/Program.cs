@@ -687,7 +687,9 @@ static partial class Program
     using var http = new HttpClient();
     http.Timeout = TimeSpan.FromSeconds(30);
 
-    var deviceId = Uri.EscapeDataString(config.DeviceId);
+    var deviceIdRaw = (config.DeviceId ?? string.Empty).Trim();
+    if (deviceIdRaw.Length == 0) throw new InvalidOperationException("Missing Device ID.");
+    var deviceId = Uri.EscapeDataString(deviceIdRaw);
     var url = $"{config.SupabaseUrl.TrimEnd('/')}/rest/v1/{config.SupabaseAttendanceTable}?device_id=eq.{deviceId}";
 
     using var req = new HttpRequestMessage(HttpMethod.Delete, url);
@@ -703,7 +705,7 @@ static partial class Program
     }
 
     var contentRange = resp.Headers.TryGetValues("Content-Range", out var ranges) ? ranges.FirstOrDefault() : null;
-    Console.WriteLine($"Cleared Supabase attendance_events for device_id='{config.DeviceId}'. Deleted={contentRange ?? "(unknown)"}");
+    Console.WriteLine($"Cleared Supabase attendance_events for device_id='{deviceIdRaw}'. Deleted={contentRange ?? "(unknown)"}");
   }
 
   private static async Task VerifySupabaseAttendanceEventsForDevice(AppConfig config, int limit)
@@ -3533,19 +3535,24 @@ static partial class Program
 
     Console.WriteLine($"Upserting {punches.Count} punches to Supabase...");
 
-    if ((config.DeviceId ?? string.Empty).Trim().StartsWith("W30", StringComparison.OrdinalIgnoreCase))
+    var deviceId = (config.DeviceId ?? string.Empty).Trim();
+    if (deviceId.StartsWith("W30", StringComparison.OrdinalIgnoreCase))
     {
       try
       {
-        var baseUrl = config.SupabaseUrl.TrimEnd('/');
+        var baseUrl = (config.SupabaseUrl ?? string.Empty).TrimEnd('/');
         var table = (config.SupabaseAttendanceTable ?? string.Empty).Trim();
         if (table.Length == 0) table = "attendance_events";
-        var url = $"{baseUrl}/rest/v1/{table}?device_id=eq.{Uri.EscapeDataString(config.DeviceId)}&staff_id=eq.64";
+        var key = (config.SupabaseServiceRoleKey ?? string.Empty).Trim();
+        if (baseUrl.Length > 0 && key.Length > 0 && deviceId.Length > 0)
+        {
+          var url = $"{baseUrl}/rest/v1/{table}?device_id=eq.{Uri.EscapeDataString(deviceId)}&staff_id=eq.64";
         using var delReq = new HttpRequestMessage(HttpMethod.Delete, url);
-        delReq.Headers.TryAddWithoutValidation("apikey", config.SupabaseServiceRoleKey);
-        delReq.Headers.TryAddWithoutValidation("Authorization", $"Bearer {config.SupabaseServiceRoleKey}");
+        delReq.Headers.TryAddWithoutValidation("apikey", key);
+        delReq.Headers.TryAddWithoutValidation("Authorization", $"Bearer {key}");
         delReq.Headers.TryAddWithoutValidation("Prefer", "return=minimal");
         using var delResp = await http.SendAsync(delReq);
+        }
       }
       catch { }
     }
